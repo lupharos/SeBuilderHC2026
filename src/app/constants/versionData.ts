@@ -22,6 +22,7 @@ export type VersionDataStore = {
   'Forcepoint Web Security': SoftwareEntry[];
   'Forcepoint Data Security': SoftwareEntry[];
   'DLP + Web Endpoint Agent': SoftwareEntry[];
+  'AMDP': SoftwareEntry[];
   'V Series Appliances': HardwareEntry[];
   'NGFW Appliances': HardwareEntry[];
 };
@@ -31,6 +32,7 @@ export const SOFTWARE_CATEGORIES = [
   'Forcepoint Web Security',
   'Forcepoint Data Security',
   'DLP + Web Endpoint Agent',
+  'AMDP',
 ] as const;
 
 export const HARDWARE_CATEGORIES = [
@@ -102,6 +104,7 @@ export const INITIAL_VERSION_DATA: VersionDataStore = {
     { Version: 24.03, 'General Availability': '2024-03-28', 'End of Sale': null, 'End Of Maintenance': null, 'End Of Support': '2025-12-01' },
     { Version: 23.11, 'General Availability': '2023-10-27', 'End of Sale': null, 'End Of Maintenance': null, 'End Of Support': '2025-06-01' },
   ],
+  'AMDP': [],
   'V Series Appliances': [
     { 'Model/Version': 'V10000 G4 R2', 'General Availability': '2018-02-28', 'End of Sale': '2024-10-28', 'Last Supported Release': null, 'End Of Maintenance': '2027-10-28', 'Last Date for Warranty Extension': null, 'End of Life': '2029-10-28', 'Migration Path': 'V10000 G5' },
     { 'Model/Version': 'V10000 G5', 'General Availability': '2024-10-28', 'End of Sale': null, 'Last Supported Release': null, 'End Of Maintenance': null, 'Last Date for Warranty Extension': null, 'End of Life': null, 'Migration Path': null },

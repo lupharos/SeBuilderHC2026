@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react';
-import { Database, CheckCircle2, XCircle, Loader, ChevronDown, ChevronRight, Check, Shield, Globe, Network, FolderOpen, Upload, Trash2, Server } from 'lucide-react';
+import { Database, CheckCircle2, XCircle, Loader, ChevronDown, ChevronRight, Check, Shield, Globe, Network, FolderOpen, Upload, Trash2, Server, FileText } from 'lucide-react';
 import { REPORT_GROUPS, ALL_REPORT_IDS } from '../../constants/reportDefinitions';
 import { parseDlpBundle, formatMemoryGB, memoryUsagePct, statusColor, type DlpServerBundle, type UploadedFile } from './dlpServerInfoParser';
+import { parseDlpDashboardPdf, type DlpDashboardSummary } from './dlpDashboardParser';
 
 // ── SQL Server config ────────────────────────────────────────────────────────
 export interface SqlConfig {
@@ -53,6 +54,8 @@ interface Props {
   selectedProducts: Record<string, boolean>;
   dlpBundles: DlpServerBundle[];
   setDlpBundles: React.Dispatch<React.SetStateAction<DlpServerBundle[]>>;
+  dlpDashboardSummary: DlpDashboardSummary | null;
+  setDlpDashboardSummary: React.Dispatch<React.SetStateAction<DlpDashboardSummary | null>>;
 }
 
 const IS: React.CSSProperties = {
@@ -114,6 +117,16 @@ const API_DEFS = [
     placeholder: 'https://smc-host:8082',
   },
 ] as const;
+
+// ── Mini metric tile used in the DLP Dashboard summary preview ──────────────
+function SummaryStat({ label, value, color }: { label: string; value: string; color: string }) {
+  return (
+    <div className="rounded-md px-2 py-1.5" style={{ background: '#fff', border: '1px solid #E2E8F0' }}>
+      <div style={{ fontSize: '9px', fontWeight: 700, color: '#94A3B8', letterSpacing: '0.08em' }}>{label.toUpperCase()}</div>
+      <div style={{ fontSize: '15px', fontWeight: 700, color, fontFamily: 'monospace', marginTop: '2px', lineHeight: 1.1 }}>{value}</div>
+    </div>
+  );
+}
 
 // ── Small read-only field row ────────────────────────────────────────────────
 function InfoRow({ label, value }: { label: string; value: string }) {
@@ -427,6 +440,7 @@ export function Step3DataCollectors({
   selectedReports, setSelectedReports,
   selectedProducts,
   dlpBundles, setDlpBundles,
+  dlpDashboardSummary, setDlpDashboardSummary,
 }: Props) {
   const [sqlStatus,  setSqlStatus]  = useState<ConnStatus>({ state: 'idle' });
   const [apiStatus,  setApiStatus]  = useState<Partial<Record<keyof ApiConnectorsConfig, ConnStatus>>>({});
@@ -436,8 +450,37 @@ export function Step3DataCollectors({
   const [expandedBundles, setExpandedBundles] = useState<Set<string>>(new Set());
   const [parseError, setParseError] = useState<string>('');
   const [parseBusy, setParseBusy] = useState(false);
+  const [dashboardBusy, setDashboardBusy] = useState(false);
+  const [dashboardError, setDashboardError] = useState<string>('');
   const folderInputRef = useRef<HTMLInputElement>(null);
   const filesInputRef = useRef<HTMLInputElement>(null);
+  const dashboardInputRef = useRef<HTMLInputElement>(null);
+
+  const handleDashboardFile = async (file: File | undefined | null) => {
+    if (!file) return;
+    setDashboardError('');
+    if (!/\.pdf$/i.test(file.name)) {
+      setDashboardError('Please choose a PDF file exported from the Forcepoint DLP Manager Report UI.');
+      return;
+    }
+    if (file.size > 12 * 1024 * 1024) {
+      setDashboardError(`PDF is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Limit is 12 MB.`);
+      return;
+    }
+    setDashboardBusy(true);
+    try {
+      const summary = await parseDlpDashboardPdf(file);
+      if (summary.totalIncidents === 0 && summary.actions.length === 0 && summary.topChannels.length === 0) {
+        setDashboardError('Could not extract DLP report data — verify the PDF is the standard "Incidents Summary" export from the DLP Manager.');
+        return;
+      }
+      setDlpDashboardSummary(summary);
+    } catch (err) {
+      setDashboardError(err instanceof Error ? `Parse failed: ${err.message}` : 'Failed to parse PDF.');
+    } finally {
+      setDashboardBusy(false);
+    }
+  };
 
   const TEXT_EXT_RE = /\.(txt|csv|cer|pem|crt)$/i;
 
@@ -629,6 +672,122 @@ export function Step3DataCollectors({
             )}
           </div>
         )}
+      </div>
+
+      {/* Customer DLP Dashboard PDF — extracts incident counts, top channels/policies into the HC report */}
+      <div className="bg-white rounded-xl overflow-hidden"
+        style={{ border: dlpDashboardSummary ? '1.5px solid rgba(14,165,233,0.3)' : '1.5px solid #E2E8F0', boxShadow: '0 1px 4px rgba(15,41,82,0.06)' }}>
+        <div className="flex items-center gap-3 p-[16px_22px]"
+          style={{ background: dlpDashboardSummary ? 'rgba(14,165,233,0.04)' : 'white', borderBottom: '1px solid #F1F5F9' }}>
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
+            style={{ background: 'rgba(14,165,233,0.1)' }}>
+            <FileText size={14} style={{ color: '#0EA5E9' }} />
+          </div>
+          <div className="flex-1">
+            <div style={{ fontSize: '13px', fontWeight: 700, color: '#0F172A' }}>Customer DLP Dashboard</div>
+            <div style={{ fontSize: '11px', color: '#94A3B8' }}>
+              Drop the DLP Manager PDF report (incidents summary export). We parse severity / action / channel / policy / URL-category counts. Individual names are anonymized to department level.
+            </div>
+          </div>
+          {dlpDashboardSummary && (
+            <span className="px-2.5 py-1 rounded-lg font-mono font-bold"
+              style={{ fontSize: '10.5px', background: 'rgba(14,165,233,0.1)', color: '#0EA5E9', border: '1px solid rgba(14,165,233,0.25)' }}>
+              {dlpDashboardSummary.totalIncidents.toLocaleString()} INCIDENTS
+            </span>
+          )}
+        </div>
+
+        <div className="p-[16px_22px] space-y-3">
+          <div
+            onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+            onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleDashboardFile(e.dataTransfer.files?.[0]); }}
+            className="flex flex-col items-center justify-center gap-2"
+            style={{ border: '2px dashed #BAE6FD', borderRadius: '10px', padding: '22px', background: 'rgba(240,249,255,0.6)' }}
+          >
+            {dashboardBusy
+              ? <Loader size={20} className="animate-spin" style={{ color: '#0EA5E9' }} />
+              : <Upload size={20} style={{ color: '#0EA5E9' }} />}
+            <div style={{ fontSize: '12.5px', fontWeight: 600, color: '#075985' }}>
+              {dashboardBusy
+                ? 'Parsing PDF…'
+                : dlpDashboardSummary
+                  ? 'Drop a new PDF to replace, or use the buttons below'
+                  : 'Drop the DLP Manager PDF here, or click to choose a file'}
+            </div>
+            <div style={{ fontSize: '10.5px', color: '#0369A1', textAlign: 'center', maxWidth: '480px', lineHeight: 1.5 }}>
+              Standard incidents-summary export — header "Created on", filters "Date Range" / "Ignored Incident", and "Top 5" tables.
+              Parsing happens locally in your browser; the PDF is never uploaded anywhere.
+            </div>
+            <input
+              ref={dashboardInputRef}
+              type="file"
+              accept=".pdf,application/pdf"
+              style={{ display: 'none' }}
+              onChange={(e) => { handleDashboardFile(e.target.files?.[0]); if (dashboardInputRef.current) dashboardInputRef.current.value = ''; }}
+            />
+            <div className="flex gap-2 mt-1">
+              <button
+                type="button"
+                onClick={() => dashboardInputRef.current?.click()}
+                disabled={dashboardBusy}
+                className="px-3 py-1.5 rounded-lg font-semibold text-white"
+                style={{ fontSize: '11px', background: dashboardBusy ? '#93C5FD' : '#0EA5E9', cursor: dashboardBusy ? 'not-allowed' : 'pointer' }}
+              >
+                <FileText size={11} style={{ display: 'inline', marginRight: '5px' }} />
+                {dlpDashboardSummary ? 'Replace PDF' : 'Choose PDF'}
+              </button>
+              {dlpDashboardSummary && (
+                <button
+                  type="button"
+                  onClick={() => { setDlpDashboardSummary(null); setDashboardError(''); }}
+                  className="px-3 py-1.5 rounded-lg font-semibold"
+                  style={{ fontSize: '11px', background: '#fff', color: '#DC2626', border: '1.5px solid rgba(220,38,38,0.25)', cursor: 'pointer' }}
+                >
+                  <Trash2 size={11} style={{ display: 'inline', marginRight: '5px' }} />
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+
+          {dashboardError && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg"
+              style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}>
+              <XCircle size={13} style={{ color: '#DC2626' }} />
+              <span style={{ fontSize: '11px', color: '#991B1B' }}>{dashboardError}</span>
+            </div>
+          )}
+
+          {dlpDashboardSummary && (
+            <div className="rounded-lg p-[12px_14px] space-y-2"
+              style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+              <div style={{ fontSize: '10px', fontWeight: 700, color: '#94A3B8', letterSpacing: '0.08em' }}>EXTRACTED SUMMARY</div>
+              <div style={{ fontSize: '11.5px', color: '#0F172A', lineHeight: 1.6 }}>
+                <strong>{dlpDashboardSummary.fileName}</strong>
+                <span style={{ color: '#94A3B8' }}> · </span>
+                Report created {dlpDashboardSummary.reportCreatedAt}
+                <span style={{ color: '#94A3B8' }}> · </span>
+                Range: {dlpDashboardSummary.dateRange}
+              </div>
+              <div className="grid grid-cols-4 gap-2">
+                <SummaryStat label="Total" value={dlpDashboardSummary.totalIncidents.toLocaleString()} color="#0F172A" />
+                <SummaryStat label="High"   value={dlpDashboardSummary.severity.high.toLocaleString()}   color="#DC2626" />
+                <SummaryStat label="Medium" value={dlpDashboardSummary.severity.medium.toLocaleString()} color="#D97706" />
+                <SummaryStat label="Low"    value={dlpDashboardSummary.severity.low.toLocaleString()}    color="#FACC15" />
+              </div>
+              <div style={{ fontSize: '10.5px', color: '#475569' }}>
+                Top channel: <strong>{dlpDashboardSummary.topChannels[0]?.channel ?? '—'}</strong>
+                {' · '}
+                Top policy: <strong>{dlpDashboardSummary.topPolicies[0]?.policy ?? '—'}</strong>
+                {' · '}
+                {dlpDashboardSummary.topPolicies.length} policies · {dlpDashboardSummary.topUrlCategories.length} URL categories parsed
+              </div>
+              <div style={{ fontSize: '10px', color: '#64748B', fontStyle: 'italic' }}>
+                ℹ Individual user names from the source PDF are aggregated to department level — no personal identifiers appear in the HC report.
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* SQL Server */}

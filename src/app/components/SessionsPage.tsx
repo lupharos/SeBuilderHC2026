@@ -4,7 +4,7 @@ import {
   CheckCircle2, ChevronRight, BarChart2, Layers, Plus,
 } from 'lucide-react';
 import type { HCSession } from './Dashboard';
-import { STEP_COLORS, STEP_LABELS } from '../constants/steps';
+import { STEP_COLORS, STEP_LABELS, TOTAL_STEPS } from '../constants/steps';
 
 interface SessionsPageProps {
   sessions: HCSession[];
@@ -33,10 +33,10 @@ export function SessionsPage({
       s.forcepointId.toLowerCase().includes(search.toLowerCase()),
   );
 
-  const completedCount = sessions.filter((s) => s.currentStep === 14).length;
+  const completedCount = sessions.filter((s) => s.currentStep === TOTAL_STEPS).length;
   const inProgressCount = sessions.length - completedCount;
   const avgProgress = sessions.length
-    ? Math.round(sessions.reduce((a, s) => a + ((s.currentStep - 1) / 13) * 100, 0) / sessions.length)
+    ? Math.round(sessions.reduce((a, s) => a + ((s.currentStep - 1) / (TOTAL_STEPS - 1)) * 100, 0) / sessions.length)
     : 0;
 
   return (
@@ -250,7 +250,7 @@ export function SessionsPage({
               const isActive = session.id === currentSessionId;
               const stepColor = STEP_COLORS[session.currentStep] || '#3B82F6';
               const stepLabel = STEP_LABELS[session.currentStep] || `Step ${session.currentStep}`;
-              const progress = Math.round(((session.currentStep - 1) / 13) * 100);
+              const progress = Math.min(100, Math.max(0, Math.round(((session.currentStep - 1) / (TOTAL_STEPS - 1)) * 100)));
               const initials = session.customerName ? session.customerName.substring(0, 2).toUpperCase() : '??';
               const isDeleting = deleteConfirm === session.id;
 
@@ -320,7 +320,7 @@ export function SessionsPage({
                         {stepLabel}
                       </span>
                       <span style={{ fontSize: '9.5px', color: '#94A3B8', fontFamily: 'monospace', flexShrink: 0 }}>
-                        {session.currentStep}/14
+                        {session.currentStep}/{TOTAL_STEPS}
                       </span>
                     </div>
                     <div className="flex items-center gap-2">

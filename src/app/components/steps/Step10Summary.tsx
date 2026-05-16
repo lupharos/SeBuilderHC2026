@@ -7,6 +7,8 @@ import type { VersionEntry } from './Step4VersionCheck';
 import type { Recommendation } from './Step8Recommendations';
 import type { ActionItem } from './Step9NextSteps';
 import type { ServerEntry } from './StepServerDetails';
+import { PRODUCT_ID_MAP, SEV_ORDER } from './report/constants';
+import { computeHealthScore } from './report/healthScore';
 
 interface Step10Props {
   templates: Template[];
@@ -18,13 +20,6 @@ interface Step10Props {
   actionItems: ActionItem[];
   serverDetails: ServerEntry[];
 }
-
-const PRODUCT_ID_MAP: Record<string, string> = {
-  web: 'web', email: 'email', data: 'dlp', ngfw: 'ngfw',
-  dspm: 'dspm', cls: 'classification', appl: 'appl', vappl: 'appl',
-};
-
-const SEV_ORDER: QuestionSeverity[] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
 
 const SEV_CFG: Record<QuestionSeverity, { text: string; bg: string; border: string; bar: string; label: string }> = {
   CRITICAL: { text: '#DC2626', bg: 'rgba(220,38,38,0.08)', border: 'rgba(220,38,38,0.2)',  bar: '#DC2626', label: 'C' },
@@ -66,6 +61,9 @@ function getProductStats(template: Template, answers: TemplateAnswers) {
       bySev[q.severity] = (bySev[q.severity] ?? 0) + 1;
   }
   const totalFindings = Object.values(bySev).reduce((a, b) => a + b, 0);
+  // Per-product score remains the simple questionnaire ratio — the per-product
+  // chart has no infra/version context. Overall health (header + KPI card)
+  // uses the shared composite score from computeHealthScore().
   const score = answered === 0 ? null
     : Math.round(Math.max(0, (answered - totalFindings) / answered * 100));
   return { answered, total: template.questions.length, bySev, totalFindings, score };
@@ -86,28 +84,10 @@ export function Step10Summary({ templates, selectedProducts, sessionData, checkl
     [selectedTemplates, checklistAnswers],
   );
 
-  const allFindings = useMemo(() => {
-    const result: Array<{
-      key: string; text: string; severity: QuestionSeverity;
-      section: string; note?: string; templateName: string;
-      templateColor: string; templateIcon: string;
-    }> = [];
-    for (const t of selectedTemplates) {
-      for (const q of t.questions) {
-        if (!q.severity) continue;
-        const key = `${t.id}__${q.id}`;
-        const ans = checklistAnswers[key];
-        if (ans?.value === (q.triggerOn ?? 'no')) {
-          result.push({
-            key, text: q.text, severity: q.severity as QuestionSeverity,
-            section: q.section, note: ans.note,
-            templateName: t.name, templateColor: t.color, templateIcon: t.icon,
-          });
-        }
-      }
-    }
-    return result.sort((a, b) => SEV_ORDER.indexOf(a.severity) - SEV_ORDER.indexOf(b.severity));
-  }, [selectedTemplates, checklistAnswers]);
+  const { allFindings, totalAnswered, totalQuestions, healthScore } = useMemo(
+    () => computeHealthScore(selectedTemplates, checklistAnswers, versionEntries, serverDetails),
+    [selectedTemplates, checklistAnswers, versionEntries, serverDetails],
+  );
 
   const infraAlerts = useMemo(() => {
     const alerts: Array<{ label: string; metric: string; pct: number; level: 'critical' | 'warning'; icon: string }> = [];
@@ -129,12 +109,8 @@ export function Step10Summary({ templates, selectedProducts, sessionData, checkl
     return alerts.sort((a, b) => b.pct - a.pct);
   }, [serverDetails]);
 
-  const totalAnswered  = productStats.reduce((s, p) => s + p.answered, 0);
-  const totalQuestions = productStats.reduce((s, p) => s + p.total, 0);
   const criticalCount  = allFindings.filter((f) => f.severity === 'CRITICAL').length;
   const highCount      = allFindings.filter((f) => f.severity === 'HIGH').length;
-  const healthScore    = totalAnswered === 0 ? null
-    : Math.round(Math.max(0, (totalAnswered - allFindings.length) / totalAnswered * 100));
 
   const versionList     = Object.entries(versionEntries).filter(([, e]) => e.installedVersion);
   const eosComponents   = versionList.filter(([, e]) => e.status === 'eos');

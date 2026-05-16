@@ -221,7 +221,7 @@ export function Sidebar({ currentStep, onStepChange, sessionData, onNewSession }
             <div style={{ fontSize: '9px', color: '#94A3B8', fontWeight: 700, letterSpacing: '0.07em' }}>STEP</div>
             <div style={{ fontSize: '13px', color: '#0F172A', fontWeight: 700, fontFamily: 'monospace', lineHeight: 1.2 }}>
               {String(currentStep).padStart(2, '0')}
-              <span style={{ fontSize: '10px', color: '#94A3B8', fontWeight: 400 }}> / 12</span>
+              <span style={{ fontSize: '10px', color: '#94A3B8', fontWeight: 400 }}> / {String(TOTAL_STEPS).padStart(2, '0')}</span>
             </div>
           </div>
           {/* Conic progress circle */}

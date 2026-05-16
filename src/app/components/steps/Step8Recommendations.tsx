@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, Pencil, Trash2, CheckCircle2, Clock, Circle, X, ChevronDown, ChevronRight } from 'lucide-react';
+import { Plus, Pencil, Trash2, CheckCircle2, Clock, Circle, X, ChevronDown, ChevronRight, Star } from 'lucide-react';
 
 type Priority = 'critical' | 'high' | 'medium' | 'low';
 type Status = 'open' | 'in_progress' | 'done';
@@ -23,6 +23,16 @@ export interface Recommendation {
   priority: Priority;
   effort: Effort;
   status: Status;
+  /** Recommended target version (e.g. "10.4", "26.02") — only meaningful when category === 'version_upgrade'. */
+  targetVersion?: string;
+  /** Release notes URL for the target version. */
+  releaseNotesUrl?: string;
+  /** Inline release notes text or release-notes highlights (optional). */
+  releaseNotes?: string;
+  /** When true, this recommendation appears in the report's "High-Level Recommendations"
+      block AND in "Key Observations". When false (or unset), it only appears in the full
+      recommendations table in Part III. */
+  featured?: boolean;
 }
 
 const CAT_CFG: Record<RecCategory, { label: string; icon: string; color: string; hint: string }> = {
@@ -65,6 +75,9 @@ const EMPTY_FORM: Omit<Recommendation, 'id' | 'status'> = {
   product: '',
   priority: 'medium',
   effort: 'medium',
+  targetVersion: '',
+  releaseNotesUrl: '',
+  releaseNotes: '',
 };
 
 export function Step8Recommendations({ recommendations, setRecommendations }: { recommendations: Recommendation[]; setRecommendations: React.Dispatch<React.SetStateAction<Recommendation[]>> }) {
@@ -83,7 +96,13 @@ export function Step8Recommendations({ recommendations, setRecommendations }: { 
 
   const openEdit = (rec: Recommendation) => {
     setEditId(rec.id);
-    setForm({ title: rec.title, detail: rec.detail, category: rec.category, product: rec.product, priority: rec.priority, effort: rec.effort });
+    setForm({
+      title: rec.title, detail: rec.detail, category: rec.category, product: rec.product,
+      priority: rec.priority, effort: rec.effort,
+      targetVersion: rec.targetVersion ?? '',
+      releaseNotesUrl: rec.releaseNotesUrl ?? '',
+      releaseNotes: rec.releaseNotes ?? '',
+    });
     setShowForm(true);
   };
 
@@ -113,6 +132,9 @@ export function Step8Recommendations({ recommendations, setRecommendations }: { 
       }),
     );
   };
+
+  const toggleFeatured = (id: string) =>
+    setRecommendations((prev) => prev.map((r) => (r.id === id ? { ...r, featured: !r.featured } : r)));
 
   const toggleExpand = (id: string) => setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
 
@@ -287,6 +309,56 @@ export function Step8Recommendations({ recommendations, setRecommendations }: { 
                 </div>
               </div>
             </div>
+
+            {/* Release Notes block — only when category is Version Upgrade */}
+            {form.category === 'version_upgrade' && (
+              <div className="mb-5 rounded-lg p-[14px_16px]" style={{ background: '#EFF6FF', border: '1.5px solid #BFDBFE' }}>
+                <div className="flex items-center gap-1.5 mb-3">
+                  <span style={{ fontSize: '14px' }}>⬆️</span>
+                  <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#1E40AF', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                    Release Notes (target version)
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-3 mb-3">
+                  <div>
+                    <label style={{ fontSize: '10.5px', fontWeight: 600, color: '#1E40AF', display: 'block', marginBottom: '5px' }}>
+                      Target Version
+                    </label>
+                    <input
+                      type="text"
+                      value={form.targetVersion ?? ''}
+                      onChange={(e) => setForm((f) => ({ ...f, targetVersion: e.target.value }))}
+                      placeholder="e.g. 10.4 or 26.02"
+                      style={{ ...inputStyle, fontFamily: 'monospace', background: '#fff' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '10.5px', fontWeight: 600, color: '#1E40AF', display: 'block', marginBottom: '5px' }}>
+                      Release Notes URL
+                    </label>
+                    <input
+                      type="url"
+                      value={form.releaseNotesUrl ?? ''}
+                      onChange={(e) => setForm((f) => ({ ...f, releaseNotesUrl: e.target.value }))}
+                      placeholder="https://help.forcepoint.com/…"
+                      style={{ ...inputStyle, background: '#fff' }}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label style={{ fontSize: '10.5px', fontWeight: 600, color: '#1E40AF', display: 'block', marginBottom: '5px' }}>
+                    Release Notes Highlights (optional)
+                  </label>
+                  <textarea
+                    value={form.releaseNotes ?? ''}
+                    onChange={(e) => setForm((f) => ({ ...f, releaseNotes: e.target.value }))}
+                    placeholder="Key fixes, security patches, breaking changes, prerequisites…"
+                    rows={3}
+                    style={{ ...inputStyle, background: '#fff', resize: 'vertical' }}
+                  />
+                </div>
+              </div>
+            )}
 
             {/* Action buttons */}
             <div className="flex gap-2">
@@ -496,6 +568,20 @@ export function Step8Recommendations({ recommendations, setRecommendations }: { 
 
                         {/* Controls */}
                         <div className="flex items-center gap-1.5 flex-shrink-0">
+                          <button
+                            onClick={() => toggleFeatured(rec.id)}
+                            className="w-6 h-6 rounded flex items-center justify-center transition-all"
+                            style={{
+                              color: rec.featured ? '#EAB308' : '#CBD5E1',
+                              background: rec.featured ? 'rgba(234,179,8,0.12)' : '#F1F5F9',
+                            }}
+                            title={rec.featured
+                              ? 'Featured — appears in High-Level Recommendations + Key Observations'
+                              : 'Click to feature this recommendation in the report'}
+                            aria-label={rec.featured ? 'Unfeature' : 'Feature'}
+                          >
+                            <Star size={12} fill={rec.featured ? '#EAB308' : 'transparent'} strokeWidth={rec.featured ? 0 : 2} />
+                          </button>
                           <button
                             onClick={() => cycleStatus(rec.id)}
                             className="flex items-center gap-1 px-2 py-1 rounded-lg transition-all"

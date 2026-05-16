@@ -81,7 +81,7 @@ export function Step10FeatureRequests({ items, setItems }: { items: FeatureReque
               <Rocket size={15} style={{ color: '#7C3AED' }} />
             </div>
             <div>
-              <div style={{ fontSize: '13px', fontWeight: 700, color: '#0F172A' }}>Enhancement Requests</div>
+              <div style={{ fontSize: '13px', fontWeight: 700, color: '#0F172A' }}>Customer Feature Requests</div>
               <div style={{ fontSize: '10.5px', color: '#64748B', marginTop: '1px' }}>
                 {items.length === 0
                   ? 'No requests yet — add enhancement requests for this customer'
@@ -104,7 +104,7 @@ export function Step10FeatureRequests({ items, setItems }: { items: FeatureReque
       {showForm && (
         <div className="bg-white rounded-xl border border-[rgba(124,58,237,0.25)] shadow-[0_1px_3px_rgba(15,41,82,0.08)] p-[20px_22px]">
           <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#0F172A', marginBottom: '14px' }}>
-            New Enhancement Request
+            New Customer Feature Request
           </div>
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-2.5">
@@ -213,7 +213,7 @@ export function Step10FeatureRequests({ items, setItems }: { items: FeatureReque
         <div className="bg-white rounded-xl border border-[rgba(15,41,82,0.08)] shadow-[0_1px_3px_rgba(15,41,82,0.08)] p-[20px_22px]">
           <div className="text-center py-10">
             <div style={{ fontSize: '36px', marginBottom: '10px' }}>🚀</div>
-            <div style={{ fontSize: '14px', fontWeight: 600, color: '#0F172A', marginBottom: '6px' }}>No Enhancement Requests</div>
+            <div style={{ fontSize: '14px', fontWeight: 600, color: '#0F172A', marginBottom: '6px' }}>No Customer Feature Requests</div>
             <div style={{ fontSize: '12.5px', color: '#64748B', lineHeight: 1.6, maxWidth: '380px', margin: '0 auto 20px' }}>
               Log feature requests from the customer to forward to the Forcepoint product team.
             </div>

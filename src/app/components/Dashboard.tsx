@@ -21,6 +21,8 @@ import type { FeatureRequest } from './steps/Step10FeatureRequests';
 import { DEFAULT_SQL_CONFIG, DEFAULT_API_CONNECTORS, type SqlConfig, type ApiConnectorsConfig } from './steps/Step3DataCollectors';
 import type { DlpServerBundle } from './steps/dlpServerInfoParser';
 import type { ParsedCertificate } from './steps/certificateParser';
+import type { EndpointAgentSummary } from './steps/endpointAgentParser';
+import type { DlpDashboardSummary } from './steps/dlpDashboardParser';
 import { ALL_REPORT_IDS } from '../constants/reportDefinitions';
 
 export interface LicenseItem {
@@ -84,6 +86,16 @@ export interface HardwareItem {
   hardwareEol?: string;     // EoL date if known
 }
 
+export interface LicenseGapItem {
+  id: string;
+  product: string;
+  productCode?: string;
+  currentQuantity?: string;       // existing entitlement count (free text)
+  recommendedAdditional: string;  // how many additional licenses to add
+  priority?: 'critical' | 'high' | 'medium' | 'low';
+  rationale?: string;
+}
+
 export interface SessionData {
   customerName: string;
   forcepointId: string;
@@ -127,6 +139,10 @@ export interface HCSession {
   dlpBundles: DlpServerBundle[];
   certificates: ParsedCertificate[];
   selectedEnhancements: string[];
+  licenseGaps: LicenseGapItem[];
+  endpointAgentSummary: EndpointAgentSummary | null;
+  dlpDashboardSummary: DlpDashboardSummary | null;
+  customerLogo: string | null;
   savedAt: Date;
 }
 
@@ -158,6 +174,10 @@ function deserializeSessions(raw: unknown[]): HCSession[] {
       dlpBundles: session.dlpBundles ?? [],
       certificates: session.certificates ?? [],
       selectedEnhancements: session.selectedEnhancements ?? [],
+      licenseGaps: session.licenseGaps ?? [],
+      endpointAgentSummary: session.endpointAgentSummary ?? null,
+      dlpDashboardSummary: session.dlpDashboardSummary ?? null,
+      customerLogo: session.customerLogo ?? null,
     };
   });
 }
@@ -190,9 +210,22 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
   const [dlpBundles,      setDlpBundles]      = useLocalStorage<DlpServerBundle[]>('hc_dlp_bundles', []);
   const [certificates,    setCertificates]    = useLocalStorage<ParsedCertificate[]>('hc_certificates', []);
   const [selectedEnhancements, setSelectedEnhancements] = useLocalStorage<string[]>('hc_enhancements', []);
+  const [licenseGaps, setLicenseGaps] = useLocalStorage<LicenseGapItem[]>('hc_license_gaps', []);
+  const [endpointAgentSummary, setEndpointAgentSummary] = useLocalStorage<EndpointAgentSummary | null>('hc_endpoint_agents', null);
+  const [dlpDashboardSummary, setDlpDashboardSummary] = useLocalStorage<DlpDashboardSummary | null>('hc_dlp_dashboard', null);
+  const [customerLogo, setCustomerLogo] = useLocalStorage<string | null>('hc_customer_logo', null);
 
   /* ── Version data catalog (persisted) ── */
-  const [versionData, setVersionData] = useLocalStorage<VersionDataStore>('hc_version_data', INITIAL_VERSION_DATA);
+  const [rawVersionData, setVersionData] = useLocalStorage<VersionDataStore>('hc_version_data', INITIAL_VERSION_DATA);
+  const versionData: VersionDataStore = {
+    'Forcepoint Email Security': rawVersionData['Forcepoint Email Security'] ?? [],
+    'Forcepoint Web Security': rawVersionData['Forcepoint Web Security'] ?? [],
+    'Forcepoint Data Security': rawVersionData['Forcepoint Data Security'] ?? [],
+    'DLP + Web Endpoint Agent': rawVersionData['DLP + Web Endpoint Agent'] ?? [],
+    'AMDP': rawVersionData['AMDP'] ?? [],
+    'V Series Appliances': rawVersionData['V Series Appliances'] ?? [],
+    'NGFW Appliances': rawVersionData['NGFW Appliances'] ?? [],
+  };
 
   /* ── Sessions state (persisted) ── */
   const [rawSessions, setRawSessions] = useLocalStorage<unknown[]>('hc_sessions', []);
@@ -215,8 +248,6 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
   const handleAnswerChange = useCallback((qId: string, answer: QuestionAnswer) => {
     setChecklistAnswers((prev) => ({ ...prev, [qId]: answer }));
   }, [setChecklistAnswers]);
-
-  const handleResetAnswers = useCallback(() => setChecklistAnswers({}), [setChecklistAnswers]);
 
   const handleVersionEntriesChange = useCallback(
     (updater: ((prev: Record<string, VersionEntry>) => Record<string, VersionEntry>) | Record<string, VersionEntry>) => {
@@ -251,6 +282,10 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
         dlpBundles: [...dlpBundles],
         certificates: [...certificates],
         selectedEnhancements: [...selectedEnhancements],
+        licenseGaps: [...licenseGaps],
+        endpointAgentSummary: endpointAgentSummary ? { ...endpointAgentSummary } : null,
+        dlpDashboardSummary: dlpDashboardSummary ? { ...dlpDashboardSummary } : null,
+        customerLogo: customerLogo ?? null,
         savedAt: new Date(),
       };
 
@@ -287,6 +322,10 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
     setDlpBundles(session.dlpBundles ?? []);
     setCertificates(session.certificates ?? []);
     setSelectedEnhancements(session.selectedEnhancements ?? []);
+    setLicenseGaps(session.licenseGaps ?? []);
+    setEndpointAgentSummary(session.endpointAgentSummary ?? null);
+    setDlpDashboardSummary(session.dlpDashboardSummary ?? null);
+    setCustomerLogo(session.customerLogo ?? null);
     setActiveSessionId(session.id);
     setActiveView('wizard');
   };
@@ -307,6 +346,10 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
     setDlpBundles([]);
     setCertificates([]);
     setSelectedEnhancements([]);
+    setLicenseGaps([]);
+    setEndpointAgentSummary(null);
+    setDlpDashboardSummary(null);
+    setCustomerLogo(null);
     setActiveSessionId(undefined);
     setActiveView('wizard');
   };
@@ -330,6 +373,10 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
     setDlpBundles([]);
     setCertificates([]);
     setSelectedEnhancements([]);
+    setLicenseGaps([]);
+    setEndpointAgentSummary(null);
+    setDlpDashboardSummary(null);
+    setCustomerLogo(null);
     setActiveSessionId(undefined);
     setActiveView('sessions');
   };
@@ -391,7 +438,6 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
           <div className="flex-1 flex flex-col overflow-hidden min-w-0">
             <MainContent
               currentStep={currentStep}
-              onStepChange={setCurrentStep}
               sessionData={sessionData}
               updateSessionData={updateSessionData}
               templates={templates}
@@ -399,7 +445,6 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
               setSelectedProducts={setSelectedProducts}
               checklistAnswers={checklistAnswers}
               onAnswerChange={handleAnswerChange}
-              onResetAnswers={handleResetAnswers}
               versionData={versionData}
               versionEntries={versionEntries}
               onVersionEntriesChange={handleVersionEntriesChange}
@@ -423,6 +468,14 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
               setCertificates={setCertificates}
               selectedEnhancements={selectedEnhancements}
               setSelectedEnhancements={setSelectedEnhancements}
+              licenseGaps={licenseGaps}
+              setLicenseGaps={setLicenseGaps}
+              endpointAgentSummary={endpointAgentSummary}
+              setEndpointAgentSummary={setEndpointAgentSummary}
+              dlpDashboardSummary={dlpDashboardSummary}
+              setDlpDashboardSummary={setDlpDashboardSummary}
+              customerLogo={customerLogo}
+              setCustomerLogo={setCustomerLogo}
             />
             <BottomPanel
               currentStep={currentStep}

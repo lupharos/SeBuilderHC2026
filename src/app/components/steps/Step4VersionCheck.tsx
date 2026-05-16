@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
-import { CheckCircle2, AlertTriangle, XCircle, Info, Clock } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, XCircle, Info, Clock, Zap } from 'lucide-react';
 import type { VersionDataStore, CategoryKey, SoftwareEntry } from '../../constants/versionData';
+import type { DlpServerBundle } from './dlpServerInfoParser';
 
 /* ═══════════════════════════════
    TYPES
 ═══════════════════════════════ */
-type VersionStatus = 'ok' | 'warning' | 'critical' | 'eos' | 'eol' | 'unknown';
+export type VersionStatus = 'ok' | 'warning' | 'critical' | 'eos' | 'eol' | 'unknown';
 
 export interface VersionEntry {
   id: string;
@@ -15,6 +16,16 @@ export interface VersionEntry {
   installedVersion: string;
   status: VersionStatus;
   notes: string;
+  /** When set, takes precedence over the computed status (manual override by analyst). */
+  statusOverride?: VersionStatus;
+  /** True when this entry was added by the user (not in CATALOG). */
+  isCustom?: boolean;
+  /** Manual fields for custom entries (no versionData lookup). */
+  customLatestVersion?: string;
+  customReleaseDate?: string;
+  customEoSale?: string;
+  customEoMaintenance?: string;
+  customEoSupport?: string;
 }
 
 interface Step4Props {
@@ -22,6 +33,7 @@ interface Step4Props {
   versionData: VersionDataStore;
   versionEntries: Record<string, VersionEntry>;
   onVersionEntriesChange: (updater: ((prev: Record<string, VersionEntry>) => Record<string, VersionEntry>) | Record<string, VersionEntry>) => void;
+  dlpBundles?: DlpServerBundle[];
 }
 
 /* ═══════════════════════════════
@@ -323,7 +335,9 @@ function InstalledVersionInput({
 /* ═══════════════════════════════
    MAIN COMPONENT
 ═══════════════════════════════ */
-export function Step4VersionCheck({ selectedProducts, versionData, versionEntries, onVersionEntriesChange }: Step4Props) {
+export function Step4VersionCheck({ selectedProducts, versionData, versionEntries, onVersionEntriesChange, dlpBundles = [] }: Step4Props) {
+  const [autoFillNotice, setAutoFillNotice] = useState<string | null>(null);
+
   useEffect(() => {
     const activeIds = getActiveComponentIds(selectedProducts);
     onVersionEntriesChange((prev) => {
@@ -338,6 +352,69 @@ export function Step4VersionCheck({ selectedProducts, versionData, versionEntrie
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProducts]);
 
+  /* Auto-fill FSM Server and SQL Server versions from latest DLPServerInfo bundle.
+     The FSM Server install bundles Forcepoint Security Manager (DLP version line),
+     and the bundle also captures the local SQL Server version. */
+  useEffect(() => {
+    if (dlpBundles.length === 0) return;
+
+    const fsmBundle = dlpBundles.find(b => b.forcepointProducts?.dlpVersion) ?? null;
+    const fsmVersion = fsmBundle?.forcepointProducts?.dlpVersion?.trim() || '';
+
+    const sqlBundle = dlpBundles.find(b => b.sqlServer && (b.sqlServer.versionShort || b.sqlServer.versionString)) ?? null;
+    const sqlVersionRaw = sqlBundle?.sqlServer?.versionShort?.trim() || sqlBundle?.sqlServer?.versionString?.trim() || '';
+    /* sqlServer.versionString can be a multi-line block; collapse whitespace for the input field. */
+    const sqlVersion = sqlVersionRaw.replace(/\s+/g, ' ').slice(0, 80);
+
+    if (!fsmVersion && !sqlVersion) return;
+
+    const activeIds = getActiveComponentIds(selectedProducts);
+    const fsmIds = fsmVersion ? activeIds.filter(id => id.endsWith('_fsm') && CATALOG[id]) : [];
+    const sqlIds = sqlVersion ? activeIds.filter(id => id.endsWith('_sql') && CATALOG[id]) : [];
+    if (fsmIds.length === 0 && sqlIds.length === 0) return;
+
+    let fsmFilled = 0;
+    let sqlFilled = 0;
+    onVersionEntriesChange(prev => {
+      const next = { ...prev };
+      for (const id of fsmIds) {
+        const def = CATALOG[id];
+        const existing = next[id];
+        if (existing?.installedVersion?.trim()) continue;
+        const { status, notes } = calcStatus(fsmVersion, def, versionData);
+        next[id] = {
+          ...(existing ?? { id, ...def, installedVersion: '', status: 'unknown' as VersionStatus, notes: '' }),
+          installedVersion: fsmVersion,
+          status,
+          notes: notes || `Auto-filled from DLPServerInfo bundle: ${fsmBundle?.bundleName ?? ''}`,
+        };
+        fsmFilled++;
+      }
+      for (const id of sqlIds) {
+        const def = CATALOG[id];
+        const existing = next[id];
+        if (existing?.installedVersion?.trim()) continue;
+        const { status, notes } = calcStatus(sqlVersion, def, versionData);
+        next[id] = {
+          ...(existing ?? { id, ...def, installedVersion: '', status: 'unknown' as VersionStatus, notes: '' }),
+          installedVersion: sqlVersion,
+          status,
+          notes: notes || `Auto-filled from DLPServerInfo bundle: ${sqlBundle?.bundleName ?? ''}`,
+        };
+        sqlFilled++;
+      }
+      return next;
+    });
+
+    const parts: string[] = [];
+    if (fsmFilled > 0) parts.push(`FSM Server (${fsmVersion}) → ${fsmFilled} row${fsmFilled === 1 ? '' : 's'}`);
+    if (sqlFilled > 0) parts.push(`SQL Server (${sqlVersion}) → ${sqlFilled} row${sqlFilled === 1 ? '' : 's'}`);
+    if (parts.length > 0) {
+      setAutoFillNotice(`${parts.join(' · ')}. Auto-filled from DLPServerInfo. Edit any value to override.`);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dlpBundles, selectedProducts]);
+
   const patch = (id: string, updates: Partial<VersionEntry>) =>
     onVersionEntriesChange((prev) => ({ ...prev, [id]: { ...prev[id], ...updates } }));
 
@@ -350,16 +427,49 @@ export function Step4VersionCheck({ selectedProducts, versionData, versionEntrie
 
   const store = versionEntries;
   const activeIds = getActiveComponentIds(selectedProducts);
-  const activeEntries = activeIds.map((id) => store[id]).filter(Boolean) as VersionEntry[];
+  const catalogEntries = activeIds.map((id) => store[id]).filter(Boolean) as VersionEntry[];
+  const customEntries = Object.values(store).filter(
+    (e): e is VersionEntry => !!e?.isCustom && !!GROUP_CONFIG[e.groupId] && !!selectedProducts[GROUP_CONFIG[e.groupId].productId],
+  );
+  const activeEntries = [...catalogEntries, ...customEntries];
+
+  /* Effective status honours manual override when present. */
+  const effStatus = (e: VersionEntry): VersionStatus => e.statusOverride ?? e.status;
 
   const counts = {
-    ok:       activeEntries.filter((e) => e.status === 'ok').length,
-    warning:  activeEntries.filter((e) => e.status === 'warning').length,
-    critical: activeEntries.filter((e) => ['critical', 'eos', 'eol'].includes(e.status)).length,
-    unknown:  activeEntries.filter((e) => e.status === 'unknown').length,
+    ok:       activeEntries.filter((e) => effStatus(e) === 'ok').length,
+    warning:  activeEntries.filter((e) => effStatus(e) === 'warning').length,
+    critical: activeEntries.filter((e) => ['critical', 'eos', 'eol'].includes(effStatus(e))).length,
+    unknown:  activeEntries.filter((e) => effStatus(e) === 'unknown').length,
   };
 
-  const hasSomething = activeIds.length > 0;
+  const hasSomething = activeIds.length > 0 || customEntries.length > 0;
+
+  function addCustomComponent(groupId: string) {
+    const grp = GROUP_CONFIG[groupId];
+    if (!grp) return;
+    const id = `custom_${groupId}_${Date.now().toString(36)}`;
+    onVersionEntriesChange((prev) => ({
+      ...prev,
+      [id]: {
+        id, groupId,
+        component: '',
+        productLabel: grp.label,
+        installedVersion: '',
+        status: 'unknown',
+        notes: '',
+        isCustom: true,
+      },
+    }));
+  }
+
+  function removeEntry(id: string) {
+    onVersionEntriesChange((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }
 
   const TH = ({ children, minW }: { children: React.ReactNode; minW?: string }) => (
     <th style={{ textAlign: 'left', padding: '8px 12px', fontSize: '9px', fontWeight: 700, color: '#94A3B8', letterSpacing: '0.09em', textTransform: 'uppercase', background: '#F8FAFC', borderBottom: '1px solid #EEF0F5', whiteSpace: 'nowrap', minWidth: minW }}>
@@ -377,6 +487,31 @@ export function Step4VersionCheck({ selectedProducts, versionData, versionEntrie
             No products selected in <strong>Step 2 — Product Scope</strong>.<br />
             Select at least one product to load its version components.
           </p>
+        </div>
+      )}
+
+      {autoFillNotice && (
+        <div
+          className="flex items-start gap-2.5 rounded-xl p-[12px_16px]"
+          style={{ background: 'rgba(37,99,235,0.05)', border: '1.5px solid rgba(37,99,235,0.2)' }}
+        >
+          <Zap size={14} style={{ color: '#2563EB', flexShrink: 0, marginTop: '1px' }} />
+          <div className="flex-1">
+            <div style={{ fontSize: '11px', fontWeight: 700, color: '#1E3A8A', letterSpacing: '0.04em', marginBottom: '2px' }}>
+              AUTO-FILLED FROM DLP BUNDLE
+            </div>
+            <div style={{ fontSize: '11px', color: '#1E40AF', lineHeight: 1.5 }}>{autoFillNotice}</div>
+          </div>
+          <button
+            onClick={() => setAutoFillNotice(null)}
+            style={{
+              fontSize: '10px', fontWeight: 600, color: '#2563EB',
+              background: 'transparent', border: '1px solid rgba(37,99,235,0.3)',
+              borderRadius: '6px', padding: '3px 9px', cursor: 'pointer', flexShrink: 0,
+            }}
+          >
+            Dismiss
+          </button>
         </div>
       )}
 
@@ -413,6 +548,9 @@ export function Step4VersionCheck({ selectedProducts, versionData, versionEntrie
       {/* Per-product tables */}
       {Object.entries(GROUP_CONFIG).map(([groupKey, grp]) => {
         if (!selectedProducts[grp.productId]) return null;
+        const groupCustomEntries = customEntries.filter((e) => e.groupId === groupKey);
+        const groupRowIds: string[] = [...grp.componentIds, ...groupCustomEntries.map((e) => e.id)];
+        const totalComponents = groupRowIds.length;
 
         return (
           <div key={groupKey} className="bg-white rounded-2xl overflow-hidden" style={{ border: `1.5px solid ${grp.border}`, boxShadow: '0 1px 5px rgba(15,41,82,0.06)' }}>
@@ -421,14 +559,23 @@ export function Step4VersionCheck({ selectedProducts, versionData, versionEntrie
               <span style={{ fontSize: '15px' }}>{grp.emoji}</span>
               <span style={{ fontSize: '13px', fontWeight: 700, color: grp.color }}>{grp.label}</span>
               <span className="px-2 py-0.5 rounded-md" style={{ fontSize: '9px', fontWeight: 700, fontFamily: 'monospace', background: `${grp.color}18`, color: grp.color, border: `1px solid ${grp.color}30` }}>
-                {grp.componentIds.length} component{grp.componentIds.length !== 1 ? 's' : ''}
+                {totalComponents} component{totalComponents !== 1 ? 's' : ''}
               </span>
               <div className="flex items-center gap-2 ml-auto">
-                {grp.componentIds.map((cid) => {
+                {groupRowIds.map((cid) => {
                   const e = store[cid];
                   if (!e) return null;
-                  return <div key={cid} className="w-2 h-2 rounded-full" title={`${e.component}: ${STATUS_CFG[e.status].label}`} style={{ background: STATUS_CFG[e.status].color, flexShrink: 0 }} />;
+                  const s = effStatus(e);
+                  return <div key={cid} className="w-2 h-2 rounded-full" title={`${e.component}: ${STATUS_CFG[s].label}`} style={{ background: STATUS_CFG[s].color, flexShrink: 0 }} />;
                 })}
+                <button
+                  onClick={() => addCustomComponent(groupKey)}
+                  className="ml-2 flex items-center gap-1 px-2.5 py-1 rounded-md transition-all"
+                  style={{ fontSize: '10px', fontWeight: 600, color: grp.color, background: '#fff', border: `1px solid ${grp.color}40`, cursor: 'pointer' }}
+                  title="Add a custom component to this group"
+                >
+                  + Add Component
+                </button>
               </div>
             </div>
 
@@ -449,17 +596,27 @@ export function Step4VersionCheck({ selectedProducts, versionData, versionEntrie
                   </tr>
                 </thead>
                 <tbody>
-                  {grp.componentIds.map((compId) => {
+                  {groupRowIds.map((compId) => {
                     const entry = store[compId];
                     if (!entry) return null;
                     const def = CATALOG[compId];
-                    const latest = resolveLatest(def, versionData);
-                    const dates = resolveInstalledDates(entry.installedVersion, def, versionData);
-                    const { status: autoStatus, notes: autoNotes } = entry.installedVersion
+                    const isCustomRow = !def || entry.isCustom;
+                    const latest = def
+                      ? resolveLatest(def, versionData)
+                      : { latestVersion: entry.customLatestVersion || '—', releaseDate: entry.customReleaseDate || '—' };
+                    const dates = def
+                      ? resolveInstalledDates(entry.installedVersion, def, versionData)
+                      : {
+                          eoSale: entry.customEoSale || '—',
+                          eoMaintenance: entry.customEoMaintenance || '—',
+                          eoSupport: entry.customEoSupport || '—',
+                        };
+                    const { status: autoStatus, notes: autoNotes } = def && entry.installedVersion
                       ? calcStatus(entry.installedVersion, def, versionData)
                       : { status: 'unknown' as VersionStatus, notes: '' };
 
-                    const sc = STATUS_CFG[autoStatus];
+                    const effective = entry.statusOverride ?? autoStatus;
+                    const sc = STATUS_CFG[effective];
                     const isFSMrow = entry.component === 'FSM Server';
                     const isSQLrow = entry.component === 'SQL Server';
 
@@ -472,55 +629,176 @@ export function Step4VersionCheck({ selectedProducts, versionData, versionEntrie
                       >
                         {/* Component */}
                         <td style={{ padding: '9px 12px', verticalAlign: 'middle' }}>
-                          <ComponentLabel component={entry.component} productLabel={entry.productLabel} />
+                          <div className="flex items-center gap-2">
+                            {isCustomRow ? (
+                              <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+                                <input
+                                  type="text"
+                                  value={entry.component}
+                                  onChange={(e) => patch(compId, { component: e.target.value })}
+                                  placeholder="Component name"
+                                  style={{ fontSize: '12.5px', fontWeight: 600, color: '#0F172A', padding: '4px 7px', background: '#F8FAFC', border: '1.5px solid rgba(15,41,82,0.12)', borderRadius: '6px', outline: 'none' }}
+                                />
+                                <input
+                                  type="text"
+                                  value={entry.productLabel}
+                                  onChange={(e) => patch(compId, { productLabel: e.target.value })}
+                                  placeholder="Product label"
+                                  style={{ fontSize: '10.5px', color: '#475569', padding: '3px 7px', background: '#F8FAFC', border: '1px solid rgba(15,41,82,0.08)', borderRadius: '5px', outline: 'none' }}
+                                />
+                              </div>
+                            ) : (
+                              <ComponentLabel component={entry.component} productLabel={entry.productLabel} />
+                            )}
+                            {isCustomRow && (
+                              <span style={{ fontSize: '8.5px', fontWeight: 700, fontFamily: 'monospace', background: '#FEF3C7', color: '#92400E', border: '1px solid #FDE68A', padding: '1px 5px', borderRadius: '4px', flexShrink: 0 }}>
+                                CUSTOM
+                              </span>
+                            )}
+                            {isCustomRow && (
+                              <button
+                                onClick={() => removeEntry(compId)}
+                                title="Remove this custom component"
+                                style={{ marginLeft: 'auto', fontSize: '10px', color: '#94A3B8', background: 'transparent', border: 'none', cursor: 'pointer', padding: '2px 6px', flexShrink: 0 }}
+                                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#DC2626'; }}
+                                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#94A3B8'; }}
+                              >
+                                ✕
+                              </button>
+                            )}
+                          </div>
                         </td>
 
                         {/* Installed Version */}
                         <td style={{ padding: '9px 12px', verticalAlign: 'middle' }}>
-                          <InstalledVersionInput
-                            value={entry.installedVersion}
-                            onChange={(v) => handleInstalledChange(compId, v)}
-                            def={def}
-                            vd={versionData}
-                          />
+                          {def ? (
+                            <InstalledVersionInput
+                              value={entry.installedVersion}
+                              onChange={(v) => handleInstalledChange(compId, v)}
+                              def={def}
+                              vd={versionData}
+                            />
+                          ) : (
+                            <input
+                              type="text"
+                              value={entry.installedVersion}
+                              onChange={(e) => patch(compId, { installedVersion: e.target.value })}
+                              placeholder="Enter version…"
+                              style={{ width: '115px', fontSize: '12px', fontFamily: 'monospace', padding: '5px 9px', background: '#F4F6FA', border: '1.5px solid rgba(15,41,82,0.12)', borderRadius: '8px', color: entry.installedVersion ? '#0F172A' : '#94A3B8', outline: 'none' }}
+                            />
+                          )}
                         </td>
 
-                        {/* Latest Version — from version data */}
+                        {/* Latest Version */}
                         <td style={{ padding: '9px 12px', verticalAlign: 'middle' }}>
-                          <span style={{ fontSize: '12px', fontWeight: 600, fontFamily: 'monospace', color: '#0F172A', background: '#F0F9FF', border: '1px solid #BAE6FD', borderRadius: '5px', padding: '2px 7px', display: 'inline-block' }}>
-                            {latest.latestVersion}
-                          </span>
+                          {isCustomRow ? (
+                            <input
+                              type="text"
+                              value={entry.customLatestVersion ?? ''}
+                              onChange={(e) => patch(compId, { customLatestVersion: e.target.value })}
+                              placeholder="Latest"
+                              style={{ width: '100px', fontSize: '12px', fontWeight: 600, fontFamily: 'monospace', padding: '4px 8px', background: '#F0F9FF', border: '1.5px solid #BAE6FD', borderRadius: '6px', color: '#0F172A', outline: 'none' }}
+                            />
+                          ) : (
+                            <span style={{ fontSize: '12px', fontWeight: 600, fontFamily: 'monospace', color: '#0F172A', background: '#F0F9FF', border: '1px solid #BAE6FD', borderRadius: '5px', padding: '2px 7px', display: 'inline-block' }}>
+                              {latest.latestVersion}
+                            </span>
+                          )}
                         </td>
 
-                        {/* Release Date — GA of latest version */}
+                        {/* Release Date */}
                         <td style={{ padding: '9px 12px', verticalAlign: 'middle' }}>
-                          <span style={{ fontSize: '11.5px', color: '#475569', fontFamily: 'monospace' }}>{latest.releaseDate}</span>
+                          {isCustomRow ? (
+                            <input
+                              type="text"
+                              value={entry.customReleaseDate ?? ''}
+                              onChange={(e) => patch(compId, { customReleaseDate: e.target.value })}
+                              placeholder="e.g. Mar 2025"
+                              style={{ width: '100px', fontSize: '11px', fontFamily: 'monospace', padding: '4px 8px', background: '#F8FAFC', border: '1.5px solid rgba(15,41,82,0.12)', borderRadius: '6px', outline: 'none', color: '#475569' }}
+                            />
+                          ) : (
+                            <span style={{ fontSize: '11.5px', color: '#475569', fontFamily: 'monospace' }}>{latest.releaseDate}</span>
+                          )}
                         </td>
 
-                        {/* End of Sale — installed version's date */}
+                        {/* End of Sale */}
                         <td style={{ padding: '9px 12px', verticalAlign: 'middle' }}>
-                          <DateBadge value={dates.eoSale} />
+                          {isCustomRow ? (
+                            <input
+                              type="text"
+                              value={entry.customEoSale ?? ''}
+                              onChange={(e) => patch(compId, { customEoSale: e.target.value })}
+                              placeholder="YYYY-MM-DD"
+                              style={{ width: '110px', fontSize: '11px', fontFamily: 'monospace', padding: '4px 8px', background: '#F8FAFC', border: '1.5px solid rgba(15,41,82,0.12)', borderRadius: '6px', outline: 'none', color: '#475569' }}
+                            />
+                          ) : (
+                            <DateBadge value={dates.eoSale} />
+                          )}
                         </td>
 
-                        {/* End of Maintenance — installed version's date */}
+                        {/* End of Maintenance */}
                         <td style={{ padding: '9px 12px', verticalAlign: 'middle' }}>
-                          <DateBadge value={dates.eoMaintenance} />
+                          {isCustomRow ? (
+                            <input
+                              type="text"
+                              value={entry.customEoMaintenance ?? ''}
+                              onChange={(e) => patch(compId, { customEoMaintenance: e.target.value })}
+                              placeholder="YYYY-MM-DD"
+                              style={{ width: '110px', fontSize: '11px', fontFamily: 'monospace', padding: '4px 8px', background: '#F8FAFC', border: '1.5px solid rgba(15,41,82,0.12)', borderRadius: '6px', outline: 'none', color: '#475569' }}
+                            />
+                          ) : (
+                            <DateBadge value={dates.eoMaintenance} />
+                          )}
                         </td>
 
-                        {/* End of Support — installed version's date */}
+                        {/* End of Support — editable for custom rows */}
                         <td style={{ padding: '9px 12px', verticalAlign: 'middle' }}>
-                          <DateBadge value={dates.eoSupport} />
+                          {isCustomRow ? (
+                            <input
+                              type="text"
+                              value={entry.customEoSupport ?? ''}
+                              onChange={(e) => patch(compId, { customEoSupport: e.target.value })}
+                              placeholder="YYYY-MM-DD"
+                              style={{ width: '110px', fontSize: '11px', fontFamily: 'monospace', padding: '4px 8px', background: '#F8FAFC', border: '1.5px solid rgba(15,41,82,0.12)', borderRadius: '6px', outline: 'none', color: '#475569' }}
+                            />
+                          ) : (
+                            <DateBadge value={dates.eoSupport} />
+                          )}
                         </td>
 
-                        {/* Status — auto calculated */}
+                        {/* Status — auto + manual override */}
                         <td style={{ padding: '9px 12px', verticalAlign: 'middle' }}>
-                          <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg" style={{ background: sc.bg, border: `1.5px solid ${sc.border}`, width: 'fit-content' }}>
-                            <span style={{ color: sc.color }}>{sc.icon}</span>
-                            <span style={{ fontSize: '10.5px', fontWeight: 700, color: sc.color, whiteSpace: 'nowrap' }}>{sc.label}</span>
+                          <div className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg" style={{ background: sc.bg, border: `1.5px solid ${sc.border}`, width: 'fit-content' }}>
+                              <span style={{ color: sc.color }}>{sc.icon}</span>
+                              <span style={{ fontSize: '10.5px', fontWeight: 700, color: sc.color, whiteSpace: 'nowrap' }}>{sc.label}</span>
+                              {entry.statusOverride && (
+                                <span title="Manual override" style={{ fontSize: '8px', fontWeight: 800, fontFamily: 'monospace', background: '#FEF3C7', color: '#92400E', padding: '1px 4px', borderRadius: '3px', marginLeft: '2px' }}>
+                                  MANUAL
+                                </span>
+                              )}
+                            </div>
+                            <select
+                              value={entry.statusOverride ?? '__auto__'}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                patch(compId, { statusOverride: v === '__auto__' ? undefined : (v as VersionStatus) });
+                              }}
+                              title="Override status"
+                              style={{ fontSize: '10px', padding: '3px 4px', background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: '5px', color: '#475569', cursor: 'pointer', outline: 'none' }}
+                            >
+                              <option value="__auto__">Auto</option>
+                              <option value="ok">Up to Date</option>
+                              <option value="warning">Update Available</option>
+                              <option value="critical">Critical</option>
+                              <option value="eos">End-of-Support</option>
+                              <option value="eol">End-of-Life</option>
+                              <option value="unknown">Unknown</option>
+                            </select>
                           </div>
                         </td>
 
-                        {/* Notes — auto-filled, manually editable */}
+                        {/* Notes */}
                         <td style={{ padding: '9px 12px', verticalAlign: 'middle' }}>
                           <input
                             type="text"

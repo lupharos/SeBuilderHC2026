@@ -3,6 +3,7 @@ import { Step2ProductScope } from './steps/Step2ProductScope';
 import { Step3DataCollectors } from './steps/Step3DataCollectors';
 import { Step4VersionCheck } from './steps/Step4VersionCheck';
 import { StepServerDetails } from './steps/StepServerDetails';
+import { StepEndpointAgentAnalysis } from './steps/StepEndpointAgentAnalysis';
 import { Step6ProductChecklist } from './steps/Step6ProductChecklist';
 import { Step7CertificateAnalysis } from './steps/Step7CertificateAnalysis';
 import { Step7ParsingAnalysis } from './steps/Step7ParsingAnalysis';
@@ -12,7 +13,8 @@ import { Step10FeatureRequests } from './steps/Step10FeatureRequests';
 import { Step10Summary } from './steps/Step10Summary';
 import { Step11Summary } from './steps/Step11Summary';
 import { StepRecommendedEnhancements } from './steps/StepRecommendedEnhancements';
-import type { SessionData } from './Dashboard';
+import { StepLicenseGap } from './steps/StepLicenseGap';
+import type { SessionData, LicenseGapItem } from './Dashboard';
 import type { Template } from './types/templates';
 import type { QuestionAnswer, TemplateAnswers } from './rules/ruleEngine';
 import type { VersionDataStore } from '../constants/versionData';
@@ -24,10 +26,11 @@ import type { FeatureRequest } from './steps/Step10FeatureRequests';
 import type { SqlConfig, ApiConnectorsConfig } from './steps/Step3DataCollectors';
 import type { DlpServerBundle } from './steps/dlpServerInfoParser';
 import type { ParsedCertificate } from './steps/certificateParser';
+import type { EndpointAgentSummary } from './steps/endpointAgentParser';
+import type { DlpDashboardSummary } from './steps/dlpDashboardParser';
 
 interface MainContentProps {
   currentStep: number;
-  onStepChange: (step: number) => void;
   sessionData: SessionData;
   updateSessionData: (updates: Partial<SessionData>) => void;
   templates: Template[];
@@ -35,7 +38,6 @@ interface MainContentProps {
   setSelectedProducts: (products: Record<string, boolean>) => void;
   checklistAnswers: TemplateAnswers;
   onAnswerChange: (qId: string, answer: QuestionAnswer) => void;
-  onResetAnswers: () => void;
   versionData: VersionDataStore;
   versionEntries: Record<string, VersionEntry>;
   onVersionEntriesChange: (updater: ((prev: Record<string, VersionEntry>) => Record<string, VersionEntry>) | Record<string, VersionEntry>) => void;
@@ -59,12 +61,20 @@ interface MainContentProps {
   setCertificates: React.Dispatch<React.SetStateAction<ParsedCertificate[]>>;
   selectedEnhancements: string[];
   setSelectedEnhancements: React.Dispatch<React.SetStateAction<string[]>>;
+  licenseGaps: LicenseGapItem[];
+  setLicenseGaps: React.Dispatch<React.SetStateAction<LicenseGapItem[]>>;
+  endpointAgentSummary: EndpointAgentSummary | null;
+  setEndpointAgentSummary: React.Dispatch<React.SetStateAction<EndpointAgentSummary | null>>;
+  dlpDashboardSummary: DlpDashboardSummary | null;
+  setDlpDashboardSummary: React.Dispatch<React.SetStateAction<DlpDashboardSummary | null>>;
+  customerLogo: string | null;
+  setCustomerLogo: React.Dispatch<React.SetStateAction<string | null>>;
 }
 
 export function MainContent({
-  currentStep, onStepChange, sessionData, updateSessionData,
+  currentStep, sessionData, updateSessionData,
   templates, selectedProducts, setSelectedProducts,
-  checklistAnswers, onAnswerChange, onResetAnswers, versionData,
+  checklistAnswers, onAnswerChange, versionData,
   versionEntries, onVersionEntriesChange,
   serverDetails, setServerDetails,
   recommendations, setRecommendations,
@@ -76,6 +86,10 @@ export function MainContent({
   dlpBundles, setDlpBundles,
   certificates, setCertificates,
   selectedEnhancements, setSelectedEnhancements,
+  licenseGaps, setLicenseGaps,
+  endpointAgentSummary, setEndpointAgentSummary,
+  dlpDashboardSummary, setDlpDashboardSummary,
+  customerLogo, setCustomerLogo,
 }: MainContentProps) {
   return (
     <div className="flex-1 flex flex-col overflow-hidden" style={{ background: '#F4F7FB' }}>
@@ -83,10 +97,11 @@ export function MainContent({
         <div className="px-8 py-6 pb-10 w-full">
           {currentStep === 1  && <Step1CustomerInfo sessionData={sessionData} updateSessionData={updateSessionData} versionData={versionData} />}
           {currentStep === 2  && <Step2ProductScope selectedProducts={selectedProducts} setSelectedProducts={setSelectedProducts} />}
-          {currentStep === 3  && <Step3DataCollectors sqlConfig={sqlConfig} setSqlConfig={setSqlConfig} apiConnectors={apiConnectors} setApiConnectors={setApiConnectors} selectedReports={selectedReports} setSelectedReports={setSelectedReports} selectedProducts={selectedProducts} dlpBundles={dlpBundles} setDlpBundles={setDlpBundles} />}
-          {currentStep === 4  && <Step4VersionCheck selectedProducts={selectedProducts} versionData={versionData} versionEntries={versionEntries} onVersionEntriesChange={onVersionEntriesChange} />}
-          {currentStep === 5  && <StepServerDetails servers={serverDetails} setServers={setServerDetails} />}
-          {currentStep === 6  && (
+          {currentStep === 3  && <Step3DataCollectors sqlConfig={sqlConfig} setSqlConfig={setSqlConfig} apiConnectors={apiConnectors} setApiConnectors={setApiConnectors} selectedReports={selectedReports} setSelectedReports={setSelectedReports} selectedProducts={selectedProducts} dlpBundles={dlpBundles} setDlpBundles={setDlpBundles} dlpDashboardSummary={dlpDashboardSummary} setDlpDashboardSummary={setDlpDashboardSummary} />}
+          {currentStep === 4  && <Step4VersionCheck selectedProducts={selectedProducts} versionData={versionData} versionEntries={versionEntries} onVersionEntriesChange={onVersionEntriesChange} dlpBundles={dlpBundles} />}
+          {currentStep === 5  && <StepServerDetails servers={serverDetails} setServers={setServerDetails} dlpBundles={dlpBundles} />}
+          {currentStep === 6  && <StepEndpointAgentAnalysis summary={endpointAgentSummary} setSummary={setEndpointAgentSummary} />}
+          {currentStep === 7  && (
             <Step6ProductChecklist
               templates={templates}
               selectedProducts={selectedProducts}
@@ -94,19 +109,26 @@ export function MainContent({
               onAnswerChange={onAnswerChange}
             />
           )}
-          {currentStep === 7  && (
+          {currentStep === 8  && (
             <Step7ParsingAnalysis
               checklistAnswers={checklistAnswers}
               templates={templates}
               onAnswerChange={onAnswerChange}
             />
           )}
-          {currentStep === 8  && <Step7CertificateAnalysis certificates={certificates} setCertificates={setCertificates} />}
-          {currentStep === 9  && <Step8Recommendations recommendations={recommendations} setRecommendations={setRecommendations} />}
-          {currentStep === 10 && <Step9NextSteps items={actionItems} setItems={setActionItems} />}
-          {currentStep === 11 && <Step10FeatureRequests items={featureRequests} setItems={setFeatureRequests} />}
-          {currentStep === 12 && <StepRecommendedEnhancements selectedEnhancements={selectedEnhancements} setSelectedEnhancements={setSelectedEnhancements} />}
-          {currentStep === 13 && (
+          {currentStep === 9  && <Step7CertificateAnalysis certificates={certificates} setCertificates={setCertificates} />}
+          {currentStep === 10 && <Step8Recommendations recommendations={recommendations} setRecommendations={setRecommendations} />}
+          {currentStep === 11 && <Step9NextSteps items={actionItems} setItems={setActionItems} />}
+          {currentStep === 12 && <Step10FeatureRequests items={featureRequests} setItems={setFeatureRequests} />}
+          {currentStep === 13 && <StepRecommendedEnhancements selectedEnhancements={selectedEnhancements} setSelectedEnhancements={setSelectedEnhancements} />}
+          {currentStep === 14 && (
+            <StepLicenseGap
+              licenseGaps={licenseGaps}
+              setLicenseGaps={setLicenseGaps}
+              existingLicenses={sessionData.licenses ?? []}
+            />
+          )}
+          {currentStep === 15 && (
             <Step10Summary
               templates={templates}
               selectedProducts={selectedProducts}
@@ -118,7 +140,7 @@ export function MainContent({
               serverDetails={serverDetails}
             />
           )}
-          {currentStep === 14 && (
+          {currentStep === 16 && (
             <Step11Summary
               sessionData={sessionData}
               templates={templates}
@@ -134,6 +156,11 @@ export function MainContent({
               dlpBundles={dlpBundles}
               certificates={certificates}
               selectedEnhancements={selectedEnhancements}
+              licenseGaps={licenseGaps}
+              endpointAgentSummary={endpointAgentSummary}
+              dlpDashboardSummary={dlpDashboardSummary}
+              customerLogo={customerLogo}
+              setCustomerLogo={setCustomerLogo}
             />
           )}
         </div>

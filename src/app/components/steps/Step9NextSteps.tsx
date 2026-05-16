@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, CheckCircle2, Clock, Circle, Trash2, Calendar, Pencil, X } from 'lucide-react';
+import { Plus, CheckCircle2, Clock, Circle, Trash2, Calendar, Pencil, X, Star } from 'lucide-react';
 
 type Priority = 'critical' | 'high' | 'medium' | 'low';
 type Status = 'not_started' | 'in_progress' | 'done';
@@ -12,6 +12,9 @@ export interface ActionItem {
   priority: Priority;
   status: Status;
   product: string;
+  /** When true, this action appears in the report's "Top Priority Actions" block AND in
+      "Key Observations". When false (or unset), it only appears in the full Next Steps table. */
+  featured?: boolean;
 }
 
 const P_CFG: Record<Priority, { label: string; text: string; bg: string; border: string }> = {
@@ -47,6 +50,9 @@ export function Step9NextSteps({ items, setItems }: { items: ActionItem[]; setIt
   };
 
   const deleteItem = (id: string) => setItems((prev) => prev.filter((i) => i.id !== id));
+
+  const toggleFeatured = (id: string) =>
+    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, featured: !i.featured } : i)));
 
   const openAdd = () => {
     setEditId(null);
@@ -349,6 +355,20 @@ export function Step9NextSteps({ items, setItems }: { items: ActionItem[]; setIt
 
                 {/* Actions */}
                 <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => toggleFeatured(item.id)}
+                    className="w-6 h-6 rounded flex items-center justify-center transition-all"
+                    style={{
+                      color: item.featured ? '#EAB308' : '#CBD5E1',
+                      background: item.featured ? 'rgba(234,179,8,0.12)' : 'transparent',
+                    }}
+                    title={item.featured
+                      ? 'Featured — appears in Top Priority Actions + Key Observations'
+                      : 'Click to feature this action in the report'}
+                    aria-label={item.featured ? 'Unfeature' : 'Feature'}
+                  >
+                    <Star size={11} fill={item.featured ? '#EAB308' : 'transparent'} strokeWidth={item.featured ? 0 : 2} />
+                  </button>
                   <button
                     onClick={() => openEdit(item)}
                     className="w-6 h-6 rounded flex items-center justify-center transition-all"

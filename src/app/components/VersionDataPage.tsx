@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { Plus, Trash2, Pencil, Check, X, RotateCcw, Download } from 'lucide-react';
+import { Plus, Trash2, Pencil, Check, X, RotateCcw, Download, Upload, AlertCircle } from 'lucide-react';
 import {
   ALL_CATEGORIES,
   SOFTWARE_CATEGORIES,
@@ -11,6 +11,13 @@ import {
   type SoftwareEntry,
   type HardwareEntry,
 } from '../constants/versionData';
+import {
+  parseForcepointLifecycleHtml,
+  mergeIntoStore,
+  computeMergeImpact,
+  type ParseResult,
+  type MergeImpact,
+} from '../utils/forcepointHtmlImporter';
 
 interface VersionDataPageProps {
   data: VersionDataStore;
@@ -117,6 +124,11 @@ export function VersionDataPage({ data, onChange }: VersionDataPageProps) {
   const [editBuffer, setEditBuffer] = useState<AnyEntry | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
   const tableRef = useRef<HTMLDivElement>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
+  const [importResult, setImportResult] = useState<ParseResult | null>(null);
+  const [importImpact, setImportImpact] = useState<MergeImpact[]>([]);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importFileName, setImportFileName] = useState<string | null>(null);
 
   const isSoftware = isSoftwareCategory(activeCategory);
   const columns = isSoftware ? SOFTWARE_COLUMNS : HARDWARE_COLUMNS;
@@ -179,8 +191,53 @@ export function VersionDataPage({ data, onChange }: VersionDataPageProps) {
     URL.revokeObjectURL(url);
   }
 
+  function triggerImport() {
+    setImportError(null);
+    importInputRef.current?.click();
+  }
+
+  async function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setImportFileName(file.name);
+    setImportError(null);
+    try {
+      const text = await file.text();
+      const result = parseForcepointLifecycleHtml(text);
+      if (result.rows.length === 0 && result.parsedProducts.length === 0) {
+        setImportError('No recognizable Forcepoint product sections found in this HTML.');
+        setImportResult(null);
+        setImportImpact([]);
+        return;
+      }
+      setImportResult(result);
+      setImportImpact(computeMergeImpact(data, result));
+    } catch (err) {
+      setImportError(`Failed to read HTML file: ${(err as Error).message}`);
+      setImportResult(null);
+      setImportImpact([]);
+    }
+  }
+
+  function confirmImport() {
+    if (!importResult) return;
+    const merged = mergeIntoStore(data, importResult);
+    onChange(merged);
+    setImportResult(null);
+    setImportImpact([]);
+    setImportFileName(null);
+  }
+
+  function cancelImport() {
+    setImportResult(null);
+    setImportImpact([]);
+    setImportFileName(null);
+    setImportError(null);
+  }
+
   const categoryGroups: { label: string; items: CategoryKey[] }[] = [
-    { label: 'Software', items: ['Forcepoint Email Security', 'Forcepoint Web Security', 'Forcepoint Data Security', 'DLP + Web Endpoint Agent'] },
+    { label: 'Software', items: ['Forcepoint Email Security', 'Forcepoint Web Security', 'Forcepoint Data Security', 'DLP + Web Endpoint Agent', 'AMDP'] },
     { label: 'Hardware', items: ['V Series Appliances', 'NGFW Appliances'] },
   ];
 
@@ -275,6 +332,22 @@ export function VersionDataPage({ data, onChange }: VersionDataPageProps) {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".html,.htm,text/html"
+              style={{ display: 'none' }}
+              onChange={handleImportFile}
+            />
+            <button
+              onClick={triggerImport}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all"
+              style={{ fontSize: '11.5px', fontWeight: 600, color: '#0EA5E9', background: '#F0F9FF', border: '1px solid #BAE6FD' }}
+              title="Import from a saved Forcepoint Product Support Lifecycle HTML page"
+            >
+              <Upload size={13} />
+              Import from Forcepoint HTML
+            </button>
             <button
               onClick={exportJSON}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all"
@@ -510,6 +583,172 @@ export function VersionDataPage({ data, onChange }: VersionDataPageProps) {
           </span>
         </div>
       </div>
+
+      {importError && (
+        <div
+          style={{
+            position: 'fixed',
+            top: '20px',
+            right: '20px',
+            zIndex: 1000,
+            background: '#FEF2F2',
+            border: '1px solid #FECACA',
+            borderRadius: '8px',
+            padding: '12px 16px',
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: '10px',
+            maxWidth: '420px',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.08)',
+          }}
+        >
+          <AlertCircle size={16} style={{ color: '#EF4444', flexShrink: 0, marginTop: '1px' }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: '12px', fontWeight: 600, color: '#991B1B', marginBottom: '2px' }}>Import failed</div>
+            <div style={{ fontSize: '11.5px', color: '#7F1D1D' }}>{importError}</div>
+          </div>
+          <button
+            onClick={() => setImportError(null)}
+            style={{ background: 'transparent', border: 'none', color: '#991B1B', cursor: 'pointer', padding: 0 }}
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
+      {importResult && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15,23,42,0.55)',
+            zIndex: 999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '24px',
+          }}
+          onClick={cancelImport}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: '#FFFFFF',
+              borderRadius: '14px',
+              maxWidth: '640px',
+              width: '100%',
+              maxHeight: '85vh',
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: '0 24px 60px rgba(0,0,0,0.25)',
+              overflow: 'hidden',
+            }}
+          >
+            <div style={{ padding: '18px 22px', borderBottom: '1px solid #EEF0F5' }}>
+              <div style={{ fontSize: '15px', fontWeight: 700, color: '#0F172A' }}>
+                Import preview
+              </div>
+              <div style={{ fontSize: '11.5px', color: '#64748B', marginTop: '3px', fontFamily: 'monospace' }}>
+                {importFileName ?? 'uploaded file'} · {importResult.rows.length} row{importResult.rows.length === 1 ? '' : 's'} parsed
+              </div>
+            </div>
+
+            <div style={{ padding: '18px 22px', overflowY: 'auto', flex: 1 }}>
+              <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.1em', color: '#94A3B8', textTransform: 'uppercase', marginBottom: '8px' }}>
+                Changes by category
+              </div>
+              {importImpact.length === 0 ? (
+                <div style={{ fontSize: '12px', color: '#94A3B8', fontStyle: 'italic' }}>No changes to apply.</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '18px' }}>
+                  {importImpact.map((imp) => (
+                    <div
+                      key={imp.category}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '10px 12px',
+                        background: '#F8FAFC',
+                        border: '1px solid #E2E8F0',
+                        borderRadius: '8px',
+                      }}
+                    >
+                      <span style={{ fontSize: '12.5px', fontWeight: 600, color: '#0F172A' }}>{imp.category}</span>
+                      <span style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                        {imp.added > 0 && (
+                          <span style={{ fontSize: '10.5px', fontWeight: 700, color: '#065F46', background: '#D1FAE5', border: '1px solid #A7F3D0', borderRadius: '5px', padding: '2px 6px', fontFamily: 'monospace' }}>
+                            +{imp.added} new
+                          </span>
+                        )}
+                        {imp.updated > 0 && (
+                          <span style={{ fontSize: '10.5px', fontWeight: 700, color: '#1E40AF', background: '#DBEAFE', border: '1px solid #BFDBFE', borderRadius: '5px', padding: '2px 6px', fontFamily: 'monospace' }}>
+                            ~{imp.updated} updated
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.1em', color: '#94A3B8', textTransform: 'uppercase', marginBottom: '8px' }}>
+                Matched products
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '18px' }}>
+                {importResult.parsedProducts.map((p, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11.5px', color: '#475569', padding: '4px 0' }}>
+                    <span style={{ flex: 1, paddingRight: '8px' }}>{p.productName}</span>
+                    <span style={{ color: '#94A3B8', fontFamily: 'monospace', fontSize: '10.5px' }}>→ {p.category}</span>
+                    <span style={{ marginLeft: '8px', fontFamily: 'monospace', fontSize: '10.5px', color: '#0F172A', fontWeight: 600 }}>{p.count}</span>
+                  </div>
+                ))}
+              </div>
+
+              {importResult.skipped.length > 0 && (
+                <>
+                  <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.1em', color: '#94A3B8', textTransform: 'uppercase', marginBottom: '8px' }}>
+                    Skipped ({importResult.skipped.length})
+                  </div>
+                  <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: '8px', padding: '8px 10px', maxHeight: '120px', overflowY: 'auto' }}>
+                    {importResult.skipped.map((s, i) => (
+                      <div key={i} style={{ fontSize: '11px', color: '#92400E', padding: '2px 0' }}>
+                        <span style={{ fontWeight: 600 }}>{s.productName}</span>
+                        <span style={{ color: '#B45309', marginLeft: '6px' }}>— {s.reason}</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div style={{ padding: '14px 22px', borderTop: '1px solid #EEF0F5', display: 'flex', justifyContent: 'flex-end', gap: '8px', background: '#FAFBFD' }}>
+              <button
+                onClick={cancelImport}
+                className="px-4 py-2 rounded-lg"
+                style={{ fontSize: '12px', fontWeight: 600, color: '#475569', background: '#F1F5F9', border: '1px solid #E2E8F0' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmImport}
+                disabled={importResult.rows.length === 0}
+                className="px-4 py-2 rounded-lg"
+                style={{
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  color: '#FFFFFF',
+                  background: importResult.rows.length === 0 ? '#94A3B8' : 'linear-gradient(135deg,#2563EB,#7C3AED)',
+                  border: 'none',
+                  cursor: importResult.rows.length === 0 ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Merge {importResult.rows.length} row{importResult.rows.length === 1 ? '' : 's'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

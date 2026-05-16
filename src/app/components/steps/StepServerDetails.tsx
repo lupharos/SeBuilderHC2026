@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { Server, Database, Shield, HardDrive, Globe, Mail, Network, Plus, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
+import { Server, Database, Shield, HardDrive, Globe, Mail, Network, Plus, Trash2, ChevronDown, ChevronRight, Zap } from 'lucide-react';
+import type { DlpServerBundle } from './dlpServerInfoParser';
 
 export type ServerType = 'fsm' | 'sql' | 'protector' | 'supplemental' | 'content_gateway' | 'email_gateway' | 'ngfw';
 
@@ -22,6 +23,8 @@ export interface ServerEntry {
   cpuCores: number;
   cpuUsagePercent: number;
   notes: string;
+  osName?: string;     // e.g. "Microsoft Windows Server 2019 Datacenter"
+  osVersion?: string;  // e.g. "10.0.17763"
 }
 
 const SERVER_CFG: Record<ServerType, { label: string; icon: React.ReactNode; color: string; hint: string }> = {
@@ -87,9 +90,66 @@ const IS: CSSProperties = {
 
 const NI: CSSProperties = { ...IS, width: '80px', textAlign: 'right', fontFamily: 'monospace' };
 
-export function StepServerDetails({ servers, setServers }: { servers: ServerEntry[]; setServers: React.Dispatch<React.SetStateAction<ServerEntry[]>> }) {
+export function StepServerDetails({
+  servers,
+  setServers,
+  dlpBundles = [],
+}: {
+  servers: ServerEntry[];
+  setServers: React.Dispatch<React.SetStateAction<ServerEntry[]>>;
+  dlpBundles?: DlpServerBundle[];
+}) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [addType, setAddType] = useState('');
+  const [autoFillNotice, setAutoFillNotice] = useState<string | null>(null);
+
+  /* Auto-fill FSM Server card from latest DLPServerInfo bundle when the card is empty.
+     Only touches empty fields — never overwrites manually-entered data. */
+  useEffect(() => {
+    if (dlpBundles.length === 0) return;
+    const bundle = dlpBundles[0];
+    const info = bundle.systemInfo;
+    const hw = bundle.hardware;
+    if (!info || !hw) return;
+
+    let didFill = false;
+    setServers(prev => prev.map(s => {
+      if (s.id !== 'fsm-default') return s;
+      const isEmpty = !s.hostname && !s.ramTotalGB && !s.cpuCores && s.drives.length === 0;
+      if (!isEmpty) return s;
+
+      const ramTotalGB = hw.ramTotalMB > 0 ? Math.round(hw.ramTotalMB / 1024) : 0;
+      const ramUsedGB = hw.ramTotalMB > 0 && hw.ramAvailableMB >= 0
+        ? Math.max(0, Math.round((hw.ramTotalMB - hw.ramAvailableMB) / 1024))
+        : 0;
+      const cDriveTotal = Math.round(hw.diskCTotalGB || 0);
+      const cDriveUsed = Math.max(0, Math.round((hw.diskCTotalGB || 0) - (hw.diskCFreeGB || 0)));
+      const drives = cDriveTotal > 0
+        ? [{ id: `d-dlp-${bundle.bundleId}`, label: 'C:', totalGB: cDriveTotal, usedGB: cDriveUsed }]
+        : [];
+
+      didFill = true;
+      return {
+        ...s,
+        applicable: true,
+        hostname: info.hostName || s.hostname,
+        ramTotalGB,
+        ramUsedGB,
+        cpuCores: hw.cpuCount || 0,
+        cpuUsagePercent: 0,
+        drives,
+        osName: s.osName || info.osName || '',
+        osVersion: s.osVersion || info.osVersion || '',
+        notes: s.notes
+          ? s.notes
+          : `Auto-filled from DLPServerInfo bundle: ${bundle.bundleName}`,
+      };
+    }));
+    if (didFill) {
+      setAutoFillNotice(`FSM Server auto-filled from "${bundle.bundleName}" (hostname, CPU cores, RAM, C: drive). Edit any field to override.`);
+      setExpanded(prev => new Set([...prev, 'fsm-default']));
+    }
+  }, [dlpBundles, setServers]);
 
   const toggleExpand = (id: string) =>
     setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -178,6 +238,31 @@ export function StepServerDetails({ servers, setServers }: { servers: ServerEntr
         </div>
       </div>
 
+      {autoFillNotice && (
+        <div
+          className="flex items-start gap-2.5 rounded-xl p-[12px_16px]"
+          style={{ background: 'rgba(37,99,235,0.05)', border: '1.5px solid rgba(37,99,235,0.2)' }}
+        >
+          <Zap size={14} style={{ color: '#2563EB', flexShrink: 0, marginTop: '1px' }} />
+          <div className="flex-1">
+            <div style={{ fontSize: '11px', fontWeight: 700, color: '#1E3A8A', letterSpacing: '0.04em', marginBottom: '2px' }}>
+              AUTO-FILLED FROM DLP BUNDLE
+            </div>
+            <div style={{ fontSize: '11px', color: '#1E40AF', lineHeight: 1.5 }}>{autoFillNotice}</div>
+          </div>
+          <button
+            onClick={() => setAutoFillNotice(null)}
+            style={{
+              fontSize: '10px', fontWeight: 600, color: '#2563EB',
+              background: 'transparent', border: '1px solid rgba(37,99,235,0.3)',
+              borderRadius: '6px', padding: '3px 9px', cursor: 'pointer', flexShrink: 0,
+            }}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Server Cards */}
       <div className="space-y-2">
         {servers.map(server => {
@@ -211,6 +296,11 @@ export function StepServerDetails({ servers, setServers }: { servers: ServerEntr
                       {server.hostname && (
                         <span style={{ fontSize: '10px', color: '#64748B', fontFamily: 'monospace' }}>
                           {server.hostname}
+                        </span>
+                      )}
+                      {server.osName && (
+                        <span style={{ fontSize: '10px', color: '#94A3B8' }}>
+                          {server.osName.length > 38 ? server.osName.slice(0, 36) + '…' : server.osName}
                         </span>
                       )}
                       {server.drives.map(d => {
@@ -295,6 +385,34 @@ export function StepServerDetails({ servers, setServers }: { servers: ServerEntr
                       style={{ ...IS, width: '100%' }}
                       {...fp}
                     />
+                  </div>
+
+                  {/* Operating System */}
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="col-span-2">
+                      <label style={{ fontSize: '9.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.06em', display: 'block', marginBottom: '5px' }}>
+                        OPERATING SYSTEM
+                      </label>
+                      <input
+                        value={server.osName ?? ''}
+                        onChange={e => upd(server.id, { osName: e.target.value })}
+                        placeholder="e.g. Microsoft Windows Server 2019 Datacenter"
+                        style={{ ...IS, width: '100%' }}
+                        {...fp}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '9.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.06em', display: 'block', marginBottom: '5px' }}>
+                        OS VERSION / BUILD
+                      </label>
+                      <input
+                        value={server.osVersion ?? ''}
+                        onChange={e => upd(server.id, { osVersion: e.target.value })}
+                        placeholder="e.g. 10.0.17763"
+                        style={{ ...IS, width: '100%', fontFamily: 'monospace' }}
+                        {...fp}
+                      />
+                    </div>
                   </div>
 
                   {/* Disk Drives */}
