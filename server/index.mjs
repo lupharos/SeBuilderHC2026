@@ -787,10 +787,17 @@ app.get('/health', (_req, res) => {
 
 /* ─────────────────────────────────────────────────────────────────
    Boot
+   ───────────────────────────────────────────────────────────────────
+   Bind to 0.0.0.0 explicitly — companion is reachable from any
+   interface, not just loopback. Customer Connector phones home to the
+   server's public IP:PORT directly (no nginx hop required). When
+   HOST=127.0.0.1 is set in env, restrict to loopback only (dev mode
+   or nginx-fronted deployments where 3001 should not be public).
 ───────────────────────────────────────────────────────────────── */
-app.listen(PORT, () => {
+const HOST = process.env.HOST || '0.0.0.0';
+app.listen(PORT, HOST, () => {
   // eslint-disable-next-line no-console
-  console.log(`Forcepoint HC companion listening on http://localhost:${PORT}`);
+  console.log(`Forcepoint HC companion listening on http://${HOST}:${PORT}`);
   // eslint-disable-next-line no-console
   console.log('  POST /api/sql/test       — SQL connection test');
   // eslint-disable-next-line no-console
