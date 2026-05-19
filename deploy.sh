@@ -195,6 +195,17 @@ server {
     root $DIST_DIR;
     index index.html;
 
+    # ── ES modules (.mjs) MIME fix ───────────────────────────────────
+    # Ubuntu's stock /etc/nginx/mime.types doesn't always include
+    # \`.mjs\`, so the browser receives application/octet-stream and
+    # refuses to load files like pdf.worker.min-XXXX.mjs as ES modules.
+    # We override Content-Type here for any .mjs asset under dist/.
+    location ~ \.mjs\$ {
+        default_type application/javascript;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        try_files \$uri =404;
+    }
+
     # ── Companion API + health ───────────────────────────────────────
     # Single public ingress: every client hits nginx; nginx routes the
     # API + health traffic to the loopback-only companion. The

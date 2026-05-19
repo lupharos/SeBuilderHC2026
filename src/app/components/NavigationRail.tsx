@@ -1,4 +1,5 @@
-import { FolderOpen, Braces, Layers, ClipboardCheck, MonitorSmartphone, Sparkles } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { FolderOpen, Braces, Layers, ClipboardCheck, MonitorSmartphone, Sparkles, Activity } from 'lucide-react';
 
 export type ActiveView = 'wizard' | 'templates' | 'sessions' | 'versions' | 'endpoint_matrix' | 'destination_patterns';
 
@@ -13,7 +14,47 @@ interface NavigationRailProps {
   onStartWizardSession: () => void;
 }
 
+/* Persistent health indicator state — driven by polling /health every
+   15s. Lives in the navigation rail so it's visible on every view. */
+interface HealthState {
+  state: 'checking' | 'ok' | 'fail';
+  latencyMs?: number;
+  lastCheckAt?: Date;
+  message?: string;
+}
+
+function useApiHealth(): HealthState {
+  const [health, setHealth] = useState<HealthState>({ state: 'checking' });
+  useEffect(() => {
+    let cancelled = false;
+    const probe = async () => {
+      const started = Date.now();
+      try {
+        const res = await fetch('/health', { signal: AbortSignal.timeout(3000) });
+        const latencyMs = Date.now() - started;
+        if (cancelled) return;
+        if (res.ok) {
+          setHealth({ state: 'ok', latencyMs, lastCheckAt: new Date() });
+        } else {
+          setHealth({ state: 'fail', latencyMs, lastCheckAt: new Date(), message: `HTTP ${res.status}` });
+        }
+      } catch (err) {
+        if (cancelled) return;
+        const msg = err instanceof Error
+          ? (err.name === 'TimeoutError' ? 'timed out (>3s)' : err.message)
+          : 'fetch failed';
+        setHealth({ state: 'fail', lastCheckAt: new Date(), message: msg });
+      }
+    };
+    probe();
+    const id = setInterval(probe, 15000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+  return health;
+}
+
 export function NavigationRail({ activeView, onChangeView, onOpenProfile, onStartWizardSession }: NavigationRailProps) {
+  const health = useApiHealth();
   return (
     <div
       className="w-[60px] flex flex-col items-center py-4 gap-1 flex-shrink-0 relative z-20"
@@ -94,6 +135,11 @@ export function NavigationRail({ activeView, onChangeView, onOpenProfile, onStar
       <div className="flex-1" />
       <div className="w-8 h-px mb-3" style={{ background: 'rgba(255,255,255,0.06)' }} />
 
+      {/* API health indicator — polls /health every 15s */}
+      <HealthIndicator health={health} />
+
+      <div className="w-8 h-px mt-3 mb-3" style={{ background: 'rgba(255,255,255,0.06)' }} />
+
       {/* User avatar */}
       <div className="relative group">
         <button
@@ -154,6 +200,60 @@ function NavButton({ icon, label, active, onClick }: NavButtonProps) {
         {icon}
       </button>
       <Tooltip>{label}</Tooltip>
+    </div>
+  );
+}
+
+function HealthIndicator({ health }: { health: HealthState }) {
+  const cfg = health.state === 'ok'
+    ? { color: '#16A34A', glow: 'rgba(34,197,94,0.45)',  label: 'API Online',   pulse: false }
+    : health.state === 'fail'
+      ? { color: '#DC2626', glow: 'rgba(220,38,38,0.45)', label: 'API Offline',  pulse: false }
+      : { color: '#94A3B8', glow: 'rgba(148,163,184,0.4)', label: 'API Checking…', pulse: true };
+
+  const lastSeen = health.lastCheckAt
+    ? `${Math.floor((Date.now() - health.lastCheckAt.getTime()) / 1000)}s ago`
+    : '—';
+
+  return (
+    <div className="relative group">
+      <button
+        aria-label={cfg.label}
+        className="w-9 h-9 rounded-full flex items-center justify-center transition-all"
+        style={{
+          background: `${cfg.color}1A`,
+          border: `1px solid ${cfg.color}55`,
+          cursor: 'default',
+        }}>
+        <span
+          className={cfg.pulse ? 'animate-pulse' : ''}
+          style={{
+            width: 10,
+            height: 10,
+            borderRadius: '50%',
+            background: cfg.color,
+            boxShadow: `0 0 8px ${cfg.glow}`,
+          }}
+        />
+      </button>
+      <Tooltip>
+        <div style={{ minWidth: 180 }}>
+          <div className="flex items-center gap-1.5" style={{ fontWeight: 700 }}>
+            <Activity size={11} style={{ color: cfg.color }} />
+            {cfg.label}
+          </div>
+          <div style={{ marginTop: 4, fontFamily: "'JetBrains Mono', monospace", fontSize: '10.5px', color: 'rgba(255,255,255,0.65)' }}>
+            endpoint: <span style={{ color: 'rgba(255,255,255,0.85)' }}>/health</span><br />
+            last check: <span style={{ color: 'rgba(255,255,255,0.85)' }}>{lastSeen}</span><br />
+            {typeof health.latencyMs === 'number' && (
+              <>latency: <span style={{ color: 'rgba(255,255,255,0.85)' }}>{health.latencyMs} ms</span><br /></>
+            )}
+            {health.message && (
+              <>note: <span style={{ color: '#FCA5A5' }}>{health.message}</span></>
+            )}
+          </div>
+        </div>
+      </Tooltip>
     </div>
   );
 }
