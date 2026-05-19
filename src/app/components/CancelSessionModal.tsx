@@ -109,7 +109,7 @@ export function CancelSessionModal({
             </div>
             <div style={{ fontSize: '11px', color: '#7F1D1D', lineHeight: 1.6 }}>
               Customer info, product scope, checklist answers, version data, server details, recommendations,
-              action items, feature requests, DLP bundles, certificates, and recommended enhancements.
+              action items, feature requests, DLP telemetry files, certificates, and recommended enhancements.
             </div>
             {filledFieldCount > 0 && (
               <div className="flex items-center gap-2 mt-2 pt-2" style={{ borderTop: '1px dashed #FECACA' }}>

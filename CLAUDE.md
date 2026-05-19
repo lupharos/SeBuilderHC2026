@@ -25,46 +25,78 @@ There is no test runner or linter configured in `package.json`.
 All session-wide state is held in [src/app/components/Dashboard.tsx](src/app/components/Dashboard.tsx) via the custom [useLocalStorage](src/app/hooks/) hook and passed down to children as props. There is no global state library — props drilling from `Dashboard.tsx` is the intended pattern.
 
 ### Navigation
-The left rail ([NavigationRail.tsx](src/app/components/NavigationRail.tsx)) switches between four top-level views:
-1. **HC Sessions** — saved assessments
+The left rail ([NavigationRail.tsx](src/app/components/NavigationRail.tsx)) switches between five top-level views:
+1. **HC Sessions** — saved assessments + system Backup Export/Import buttons
 2. **HC Rule Engine** — templates and question library
-3. **Product Lifecycle** — product catalog with EOL/EOS roadmap
-4. **Health Check Wizard** — 14-step assessment flow
+3. **Product Lifecycle** — global product / EoL catalogue (HTML or JSON import)
+4. **OS / Browser Support Matrix** — global F1E endpoint compatibility catalogue (HTML or JSON import)
+5. **Health Check Wizard** — 18-step assessment flow. **Clicking this icon always starts a new session** (destructive reset of wizard state).
 
 ### Wizard Flow
-The 14 wizard steps live under [src/app/components/steps/](src/app/components/steps/). **Step file names (`Step7…`–`Step11…`) do not match their display order** — names were preserved when Certificate Analysis was inserted to avoid breaking import paths. Always confirm the display order in [MainContent.tsx](src/app/components/MainContent.tsx) before renaming.
+The 18 wizard steps live under [src/app/components/steps/](src/app/components/steps/). **`StepN…` file names do not match display order** — they were preserved to avoid breaking imports. The router in [MainContent.tsx](src/app/components/MainContent.tsx) is the truth.
+
+Step visibility is product-conditional. `STEP_SKIP_RULES` in [steps.ts](src/app/constants/steps.ts) hides:
+- Step 6 (Endpoint Agent Analysis) and Step 7 (Agent Compatibility) when DLP isn't in Step 2's scope.
+
+Sidebar, BottomPanel progress, prev/next, and a `useEffect` auto-correct all honour the skip rules. Step IDs stay fixed (1–18) so `STEP_COLORS` and state keys don't shift.
 
 ### Parsers
-Domain-specific parsing logic lives in [src/app/components/](src/app/components/):
-- **DLP Server Info bundle parser** — ingests `DLPServerInfo_*` folders (15+ system files)
-- **Certificate parser** — X.509 `.cer` / `.pem` / `.crt` / `.der` extraction
+- **DLP Server Info bundle** ([dlpServerInfoParser.ts](src/app/components/steps/dlpServerInfoParser.ts)) — `DLPServerInfo_*` folders
+- **Certificate** ([certificateParser.ts](src/app/components/steps/certificateParser.ts)) — X.509 .cer / .pem / .crt / .der
+- **Endpoint Agent CSV** ([endpointAgentParser.ts](src/app/components/steps/endpointAgentParser.ts)) — 13-section summary
+- **DLP Dashboard PDF** ([dlpDashboardParser.ts](src/app/components/steps/dlpDashboardParser.ts)) — pdfjs-dist worker, department-level rollup
+- **Forcepoint Lifecycle HTML** ([forcepointHtmlImporter.ts](src/app/utils/forcepointHtmlImporter.ts)) — for Product Lifecycle import
+- **F1E Endpoint Support Matrix HTML** ([endpointMatrixHtmlImporter.ts](src/app/utils/endpointMatrixHtmlImporter.ts)) — for OS/Browser Matrix import
+- **Endpoint Compatibility Engine** ([endpointCompatibilityEngine.ts](src/app/utils/endpointCompatibilityEngine.ts)) — Step 7 customer-env analysis against the matrix
 
 ### Report Generation
-Step 14 (`buildReportHTML` inside `Step11Summary.tsx`) builds a printable HTML report. Design tokens: white background, teal accents `#0ea5e9`, navy table headers `#0f2952`.
+Step 18 (`buildReportHTML` inside [Step11Summary.tsx](src/app/components/steps/Step11Summary.tsx), ~4,000 lines) builds the customer-facing HTML report. Brand palette:
+```
+--fp-navy:#023E8A  --fp-cyan:#36B0C9  --fp-violette:#A30080 (CRITICAL)
+--fp-red:#DA1B2E (HIGH)  --fp-yellow:#FDCE12 (MEDIUM)  --fp-green:#69BC00 (OK)
+```
+Fonts: Inter + JetBrains Mono via Google Fonts.
+
+### Session Completion
+`HCSession.completedAt: Date | null` — set by `handleComplete()` when **Done** is clicked on Step 18. SessionsPage's COMPLETED badge filters on this field, NOT on `currentStep === TOTAL_STEPS`.
+
+### System Backup
+[systemBackup.ts](src/app/utils/systemBackup.ts) dumps every `hc_*` localStorage key to a versioned envelope (`_format`, `_version: 1`, `_exportedAt`, `keys`). Restore is destructive + requires page reload to rehydrate React state.
 
 ## Data Storage Keys (`localStorage`)
 
-| Key | Content |
-|---|---|
-| `hc_sessions` | All saved HC sessions |
-| `hc_checklist_answers` | Active session checklist answers |
-| `hc_version_entries` | Version check entries |
-| `hc_server_details` | Server inventory |
-| `hc_recommendations` | Recommendations |
-| `hc_action_items` | Action items |
-| `hc_feature_requests` | Feature requests |
-| `hc_templates` | Global templates |
-| `hc_version_data` | Product lifecycle catalog (global) |
-| `hc_sql_config` | SQL connector settings |
-| `hc_api_connectors` | REST connector settings |
-| `hc_selected_reports` | Selected reports |
-| `hc_dlp_bundles` | Parsed DLP bundle data |
-| `hc_certificates` | Imported certificates |
-| `hc_enhancements` | Selected enhancements |
+| Key | Content | Scope |
+|---|---|---|
+| `hc_sessions` | All saved HC sessions (with `completedAt`) | global |
+| `hc_templates` | Rule-engine templates | global |
+| `hc_version_data` | Product Lifecycle catalogue | global |
+| `hc_endpoint_support_matrix` | OS / Browser Support Matrix | global |
+| `hc_checklist_answers` | Step 8 checklist answers | session |
+| `hc_version_entries` | Version check entries (supports `removed: true` + `isCustom`) | session |
+| `hc_server_details` | Server inventory | session |
+| `hc_recommendations` | Recommendations (with `featured?: boolean`) | session |
+| `hc_action_items` | Action items (with `featured?: boolean`) | session |
+| `hc_feature_requests` | Customer FRs | session |
+| `hc_sql_config` | SQL connector settings | session |
+| `hc_api_connectors` | REST connector settings | session |
+| `hc_selected_reports` | Selected report IDs | session |
+| `hc_dlp_bundles` | Parsed DLP Server bundles | session |
+| `hc_certificates` | Imported X.509 certs | session |
+| `hc_enhancements` | Selected Enhancement IDs | session |
+| `hc_enhancement_overrides` | Per-enhancement content overrides | session |
+| `hc_endpoint_agents` | Endpoint Agent CSV summary | session |
+| `hc_endpoint_compat_input` | Step 7 customer-env form state | session |
+| `hc_endpoint_compat_assessment` | Step 7 computed assessment | session |
+| `hc_dlp_dashboard` | DLP Dashboard PDF summary | session |
+| `hc_customer_logo` | Base64 logo | session |
+| `hc_license_gaps` | License gap entries | session |
+| `hc_compliance_frameworks` | Step 1 compliance framework selection | session |
+| `hc_version_upgrades` | Step 12 upgrade proposals | session |
 
 - **Cancel** resets current-session data.
-- **Save Session** persists everything under `hc_sessions`.
-- `hc_templates` and `hc_version_data` are currently **global** (not per-session); migration to per-session is planned.
+- **Save Session** persists session-scoped keys into the active `HCSession` under `hc_sessions`.
+- **Done** (Step 18) calls `handleComplete()` → saves + stamps `completedAt` + navigates to Sessions list.
+- Global catalogues (`hc_templates`, `hc_version_data`, `hc_endpoint_support_matrix`) persist across sessions.
 
 ## Tech Stack Notes
 

@@ -12,6 +12,9 @@ export interface ActionItem {
   priority: Priority;
   status: Status;
   product: string;
+  /** Optional longer-form explanation: scope, blockers, dependencies — appears in
+      the report below the task title in a full-width row. */
+  details?: string;
   /** When true, this action appears in the report's "Top Priority Actions" block AND in
       "Key Observations". When false (or unset), it only appears in the full Next Steps table. */
   featured?: boolean;
@@ -32,7 +35,7 @@ const S_CFG: Record<Status, { label: string; icon: React.ReactNode; bg: string; 
 
 const STATUS_ORDER: Status[] = ['not_started', 'in_progress', 'done'];
 
-const EMPTY_FORM = { task: '', owner: '', dueDate: '', priority: 'medium' as Priority, product: '' };
+const EMPTY_FORM = { task: '', details: '', owner: '', dueDate: '', priority: 'medium' as Priority, product: '' };
 
 export function Step9NextSteps({ items, setItems }: { items: ActionItem[]; setItems: React.Dispatch<React.SetStateAction<ActionItem[]>> }) {
   const [showForm, setShowForm] = useState(false);
@@ -62,7 +65,7 @@ export function Step9NextSteps({ items, setItems }: { items: ActionItem[]; setIt
 
   const openEdit = (item: ActionItem) => {
     setEditId(item.id);
-    setForm({ task: item.task, owner: item.owner, dueDate: item.dueDate, priority: item.priority, product: item.product });
+    setForm({ task: item.task, details: item.details ?? '', owner: item.owner, dueDate: item.dueDate, priority: item.priority, product: item.product });
     setShowForm(true);
   };
 
@@ -74,6 +77,7 @@ export function Step9NextSteps({ items, setItems }: { items: ActionItem[]; setIt
       const newItem: ActionItem = {
         id: `a-${Date.now()}`,
         task: form.task,
+        details: form.details,
         owner: form.owner || 'TBD',
         dueDate: form.dueDate,
         priority: form.priority,
@@ -140,13 +144,30 @@ export function Step9NextSteps({ items, setItems }: { items: ActionItem[]; setIt
             <div className="grid grid-cols-2 gap-2.5">
               {/* Task (full width) */}
               <div className="col-span-2 flex flex-col gap-1">
-                <label style={{ fontSize: '10.5px', fontWeight: 600, color: '#334155' }}>Task Description *</label>
+                <label style={{ fontSize: '10.5px', fontWeight: 600, color: '#334155' }}>Task Title *</label>
                 <input
                   value={form.task}
                   onChange={(e) => setForm((f) => ({ ...f, task: e.target.value }))}
                   placeholder="e.g. Upgrade NGFW firmware to 7.1.3"
                   className={inputCls}
                   style={inputStyle}
+                  onFocus={(e) => { e.target.style.borderColor = '#2563EB'; e.target.style.background = '#fff'; }}
+                  onBlur={(e) => { e.target.style.borderColor = 'rgba(15,41,82,0.14)'; e.target.style.background = '#F8FAFC'; }}
+                />
+              </div>
+
+              {/* Details (optional) */}
+              <div className="col-span-2 flex flex-col gap-1">
+                <label style={{ fontSize: '10.5px', fontWeight: 600, color: '#334155' }}>
+                  Details <span style={{ color: '#94A3B8', fontWeight: 400 }}>(optional)</span>
+                </label>
+                <textarea
+                  value={form.details}
+                  onChange={(e) => setForm((f) => ({ ...f, details: e.target.value }))}
+                  placeholder="Scope, dependencies, blockers, or context — appears as a second row under the task in the report."
+                  rows={2}
+                  className={inputCls}
+                  style={{ ...inputStyle, resize: 'vertical', minHeight: '52px', lineHeight: 1.55, fontFamily: 'inherit' } as React.CSSProperties}
                   onFocus={(e) => { e.target.style.borderColor = '#2563EB'; e.target.style.background = '#fff'; }}
                   onBlur={(e) => { e.target.style.borderColor = 'rgba(15,41,82,0.14)'; e.target.style.background = '#F8FAFC'; }}
                 />
@@ -310,8 +331,18 @@ export function Step9NextSteps({ items, setItems }: { items: ActionItem[]; setIt
                   }}>
                     {item.task}
                   </div>
+                  {item.details && (
+                    <div style={{
+                      fontSize: '11px', color: item.status === 'done' ? '#CBD5E1' : '#64748B',
+                      marginTop: '4px', lineHeight: 1.55,
+                      display: '-webkit-box', WebkitLineClamp: 2,
+                      WebkitBoxOrient: 'vertical' as const, overflow: 'hidden',
+                    }}>
+                      {item.details}
+                    </div>
+                  )}
                   {item.product && (
-                    <div style={{ fontSize: '10px', fontFamily: 'monospace', color: '#94A3B8', marginTop: '2px' }}>
+                    <div style={{ fontSize: '10px', fontFamily: 'monospace', color: '#94A3B8', marginTop: '3px' }}>
                       {item.product}
                     </div>
                   )}

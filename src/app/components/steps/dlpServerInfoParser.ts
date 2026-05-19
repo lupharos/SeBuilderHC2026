@@ -142,6 +142,82 @@ export interface EventPartition {
 export interface EventPartitions {
   totalPartitions: number;
   partitions: EventPartition[];
+  /* Aggregate metrics computed from the catalogue — optional so older saved
+     bundles (no summary field) still hydrate without runtime errors. */
+  summary?: EventPartitionsSummary;
+}
+
+export interface EventPartitionsSummary {
+  archivedPartitionCount: number;
+  onlinePartitionCount: number;
+  archivedEvents: number;
+  onlineEvents: number;
+  totalEvents: number;
+  dataHistoryStart: string;
+  dataHistoryEnd: string;
+  activePartitionFrom: string;
+  activePartitionTo: string;
+  warnings: string[];
+}
+
+/* PA_CONFIG_PROPERTIES.csv — key Forcepoint DLP Manager config values pulled
+   from the SQL queries dump. Field names follow the user's spec verbatim. */
+export interface ConfigPropertyLdapRepo {
+  name: string;
+  enabled: boolean;
+  lastSyncOk: boolean;
+}
+export interface ConfigProperties {
+  webTransactionsTotal: string;
+  webSizeTotal: string;
+  emailTransactionsTotal: string;
+  emailSizeTotal: string;
+  discoveryTransactionsTotal: string;
+  discoverySizeTotal: string;
+  mobileTransactionsTotal: string;
+  auditRetentionDays: string;
+  activeLdapRepositories: string;
+  ldapImportFrequency: string;
+  ldapImportTime: string;
+  allLdapRepositories: string;
+  ldapRepos: ConfigPropertyLdapRepo[];
+  policyEngineConfigStatus: string;
+  dimPolicyStatus: string;
+  darPolicyStatus: string;
+  behaviorAnalyticsEnabled: boolean;
+  rapEnabled: boolean;
+  mipEnabled: boolean;
+  linkingServiceEnabled: boolean;
+  linkingServiceConfigured: boolean;
+  superAdminPasswordResetPending: boolean;
+  siemSyslogHost: string;
+  siemSyslogPort: string;
+  backupPath: string;
+  backupCopies: string;
+  backupIncludesForensics: boolean;
+  policyConcurrencyLevel: string;
+  partitionDurationDays: string;
+  warnings: string[];
+}
+
+/* WS_SM_SITE_ELEMENTS.csv — DLP site-element inventory used for component
+   tallies, sync-health and version-mix calculations. */
+export interface SiteElementsDisabled { name: string; type: string; status: string }
+export interface SiteElementsFailed   { name: string; type: string; reason: string }
+export interface SiteElements {
+  componentCounts: Record<string, number>;
+  syncStatus: {
+    synchronized: number;
+    unsynchronizedEdit: number;
+    markedUnsynchronizedEdit: number;
+    total: number;
+    syncPercentage: number;
+  };
+  disabledComponents: SiteElementsDisabled[];
+  versionInventory: Record<string, number>;
+  failedDeployments: SiteElementsFailed[];
+  dlpServerHostnames: string[];
+  warnings: string[];
 }
 
 export interface EndpointClients {
@@ -179,6 +255,11 @@ export interface DlpServerBundle {
   sqlServer: SqlServerInfo | null;
   database: DatabaseInfo | null;
   eventPartitions: EventPartitions | null;
+  /* PA_CONFIG_PROPERTIES.csv — DLP Manager config snapshot. Optional so
+     pre-existing saved bundles keep deserialising. */
+  configProperties?: ConfigProperties | null;
+  /* WS_SM_SITE_ELEMENTS.csv — site element inventory + sync health. */
+  siteElements?: SiteElements | null;
   endpointClients: EndpointClients | null;
   activePolicies: ActivePolicies | null;
   depEnabled: boolean | null;
@@ -645,7 +726,266 @@ export function parsePartitionCatalog(text: string): EventPartitions | null {
       status: idx.s >= 0 ? (r[idx.s] || '') : '',
     }));
 
-  return { totalPartitions: partitions.length, partitions };
+  /* Aggregate summary — counts, event totals, partition window. The
+     MAX_ONLINE threshold (5) follows Forcepoint's documented DB ceiling. */
+  let archivedPartitionCount = 0;
+  let onlinePartitionCount = 0;
+  let archivedEvents = 0;
+  let onlineEvents = 0;
+  let totalEvents = 0;
+  let dataHistoryStart = '';
+  let dataHistoryEnd = '';
+  let activePartitionFrom = '';
+  let activePartitionTo = '';
+
+  for (const p of partitions) {
+    const n = parseInt(p.numOfEvents, 10) || 0;
+    totalEvents += n;
+    const st = (p.status || '').toUpperCase();
+    if (st === 'ARCHIVED') {
+      archivedPartitionCount++;
+      archivedEvents += n;
+    } else if (st === 'ONLINE' || st === 'ONLINE_ACTIVE') {
+      onlinePartitionCount++;
+      onlineEvents += n;
+    }
+    if (st === 'ONLINE_ACTIVE') {
+      activePartitionFrom = p.fromDate;
+      activePartitionTo = p.toDate;
+    }
+    if (p.fromDate && (!dataHistoryStart || p.fromDate < dataHistoryStart)) dataHistoryStart = p.fromDate;
+    if (p.toDate && (!dataHistoryEnd || p.toDate > dataHistoryEnd)) dataHistoryEnd = p.toDate;
+  }
+
+  const warnings: string[] = [];
+  if (onlinePartitionCount > 5) {
+    warnings.push(`⚠ Online partition count (${onlinePartitionCount}) exceeds MAX_ONLINE limit of 5`);
+  }
+
+  const summary: EventPartitionsSummary = {
+    archivedPartitionCount,
+    onlinePartitionCount,
+    archivedEvents,
+    onlineEvents,
+    totalEvents,
+    dataHistoryStart,
+    dataHistoryEnd,
+    activePartitionFrom,
+    activePartitionTo,
+    warnings,
+  };
+
+  return { totalPartitions: partitions.length, partitions, summary };
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   PA_CONFIG_PROPERTIES.csv — DLP Manager configuration snapshot. The
+   CSV has three columns: NAME, GROUP_NAME, VALUE. We pluck a curated
+   set of name/group pairs and raise warnings for inconsistent settings.
+─────────────────────────────────────────────────────────────────────── */
+export function parseConfigProperties(text: string): ConfigProperties | null {
+  const rows = parseCsv(text);
+  if (rows.length === 0) return null;
+  const header = rows[0].map((h) => h.trim());
+  const iName  = header.indexOf('NAME');
+  const iGroup = header.indexOf('GROUP_NAME');
+  const iValue = header.indexOf('VALUE');
+  if (iName < 0 || iGroup < 0 || iValue < 0) return null;
+
+  /* Build a map keyed by `<GROUP>::<NAME>` for fast lookups. Some keys are
+     duplicated across groups so the composite key avoids collisions. */
+  const map = new Map<string, string>();
+  for (const r of rows.slice(1)) {
+    const name = (r[iName]  || '').trim();
+    const grp  = (r[iGroup] || '').trim();
+    const val  = (r[iValue] || '').trim();
+    if (name && grp) map.set(`${grp}::${name}`, val);
+  }
+  const lookup = (group: string, name: string): string => map.get(`${group}::${name}`) ?? '';
+  const isTrue = (v: string): boolean => /^true|1|yes$/i.test(v.trim());
+
+  const warnings: string[] = [];
+
+  // Audit retention
+  const auditRetentionDays = lookup('AUDIT_CONFIGURATION', 'DELETE_AUDIT_RECORDS_OLDER_THAN_DAYS');
+  if (auditRetentionDays === '0') warnings.push('⚠ Audit records never deleted — contributes to DB growth');
+
+  // LDAP repositories
+  const allRepos = lookup('EXTERNAL_REPOSITORIES', 'ALL_REPOSITORIES');
+  const repoNames = allRepos.split(/[;,]/).map((s) => s.trim()).filter(Boolean);
+  const ldapRepos: ConfigPropertyLdapRepo[] = repoNames.map((rname) => {
+    const enabled  = isTrue(lookup(rname, 'wbsn.repository.is.enabled'));
+    const syncStr  = lookup(rname, 'wbsn.repository.last.sync.status');
+    const lastSyncOk = isTrue(syncStr);
+    if (enabled && syncStr && !lastSyncOk) {
+      warnings.push(`⚠ ${rname} LDAP sync failed`);
+    }
+    return { name: rname, enabled, lastSyncOk };
+  });
+
+  // Deploy policy statuses
+  const policyEngineConfigStatus = lookup('DEPLOY_POLICY', 'POLICY_ENGINE_CONFIG_GLOBAL_STATUS');
+  const dimPolicyStatus          = lookup('DEPLOY_POLICY', 'DATA_IN_MOTION_POLICY_GLOBAL_STATUS');
+  const darPolicyStatus          = lookup('DEPLOY_POLICY', 'DATA_AT_REST_POLICY_GLOBAL_STATUS');
+  const checkPolicy = (label: string, status: string) => {
+    if (status === 'UNSYNCHRONIZED_EDIT') warnings.push(`⚠ ${label} has pending unsynchronized changes`);
+  };
+  checkPolicy('Policy Engine config', policyEngineConfigStatus);
+  checkPolicy('Data-in-Motion policy', dimPolicyStatus);
+  checkPolicy('Data-at-Rest policy',   darPolicyStatus);
+
+  // Linking Service
+  const linkingServiceEnabled    = isTrue(lookup('LINKING_SERVICE', 'LinkingService_Enabled'));
+  const linkingServiceConfigured = isTrue(lookup('LINKING_SERVICE', 'LinkingService_Configured'));
+  if (linkingServiceEnabled && !linkingServiceConfigured) {
+    warnings.push('⚠ Linking Service is enabled but not configured');
+  }
+
+  // SSO super-admin password reset
+  const superAdminPwdRaw = lookup('SSO_CONFIG', 'RESET_SUPER_ADMIN_PASSWED_ON_NEXT_LOGIN');
+  const superAdminPasswordResetPending = isTrue(superAdminPwdRaw);
+  if (superAdminPasswordResetPending) {
+    warnings.push('⚠ Super admin password reset is pending on next login');
+  }
+
+  // Backup forensics
+  const backupForensicsRaw = lookup('BACKUP_AND_RESTORE', 'INCLUDE_INCIDENT_FORENSICS');
+  const backupIncludesForensics = isTrue(backupForensicsRaw);
+  if (backupForensicsRaw && !backupIncludesForensics) {
+    warnings.push('⚠ Forensics not included in backups');
+  }
+
+  return {
+    webTransactionsTotal:       lookup('EVENT_TRAFFIC', 'AGGREGATION_CHANNEL_WEB_TRANSACTIONS'),
+    webSizeTotal:               lookup('EVENT_TRAFFIC', 'AGGREGATION_CHANNEL_WEB_SIZE'),
+    emailTransactionsTotal:     lookup('EVENT_TRAFFIC', 'AGGREGATION_CHANNEL_EMAIL_TRANSACTIONS'),
+    emailSizeTotal:             lookup('EVENT_TRAFFIC', 'AGGREGATION_CHANNEL_EMAIL_SIZE'),
+    discoveryTransactionsTotal: lookup('EVENT_TRAFFIC', 'AGGREGATION_CHANNEL_DISCOVERY_TRANSACTIONS'),
+    discoverySizeTotal:         lookup('EVENT_TRAFFIC', 'AGGREGATION_CHANNEL_DISCOVERY_SIZE'),
+    mobileTransactionsTotal:    lookup('EVENT_TRAFFIC', 'AGGREGATION_CHANNEL_MOBILE_TRANSACTIONS'),
+    auditRetentionDays,
+    activeLdapRepositories:     lookup('USERS_REPOSITORY_GLOBAL_CONFIG', 'ACTIVE_REPOSITORIES'),
+    ldapImportFrequency:        lookup('USERS_REPOSITORY_GLOBAL_CONFIG', 'IMPORT_FREQUENCY'),
+    ldapImportTime:             lookup('USERS_REPOSITORY_GLOBAL_CONFIG', 'DAILY_IMPORT_AT'),
+    allLdapRepositories:        allRepos,
+    ldapRepos,
+    policyEngineConfigStatus,
+    dimPolicyStatus,
+    darPolicyStatus,
+    behaviorAnalyticsEnabled:   isTrue(lookup('BEHAVIOR_ANALYTIC_CONFIGURATIONS', 'IS_FEATURE_ENABLED')),
+    rapEnabled:                 isTrue(lookup('RISK_ADAPTIVE_PROTECTION', 'RAP_ENABLED')),
+    mipEnabled:                 isTrue(lookup('MIP_GENERAL_SETTINGS', 'IS_MIP_FEATURE_ENABLED')),
+    linkingServiceEnabled,
+    linkingServiceConfigured,
+    superAdminPasswordResetPending,
+    siemSyslogHost:             lookup('INCIDENTS_SYSLOG', 'INCIDENTS_SYSLOG-HOSTNAME'),
+    siemSyslogPort:             lookup('INCIDENTS_SYSLOG', 'INCIDENTS_SYSLOG-PORT'),
+    backupPath:                 lookup('BACKUP_AND_RESTORE', 'PATH'),
+    backupCopies:               lookup('BACKUP_AND_RESTORE', 'NUM_OF_COPIES'),
+    backupIncludesForensics,
+    policyConcurrencyLevel:     lookup('DEPLOY_POLICY_CONFIGURATIONS', 'POLICIES_PROCESSING_CONCURRENCY_LEVEL'),
+    partitionDurationDays:      lookup('PARTITION_ARCHIVE', 'PARTITION_DURATION_DAYS'),
+    warnings,
+  };
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   WS_SM_SITE_ELEMENTS.csv — Forcepoint DLP site element inventory.
+   Provides component counts by type, sync-status health, disabled
+   components, version mix and any failed deployment results.
+─────────────────────────────────────────────────────────────────────── */
+const SITE_ELEMENT_FRIENDLY: Record<string, string> = {
+  POLICY_ENGINE:             'Policy Engines',
+  AGENT_FINGERPRINT_MANAGER: 'Fingerprint Managers',
+  CONTENT_MANAGER:           'DLP Application Servers',
+  SERVER_ENDPOINT:           'Endpoint Servers',
+  AGENT_DISCOVERY_WIN:       'Crawlers',
+  OCR_SERVER:                'OCR Servers',
+  AGENT_WCG:                 'Web Content Gateway (WCG) Servers',
+  AGENT_ESG:                 'Email Security (ESG) Servers',
+  ANALYTIC_ENGINE:           'Analytics Engines',
+  FORENSICS_REPOSITORY:      'Forensics Repositories',
+};
+
+export function parseSiteElements(text: string): SiteElements | null {
+  const rows = parseCsv(text);
+  if (rows.length === 0) return null;
+  const header = rows[0].map((h) => h.trim());
+  const iName    = header.indexOf('NAME');
+  const iType    = header.indexOf('ELEMENT_TYPE');
+  const iStatus  = header.indexOf('ELEMENT_STATUS');
+  const iEnabled = header.indexOf('IS_ENABLED');
+  const iVersion = header.indexOf('NETWORK_ELEMENT_VERSION');
+  const iResult  = header.indexOf('DEPLOYMENT_RESULT_TYPE');
+  const iResDesc = header.indexOf('DEPLOYMENT_RESULT_DESC');
+  const iHost    = header.indexOf('HOSTNAME');
+  if (iType < 0 || iStatus < 0) return null;
+
+  const componentCounts: Record<string, number> = {};
+  const versionInventory: Record<string, number> = {};
+  const disabledComponents: SiteElementsDisabled[] = [];
+  const failedDeployments: SiteElementsFailed[] = [];
+  const dlpServerHostnames: string[] = [];
+  const warnings: string[] = [];
+  let synchronized = 0;
+  let unsynchronizedEdit = 0;
+  let markedUnsynchronizedEdit = 0;
+  let total = 0;
+
+  for (const r of rows.slice(1)) {
+    const name    = (r[iName]    || '').trim();
+    const type    = (r[iType]    || '').trim();
+    const status  = (r[iStatus]  || '').trim();
+    const enabled = iEnabled >= 0 ? (r[iEnabled] || '').trim() : '';
+    const version = iVersion >= 0 ? (r[iVersion] || '').trim() : '';
+    const result  = iResult  >= 0 ? (r[iResult]  || '').trim() : '';
+    const resDesc = iResDesc >= 0 ? (r[iResDesc] || '').trim() : '';
+    const host    = iHost    >= 0 ? (r[iHost]    || '').trim() : '';
+
+    if (!type) continue;
+    total++;
+
+    const friendly = SITE_ELEMENT_FRIENDLY[type] ?? type;
+    componentCounts[friendly] = (componentCounts[friendly] ?? 0) + 1;
+
+    if (status === 'SYNCHRONIZED') synchronized++;
+    else if (status === 'UNSYNCHRONIZED_EDIT') unsynchronizedEdit++;
+    else if (status === 'MARKED_UNSYNCHRONIZED_EDIT') markedUnsynchronizedEdit++;
+
+    if (enabled && !/^true$/i.test(enabled)) {
+      disabledComponents.push({ name, type, status });
+      warnings.push(`⚠ Component disabled: ${name} (${type})`);
+    }
+
+    if (version && version.toLowerCase() !== 'nan') {
+      versionInventory[version] = (versionInventory[version] ?? 0) + 1;
+    }
+
+    if (result === 'FAILURE') {
+      failedDeployments.push({ name, type, reason: resDesc });
+    }
+
+    if (type === 'CONTENT_MANAGER' && host) dlpServerHostnames.push(host);
+  }
+
+  const offSync = unsynchronizedEdit + markedUnsynchronizedEdit;
+  const syncPercentage = total > 0 ? Math.round((synchronized / total) * 1000) / 10 : 0;
+  if (total > 0 && offSync / total > 0.3) {
+    warnings.push('⚠ More than 30% of components are not synchronized');
+  }
+  if (Object.keys(versionInventory).length > 2) {
+    warnings.push('⚠ Mixed component versions detected — upgrade alignment recommended');
+  }
+
+  return {
+    componentCounts,
+    syncStatus: { synchronized, unsynchronizedEdit, markedUnsynchronizedEdit, total, syncPercentage },
+    disabledComponents,
+    versionInventory,
+    failedDeployments,
+    dlpServerHostnames,
+    warnings,
+  };
 }
 
 export function parseSyncEpClients(text: string): { syncedHostnames: string[] } {
@@ -725,6 +1065,8 @@ const DISPATCH: Array<{ pattern: RegExp; target: ParseTarget }> = [
   { pattern: /^SQL_VERSION\.csv$/i,                 target: 'sqlServer' },
   { pattern: /^DB_SIZE\.csv$/i,                     target: 'database' },
   { pattern: /^PA_EVENT_PARTITION_CATALOG\.csv$/i,  target: 'eventPartitions' },
+  { pattern: /^PA_CONFIG_PROPERTIES\.csv$/i,        target: 'configProperties' },
+  { pattern: /^WS_SM_SITE_ELEMENTS\.csv$/i,         target: 'siteElements' },
   { pattern: /^SYNC_EP_CLIENTS\.csv$/i,             target: 'syncedClients' },
   { pattern: /^UNSYNC_EP_CLIENTS_COUNT\.csv$/i,     target: 'unsyncedClients' },
   { pattern: /^WS_ENDPNT_PROFILES\.csv$/i,          target: 'endpointProfile' },
@@ -746,6 +1088,8 @@ function emptyBundle(name: string, fileCount: number): DlpServerBundle {
     sqlServer: null,
     database: null,
     eventPartitions: null,
+    configProperties: null,
+    siteElements: null,
     endpointClients: null,
     activePolicies: null,
     depEnabled: null,
@@ -797,6 +1141,8 @@ export function parseDlpBundle(files: UploadedFile[]): DlpServerBundle {
         case 'sqlServer':          bundle.sqlServer = parseSqlVersion(file.text); break;
         case 'database':           bundle.database = parseDbSize(file.text); break;
         case 'eventPartitions':    bundle.eventPartitions = parsePartitionCatalog(file.text); break;
+        case 'configProperties':   bundle.configProperties = parseConfigProperties(file.text); break;
+        case 'siteElements':       bundle.siteElements = parseSiteElements(file.text); break;
         case 'syncedClients':      synced.syncedHostnames = parseSyncEpClients(file.text).syncedHostnames; break;
         case 'unsyncedClients':    unsyncedCount = parseUnsyncEpClients(file.text); break;
         case 'endpointProfile':    endpointProfile = parseEndpointProfiles(file.text); break;

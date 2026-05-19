@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { NavigationRail, type ActiveView } from './NavigationRail';
 import { Sidebar } from './Sidebar';
 import { MainContent } from './MainContent';
@@ -7,12 +7,14 @@ import { TemplateManager, initialTemplates } from './TemplateManager';
 import { SessionsPage } from './SessionsPage';
 import { BottomPanel } from './BottomPanel';
 import { VersionDataPage } from './VersionDataPage';
+import { EndpointMatrixPage } from './EndpointMatrixPage';
 import { CancelSessionModal } from './CancelSessionModal';
 import type { Template } from './types/templates';
 import type { QuestionAnswer, TemplateAnswers } from './rules/ruleEngine';
 import { useLocalStorage } from '../hooks/useLocalStorage';
-import { STEP_COLORS, STEP_TITLES, TOTAL_STEPS } from '../constants/steps';
+import { STEP_COLORS, STEP_TITLES, TOTAL_STEPS, isStepSkipped, nextVisibleStep } from '../constants/steps';
 import { INITIAL_VERSION_DATA, type VersionDataStore } from '../constants/versionData';
+import { EMPTY_ENDPOINT_MATRIX, type EndpointSupportMatrix } from '../constants/endpointSupportMatrix';
 import type { VersionEntry } from './steps/Step4VersionCheck';
 import { DEFAULT_SERVERS, type ServerEntry } from './steps/StepServerDetails';
 import type { Recommendation } from './steps/Step8Recommendations';
@@ -23,7 +25,11 @@ import type { DlpServerBundle } from './steps/dlpServerInfoParser';
 import type { ParsedCertificate } from './steps/certificateParser';
 import type { EndpointAgentSummary } from './steps/endpointAgentParser';
 import type { DlpDashboardSummary } from './steps/dlpDashboardParser';
-import { ALL_REPORT_IDS } from '../constants/reportDefinitions';
+import type { VersionUpgradeProposal } from './steps/StepVersionUpgrades';
+import { EMPTY_COMPAT_INPUT, type EndpointCompatibilityInput, type EndpointCompatibilityAssessment } from '../utils/endpointCompatibilityEngine';
+import type { ReportRunResult } from '../constants/reportDefinitions';
+/* `ALL_REPORT_IDS` no longer imported here — the default for `selectedReports`
+   is now an empty array. Analysts opt-in reports per session. */
 
 export interface LicenseItem {
   id: string;
@@ -96,6 +102,33 @@ export interface LicenseGapItem {
   rationale?: string;
 }
 
+/* Compliance Framework selection for the Part 0 · Compliance Exposure section.
+   Auto-suggested from country/industry on first visit, then user can toggle,
+   edit content, add custom frameworks, or remove. Empty array = "no entries
+   yet" — the user should run Auto-suggest to populate. */
+export interface ComplianceFrameworkItem {
+  id: string;
+  code: string;        // e.g. KVKK, BDDK, GDPR
+  name: string;        // Full descriptive name
+  relevance: string;   // Why this applies to the customer
+  pillar: string;      // Category badge: Data Protection / Sectoral · Banking / Universal
+  enabled: boolean;    // Appears in report when true
+  isCustom?: boolean;  // User-added (not from the auto-suggest catalogue)
+  /** Analyst's assessment of whether the customer's Forcepoint DLP deployment
+      satisfies this framework. 'unassessed' (or undefined) renders neutral. */
+  complianceStatus?: 'compliant' | 'partial' | 'non_compliant' | 'unassessed';
+}
+
+/* Per-session content overrides for Recommended Enhancements.
+   Keys are enhancement IDs; only the fields the user changed are stored — the
+   rest still come from the ENHANCEMENTS catalogue at render time. */
+export interface EnhancementOverride {
+  name?: string;
+  tagline?: string;
+  whyWeRecommendIt?: string;
+  businessValue?: string;
+}
+
 export interface SessionData {
   customerName: string;
   forcepointId: string;
@@ -143,7 +176,16 @@ export interface HCSession {
   endpointAgentSummary: EndpointAgentSummary | null;
   dlpDashboardSummary: DlpDashboardSummary | null;
   customerLogo: string | null;
+  complianceFrameworks: ComplianceFrameworkItem[];
+  enhancementOverrides: Record<string, EnhancementOverride>;
+  versionUpgrades: VersionUpgradeProposal[];
+  endpointCompatInput: EndpointCompatibilityInput;
+  endpointCompatAssessment: EndpointCompatibilityAssessment | null;
   savedAt: Date;
+  /* Set when the operator clicks Done on the final wizard step. Sessions
+     reached the last step but never explicitly closed retain this as null
+     (so the list can tell "drafting" apart from "shipped"). */
+  completedAt: Date | null;
 }
 
 const EMPTY_SESSION_DATA: SessionData = {
@@ -158,10 +200,11 @@ const EMPTY_SESSION_DATA: SessionData = {
 
 function deserializeSessions(raw: unknown[]): HCSession[] {
   return raw.map((s: unknown) => {
-    const session = s as HCSession & { savedAt: string | Date };
+    const session = s as HCSession & { savedAt: string | Date; completedAt?: string | Date | null };
     return {
       ...session,
       savedAt: new Date(session.savedAt),
+      completedAt: session.completedAt ? new Date(session.completedAt) : null,
       checklistAnswers: session.checklistAnswers ?? {},
       versionEntries: session.versionEntries ?? {},
       serverDetails: session.serverDetails ?? DEFAULT_SERVERS,
@@ -170,7 +213,7 @@ function deserializeSessions(raw: unknown[]): HCSession[] {
       featureRequests: session.featureRequests ?? [],
       sqlConfig: session.sqlConfig ?? DEFAULT_SQL_CONFIG,
       apiConnectors: session.apiConnectors ?? DEFAULT_API_CONNECTORS,
-      selectedReports: session.selectedReports ?? ALL_REPORT_IDS,
+      selectedReports: session.selectedReports ?? [],
       dlpBundles: session.dlpBundles ?? [],
       certificates: session.certificates ?? [],
       selectedEnhancements: session.selectedEnhancements ?? [],
@@ -178,6 +221,11 @@ function deserializeSessions(raw: unknown[]): HCSession[] {
       endpointAgentSummary: session.endpointAgentSummary ?? null,
       dlpDashboardSummary: session.dlpDashboardSummary ?? null,
       customerLogo: session.customerLogo ?? null,
+      complianceFrameworks: session.complianceFrameworks ?? [],
+      enhancementOverrides: session.enhancementOverrides ?? {},
+      versionUpgrades: session.versionUpgrades ?? [],
+      endpointCompatInput: session.endpointCompatInput ?? { ...EMPTY_COMPAT_INPUT },
+      endpointCompatAssessment: session.endpointCompatAssessment ?? null,
     };
   });
 }
@@ -206,7 +254,14 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
   const [featureRequests, setFeatureRequests] = useLocalStorage<FeatureRequest[]>('hc_feature_requests', []);
   const [sqlConfig,       setSqlConfig]       = useLocalStorage<SqlConfig>('hc_sql_config', DEFAULT_SQL_CONFIG);
   const [apiConnectors,   setApiConnectors]   = useLocalStorage<ApiConnectorsConfig>('hc_api_connectors', DEFAULT_API_CONNECTORS);
-  const [selectedReports, setSelectedReports] = useLocalStorage<string[]>('hc_selected_reports', ALL_REPORT_IDS);
+  const [selectedReports, setSelectedReports] = useLocalStorage<string[]>('hc_selected_reports', []);
+  /* Per-report time-window override; persisted alongside selection so a
+     reopened session remembers "give me last-7-days for these reports". */
+  const [reportWindows, setReportWindows] = useLocalStorage<Record<string, number>>('hc_report_windows', {});
+  /* Runtime results of executed report queries — explicitly NOT persisted.
+     Held in plain useState so they survive between wizard steps but vanish
+     on refresh (matches the user's "runtime only" requirement). */
+  const [reportRuns, setReportRuns] = useState<Record<string, ReportRunResult>>({});
   const [dlpBundles,      setDlpBundles]      = useLocalStorage<DlpServerBundle[]>('hc_dlp_bundles', []);
   const [certificates,    setCertificates]    = useLocalStorage<ParsedCertificate[]>('hc_certificates', []);
   const [selectedEnhancements, setSelectedEnhancements] = useLocalStorage<string[]>('hc_enhancements', []);
@@ -214,6 +269,31 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
   const [endpointAgentSummary, setEndpointAgentSummary] = useLocalStorage<EndpointAgentSummary | null>('hc_endpoint_agents', null);
   const [dlpDashboardSummary, setDlpDashboardSummary] = useLocalStorage<DlpDashboardSummary | null>('hc_dlp_dashboard', null);
   const [customerLogo, setCustomerLogo] = useLocalStorage<string | null>('hc_customer_logo', null);
+  const [complianceFrameworks, setComplianceFrameworks] = useLocalStorage<ComplianceFrameworkItem[]>('hc_compliance_frameworks', []);
+  const [enhancementOverrides, setEnhancementOverrides] = useLocalStorage<Record<string, EnhancementOverride>>('hc_enhancement_overrides', {});
+  const [versionUpgrades, setVersionUpgrades] = useLocalStorage<VersionUpgradeProposal[]>('hc_version_upgrades', []);
+  const [endpointCompatInput, setEndpointCompatInput] = useLocalStorage<EndpointCompatibilityInput>('hc_endpoint_compat_input', { ...EMPTY_COMPAT_INPUT });
+  const [endpointCompatAssessment, setEndpointCompatAssessment] = useLocalStorage<EndpointCompatibilityAssessment | null>('hc_endpoint_compat_assessment', null);
+
+  /* ── Endpoint OS / Browser support matrix (global catalogue, persisted).
+     Populated by the operator from the OS / Browser Support Matrix page;
+     the HC report's Endpoint Compatibility section reads from this. Empty
+     by default — the report section is suppressed until data is imported. */
+  const [rawEndpointMatrix, setEndpointMatrix] = useLocalStorage<EndpointSupportMatrix>('hc_endpoint_support_matrix', EMPTY_ENDPOINT_MATRIX);
+  /* Normalise the matrix shape on every read — defends downstream code (the
+     report builder, the matrix page) against older payloads that may be
+     missing fields the UI now assumes are arrays. */
+  const endpointMatrix: EndpointSupportMatrix = {
+    lastUpdated:   rawEndpointMatrix?.lastUpdated   ?? '',
+    source:        rawEndpointMatrix?.source        ?? '',
+    windows:       Array.isArray(rawEndpointMatrix?.windows)       ? rawEndpointMatrix.windows       : [],
+    windowsNotes:  Array.isArray(rawEndpointMatrix?.windowsNotes)  ? rawEndpointMatrix.windowsNotes  : [],
+    macos:         Array.isArray(rawEndpointMatrix?.macos)         ? rawEndpointMatrix.macos         : [],
+    macosNotes:    Array.isArray(rawEndpointMatrix?.macosNotes)    ? rawEndpointMatrix.macosNotes    : [],
+    vdi:           Array.isArray(rawEndpointMatrix?.vdi)           ? rawEndpointMatrix.vdi           : [],
+    browsers:      Array.isArray(rawEndpointMatrix?.browsers)      ? rawEndpointMatrix.browsers      : [],
+    criticalNotes: Array.isArray(rawEndpointMatrix?.criticalNotes) ? rawEndpointMatrix.criticalNotes : [],
+  };
 
   /* ── Version data catalog (persisted) ── */
   const [rawVersionData, setVersionData] = useLocalStorage<VersionDataStore>('hc_version_data', INITIAL_VERSION_DATA);
@@ -226,6 +306,16 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
     'V Series Appliances': rawVersionData['V Series Appliances'] ?? [],
     'NGFW Appliances': rawVersionData['NGFW Appliances'] ?? [],
   };
+
+  /* Auto-correct: if the current step has become invisible (e.g. user
+     deselected DLP while on the Endpoint Agent Analysis step), advance
+     forward to the next visible step. The forward direction is chosen so
+     prior work stays "behind" the cursor rather than being walked back over. */
+  useEffect(() => {
+    if (isStepSkipped(currentStep, selectedProducts)) {
+      setCurrentStep((s) => nextVisibleStep(s, 1, selectedProducts));
+    }
+  }, [selectedProducts, currentStep]);
 
   /* ── Sessions state (persisted) ── */
   const [rawSessions, setRawSessions] = useLocalStorage<unknown[]>('hc_sessions', []);
@@ -256,12 +346,20 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
     [setVersionEntries],
   );
 
-  const handleSave = () => {
+  const handleSave = (opts?: { complete?: boolean }) => {
     setSaveState('saving');
     setTimeout(() => {
       const id = activeSessionId && sessions.find((s) => s.id === activeSessionId)
         ? activeSessionId
         : `session-${Date.now()}`;
+
+      /* Preserve an existing completedAt if the user is just re-saving a
+         session that was already marked complete. Setting `complete: true`
+         stamps it fresh. */
+      const existing = sessions.find((s) => s.id === id);
+      const completedAt = opts?.complete
+        ? new Date()
+        : (existing?.completedAt ?? null);
 
       const newSession: HCSession = {
         id,
@@ -286,7 +384,13 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
         endpointAgentSummary: endpointAgentSummary ? { ...endpointAgentSummary } : null,
         dlpDashboardSummary: dlpDashboardSummary ? { ...dlpDashboardSummary } : null,
         customerLogo: customerLogo ?? null,
+        complianceFrameworks: complianceFrameworks.map((f) => ({ ...f })),
+        enhancementOverrides: { ...enhancementOverrides },
+        versionUpgrades: versionUpgrades.map((v) => ({ ...v })),
+        endpointCompatInput: { ...endpointCompatInput },
+        endpointCompatAssessment: endpointCompatAssessment ? { ...endpointCompatAssessment } : null,
         savedAt: new Date(),
+        completedAt,
       };
 
       setRawSessions((prevRaw) => {
@@ -306,6 +410,15 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
     }, 650);
   };
 
+  const handleComplete = () => {
+    /* Save with the complete flag, then nudge the operator to the Sessions
+       list where the new "COMPLETED" badge is visible. We don't wipe the
+       wizard state — the operator can still reopen the session and tweak
+       anything; clicking Done is a soft signal, not a hard close. */
+    handleSave({ complete: true });
+    setTimeout(() => setActiveView('sessions'), 1100);
+  };
+
   const handleLoadSession = (session: HCSession) => {
     setSessionData(session.sessionData);
     setCurrentStep(session.currentStep);
@@ -318,7 +431,7 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
     setFeatureRequests(session.featureRequests ?? []);
     setSqlConfig(session.sqlConfig ?? DEFAULT_SQL_CONFIG);
     setApiConnectors(session.apiConnectors ?? DEFAULT_API_CONNECTORS);
-    setSelectedReports(session.selectedReports ?? ALL_REPORT_IDS);
+    setSelectedReports(session.selectedReports ?? []);
     setDlpBundles(session.dlpBundles ?? []);
     setCertificates(session.certificates ?? []);
     setSelectedEnhancements(session.selectedEnhancements ?? []);
@@ -326,6 +439,11 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
     setEndpointAgentSummary(session.endpointAgentSummary ?? null);
     setDlpDashboardSummary(session.dlpDashboardSummary ?? null);
     setCustomerLogo(session.customerLogo ?? null);
+    setComplianceFrameworks(session.complianceFrameworks ?? []);
+    setEnhancementOverrides(session.enhancementOverrides ?? {});
+    setVersionUpgrades(session.versionUpgrades ?? []);
+    setEndpointCompatInput(session.endpointCompatInput ?? { ...EMPTY_COMPAT_INPUT });
+    setEndpointCompatAssessment(session.endpointCompatAssessment ?? null);
     setActiveSessionId(session.id);
     setActiveView('wizard');
   };
@@ -342,7 +460,7 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
     setFeatureRequests([]);
     setSqlConfig(DEFAULT_SQL_CONFIG);
     setApiConnectors(DEFAULT_API_CONNECTORS);
-    setSelectedReports(ALL_REPORT_IDS);
+    setSelectedReports([]);
     setDlpBundles([]);
     setCertificates([]);
     setSelectedEnhancements([]);
@@ -350,6 +468,11 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
     setEndpointAgentSummary(null);
     setDlpDashboardSummary(null);
     setCustomerLogo(null);
+    setComplianceFrameworks([]);
+    setEnhancementOverrides({});
+    setVersionUpgrades([]);
+    setEndpointCompatInput({ ...EMPTY_COMPAT_INPUT });
+    setEndpointCompatAssessment(null);
     setActiveSessionId(undefined);
     setActiveView('wizard');
   };
@@ -369,7 +492,7 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
     setFeatureRequests([]);
     setSqlConfig(DEFAULT_SQL_CONFIG);
     setApiConnectors(DEFAULT_API_CONNECTORS);
-    setSelectedReports(ALL_REPORT_IDS);
+    setSelectedReports([]);
     setDlpBundles([]);
     setCertificates([]);
     setSelectedEnhancements([]);
@@ -377,6 +500,11 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
     setEndpointAgentSummary(null);
     setDlpDashboardSummary(null);
     setCustomerLogo(null);
+    setComplianceFrameworks([]);
+    setEnhancementOverrides({});
+    setVersionUpgrades([]);
+    setEndpointCompatInput({ ...EMPTY_COMPAT_INPUT });
+    setEndpointCompatAssessment(null);
     setActiveSessionId(undefined);
     setActiveView('sessions');
   };
@@ -425,6 +553,7 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
         activeView={activeView}
         onChangeView={setActiveView}
         onOpenProfile={() => setShowProfile(true)}
+        onStartWizardSession={handleNewSession}
       />
 
       {activeView === 'wizard' && (
@@ -434,6 +563,7 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
             onStepChange={setCurrentStep}
             sessionData={sessionData}
             onNewSession={handleNewSession}
+            selectedProducts={selectedProducts}
           />
           <div className="flex-1 flex flex-col overflow-hidden min-w-0">
             <MainContent
@@ -462,6 +592,10 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
               setApiConnectors={setApiConnectors}
               selectedReports={selectedReports}
               setSelectedReports={setSelectedReports}
+              reportWindows={reportWindows}
+              setReportWindows={setReportWindows}
+              reportRuns={reportRuns}
+              setReportRuns={setReportRuns}
               dlpBundles={dlpBundles}
               setDlpBundles={setDlpBundles}
               certificates={certificates}
@@ -476,6 +610,19 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
               setDlpDashboardSummary={setDlpDashboardSummary}
               customerLogo={customerLogo}
               setCustomerLogo={setCustomerLogo}
+              complianceFrameworks={complianceFrameworks}
+              setComplianceFrameworks={setComplianceFrameworks}
+              enhancementOverrides={enhancementOverrides}
+              setEnhancementOverrides={setEnhancementOverrides}
+              versionUpgrades={versionUpgrades}
+              setVersionUpgrades={setVersionUpgrades}
+              endpointMatrix={endpointMatrix}
+              endpointCompatInput={endpointCompatInput}
+              setEndpointCompatInput={setEndpointCompatInput}
+              endpointCompatAssessment={endpointCompatAssessment}
+              setEndpointCompatAssessment={setEndpointCompatAssessment}
+              onComplete={handleComplete}
+              isComplete={!!sessions.find((s) => s.id === activeSessionId)?.completedAt}
             />
             <BottomPanel
               currentStep={currentStep}
@@ -485,9 +632,10 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
               saveState={saveState}
               onSave={handleSave}
               onCancel={handleCancel}
-              onPrev={() => setCurrentStep((s) => Math.max(1, s - 1))}
-              onNext={() => setCurrentStep((s) => Math.min(TOTAL_STEPS, s + 1))}
+              onPrev={() => setCurrentStep((s) => nextVisibleStep(s, -1, selectedProducts))}
+              onNext={() => setCurrentStep((s) => nextVisibleStep(s, 1, selectedProducts))}
               blockReason={blockReason}
+              selectedProducts={selectedProducts}
             />
           </div>
         </>
@@ -519,6 +667,12 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
       {activeView === 'versions' && (
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
           <VersionDataPage data={versionData} onChange={setVersionData} />
+        </div>
+      )}
+
+      {activeView === 'endpoint_matrix' && (
+        <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+          <EndpointMatrixPage matrix={endpointMatrix} onChange={setEndpointMatrix} />
         </div>
       )}
 

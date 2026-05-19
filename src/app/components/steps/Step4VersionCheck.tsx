@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { CheckCircle2, AlertTriangle, XCircle, Info, Clock, Zap } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, XCircle, Info, Clock, Zap, Trash2, Edit2, RotateCcw, EyeOff } from 'lucide-react';
 import type { VersionDataStore, CategoryKey, SoftwareEntry } from '../../constants/versionData';
 import type { DlpServerBundle } from './dlpServerInfoParser';
 
@@ -18,14 +18,20 @@ export interface VersionEntry {
   notes: string;
   /** When set, takes precedence over the computed status (manual override by analyst). */
   statusOverride?: VersionStatus;
-  /** True when this entry was added by the user (not in CATALOG). */
+  /** True when this entry was added by the user (not in CATALOG) OR when the user
+      switched a catalog row to fully-editable mode (overriding name + dates). */
   isCustom?: boolean;
-  /** Manual fields for custom entries (no versionData lookup). */
+  /** Manual fields for custom / overridden entries. Used when `isCustom` is true,
+      regardless of whether a CATALOG def exists for this id. */
   customLatestVersion?: string;
   customReleaseDate?: string;
   customEoSale?: string;
   customEoMaintenance?: string;
   customEoSupport?: string;
+  /** Tombstone — when true the entry is hidden from the assessment but kept in
+      state so the useEffect won't auto-recreate it. Cleared via the "Restore"
+      banner at the top of the page. */
+  removed?: boolean;
 }
 
 interface Step4Props {
@@ -427,11 +433,27 @@ export function Step4VersionCheck({ selectedProducts, versionData, versionEntrie
 
   const store = versionEntries;
   const activeIds = getActiveComponentIds(selectedProducts);
-  const catalogEntries = activeIds.map((id) => store[id]).filter(Boolean) as VersionEntry[];
+  /* Catalog rows for actively-selected products. Tombstoned (removed:true) rows
+     are excluded from rendering — they sit in state to block useEffect from
+     recreating them. The user can restore via the banner. */
+  const catalogEntries = activeIds
+    .map((id) => store[id])
+    .filter((e): e is VersionEntry => !!e && !e.removed);
+  /* Custom entries — user-added (no CATALOG def). Catalog rows that the user
+     "customized" stay in catalogEntries above (their id IS in activeIds) so we
+     exclude them here to avoid duplicates. */
   const customEntries = Object.values(store).filter(
-    (e): e is VersionEntry => !!e?.isCustom && !!GROUP_CONFIG[e.groupId] && !!selectedProducts[GROUP_CONFIG[e.groupId].productId],
+    (e): e is VersionEntry => !!e?.isCustom && !e.removed
+      && !!GROUP_CONFIG[e.groupId] && !!selectedProducts[GROUP_CONFIG[e.groupId].productId]
+      && !activeIds.includes(e.id),
   );
   const activeEntries = [...catalogEntries, ...customEntries];
+
+  /* Tombstoned catalog entries that the user can restore. */
+  const removedEntries = Object.values(store).filter(
+    (e): e is VersionEntry => !!e?.removed
+      && !!GROUP_CONFIG[e.groupId] && !!selectedProducts[GROUP_CONFIG[e.groupId].productId],
+  );
 
   /* Effective status honours manual override when present. */
   const effStatus = (e: VersionEntry): VersionStatus => e.statusOverride ?? e.status;
@@ -465,9 +487,71 @@ export function Step4VersionCheck({ selectedProducts, versionData, versionEntrie
 
   function removeEntry(id: string) {
     onVersionEntriesChange((prev) => {
+      const entry = prev[id];
+      if (!entry) return prev;
+      /* For pure-custom entries (no CATALOG def) we hard-delete. For catalog
+         entries we tombstone so the useEffect doesn't recreate them on the
+         next render — the user can restore via the banner. */
+      if (CATALOG[id]) {
+        return { ...prev, [id]: { ...entry, removed: true } };
+      }
       const next = { ...prev };
       delete next[id];
       return next;
+    });
+  }
+
+  function restoreEntry(id: string) {
+    onVersionEntriesChange((prev) => {
+      const entry = prev[id];
+      if (!entry) return prev;
+      const { removed: _r, ...rest } = entry;
+      void _r;
+      return { ...prev, [id]: rest as VersionEntry };
+    });
+  }
+
+  function restoreAll() {
+    onVersionEntriesChange((prev) => {
+      const next: Record<string, VersionEntry> = {};
+      for (const [k, e] of Object.entries(prev)) {
+        if (e?.removed) { const { removed: _r, ...rest } = e; void _r; next[k] = rest as VersionEntry; }
+        else next[k] = e;
+      }
+      return next;
+    });
+  }
+
+  /* Flip a catalog row into fully-editable (custom-style) mode. Pre-fills the
+     custom* fields with the catalog's current resolved values so the user has
+     a starting point to override from. */
+  function customizeEntry(id: string) {
+    const def = CATALOG[id];
+    if (!def) return;
+    const entry = store[id];
+    if (!entry) return;
+    const latest = resolveLatest(def, versionData);
+    const dates = resolveInstalledDates(entry.installedVersion, def, versionData);
+    patch(id, {
+      isCustom: true,
+      customLatestVersion: entry.customLatestVersion ?? (latest.latestVersion === '—' ? '' : latest.latestVersion),
+      customReleaseDate:  entry.customReleaseDate  ?? (latest.releaseDate  === '—' ? '' : latest.releaseDate),
+      customEoSale:       entry.customEoSale       ?? (dates.eoSale        === '—' ? '' : dates.eoSale),
+      customEoMaintenance: entry.customEoMaintenance ?? (dates.eoMaintenance === '—' ? '' : dates.eoMaintenance),
+      customEoSupport:    entry.customEoSupport    ?? (dates.eoSupport     === '—' ? '' : dates.eoSupport),
+    });
+  }
+
+  /* Revert a catalog row from custom-style mode back to catalog defaults. */
+  function revertToCatalog(id: string) {
+    if (!CATALOG[id]) return;
+    patch(id, {
+      isCustom: false,
+      customLatestVersion: undefined,
+      customReleaseDate: undefined,
+      customEoSale: undefined,
+      customEoMaintenance: undefined,
+      customEoSupport: undefined,
     });
   }
 
@@ -487,6 +571,50 @@ export function Step4VersionCheck({ selectedProducts, versionData, versionEntrie
             No products selected in <strong>Step 2 — Product Scope</strong>.<br />
             Select at least one product to load its version components.
           </p>
+        </div>
+      )}
+
+      {removedEntries.length > 0 && (
+        <div className="rounded-xl p-[12px_16px]"
+          style={{ background: 'rgba(100,116,139,0.06)', border: '1.5px solid rgba(100,116,139,0.2)' }}>
+          <div className="flex items-center gap-2.5">
+            <EyeOff size={14} style={{ color: '#64748B', flexShrink: 0 }} />
+            <div className="flex-1 min-w-0">
+              <div style={{ fontSize: '12px', fontWeight: 700, color: '#334155' }}>
+                {removedEntries.length} component{removedEntries.length === 1 ? '' : 's'} hidden from assessment
+              </div>
+              <div style={{ fontSize: '10.5px', color: '#64748B', marginTop: '2px' }}>
+                {removedEntries.slice(0, 4).map((e) => e.component).join(' · ')}
+                {removedEntries.length > 4 && ` · +${removedEntries.length - 4} more`}
+              </div>
+            </div>
+            <button
+              onClick={restoreAll}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold transition-all"
+              style={{ fontSize: '11px', background: '#fff', color: '#475569', border: '1.5px solid #CBD5E1', cursor: 'pointer', flexShrink: 0 }}
+              onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#0EA5E9'; e.currentTarget.style.color = '#0284C7'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#CBD5E1'; e.currentTarget.style.color = '#475569'; }}
+            >
+              <RotateCcw size={11} /> Restore all
+            </button>
+            {removedEntries.length <= 6 && (
+              <div className="flex items-center gap-1 flex-wrap" style={{ marginLeft: 4 }}>
+                {removedEntries.map((e) => (
+                  <button
+                    key={e.id}
+                    onClick={() => restoreEntry(e.id)}
+                    title={`Restore ${e.component}`}
+                    className="px-2 py-1 rounded transition-all"
+                    style={{ fontSize: '10px', fontWeight: 600, background: '#fff', color: '#64748B', border: '1px solid #E2E8F0', cursor: 'pointer' }}
+                    onMouseEnter={(ev) => { ev.currentTarget.style.borderColor = '#0EA5E9'; ev.currentTarget.style.color = '#0284C7'; }}
+                    onMouseLeave={(ev) => { ev.currentTarget.style.borderColor = '#E2E8F0'; ev.currentTarget.style.color = '#64748B'; }}
+                  >
+                    ↶ {e.component}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -598,19 +726,23 @@ export function Step4VersionCheck({ selectedProducts, versionData, versionEntrie
                 <tbody>
                   {groupRowIds.map((compId) => {
                     const entry = store[compId];
-                    if (!entry) return null;
+                    if (!entry || entry.removed) return null;
                     const def = CATALOG[compId];
                     const isCustomRow = !def || entry.isCustom;
-                    const latest = def
-                      ? resolveLatest(def, versionData)
-                      : { latestVersion: entry.customLatestVersion || '—', releaseDate: entry.customReleaseDate || '—' };
-                    const dates = def
-                      ? resolveInstalledDates(entry.installedVersion, def, versionData)
-                      : {
+                    /* Resolution priority:
+                       - When isCustom = true → custom* fields win (catalog rows the user
+                         customized read from their own overrides, not the catalogue).
+                       - Otherwise → resolve from CATALOG + versionData if def exists. */
+                    const latest = isCustomRow
+                      ? { latestVersion: entry.customLatestVersion || '—', releaseDate: entry.customReleaseDate || '—' }
+                      : resolveLatest(def!, versionData);
+                    const dates = isCustomRow
+                      ? {
                           eoSale: entry.customEoSale || '—',
                           eoMaintenance: entry.customEoMaintenance || '—',
                           eoSupport: entry.customEoSupport || '—',
-                        };
+                        }
+                      : resolveInstalledDates(entry.installedVersion, def!, versionData);
                     const { status: autoStatus, notes: autoNotes } = def && entry.installedVersion
                       ? calcStatus(entry.installedVersion, def, versionData)
                       : { status: 'unknown' as VersionStatus, notes: '' };
@@ -652,20 +784,46 @@ export function Step4VersionCheck({ selectedProducts, versionData, versionEntrie
                             )}
                             {isCustomRow && (
                               <span style={{ fontSize: '8.5px', fontWeight: 700, fontFamily: 'monospace', background: '#FEF3C7', color: '#92400E', border: '1px solid #FDE68A', padding: '1px 5px', borderRadius: '4px', flexShrink: 0 }}>
-                                CUSTOM
+                                {def && entry.isCustom ? 'OVERRIDDEN' : 'CUSTOM'}
                               </span>
                             )}
-                            {isCustomRow && (
+                            {/* Row controls — Customize (catalog only), Revert (overridden catalog only), Delete (all rows) */}
+                            <div className="flex items-center gap-0.5" style={{ marginLeft: 'auto', flexShrink: 0 }}>
+                              {def && !entry.isCustom && (
+                                <button
+                                  onClick={() => customizeEntry(compId)}
+                                  title="Override the catalog defaults for this component (edit name + all dates)"
+                                  className="rounded transition-all"
+                                  style={{ fontSize: '10px', color: '#94A3B8', background: 'transparent', border: 'none', cursor: 'pointer', padding: '3px 5px', display: 'inline-flex', alignItems: 'center', gap: 3 }}
+                                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#0EA5E9'; (e.currentTarget as HTMLButtonElement).style.background = 'rgba(14,165,233,0.08)'; }}
+                                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#94A3B8'; (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
+                                >
+                                  <Edit2 size={10} /> Edit
+                                </button>
+                              )}
+                              {def && entry.isCustom && (
+                                <button
+                                  onClick={() => revertToCatalog(compId)}
+                                  title="Revert to catalog defaults"
+                                  className="rounded transition-all"
+                                  style={{ fontSize: '10px', color: '#94A3B8', background: 'transparent', border: 'none', cursor: 'pointer', padding: '3px 5px', display: 'inline-flex', alignItems: 'center', gap: 3 }}
+                                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#475569'; (e.currentTarget as HTMLButtonElement).style.background = '#F1F5F9'; }}
+                                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#94A3B8'; (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
+                                >
+                                  <RotateCcw size={10} /> Revert
+                                </button>
+                              )}
                               <button
                                 onClick={() => removeEntry(compId)}
-                                title="Remove this custom component"
-                                style={{ marginLeft: 'auto', fontSize: '10px', color: '#94A3B8', background: 'transparent', border: 'none', cursor: 'pointer', padding: '2px 6px', flexShrink: 0 }}
-                                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#DC2626'; }}
-                                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#94A3B8'; }}
+                                title={def ? 'Hide this component from the assessment (can be restored from the banner)' : 'Remove this custom component'}
+                                className="rounded transition-all"
+                                style={{ fontSize: '10px', color: '#CBD5E1', background: 'transparent', border: 'none', cursor: 'pointer', padding: '3px 5px', display: 'inline-flex', alignItems: 'center' }}
+                                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#DC2626'; (e.currentTarget as HTMLButtonElement).style.background = 'rgba(220,38,38,0.06)'; }}
+                                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#CBD5E1'; (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
                               >
-                                ✕
+                                <Trash2 size={11} />
                               </button>
-                            )}
+                            </div>
                           </div>
                         </td>
 

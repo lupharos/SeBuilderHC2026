@@ -1,0 +1,17 @@
+{
+  "name": "forcepoint-hc-sql-companion",
+  "version": "0.1.0",
+  "description": "Local SQL companion for the Forcepoint HC wizard — talks to SQL Server on behalf of the browser (which cannot speak TCP). Runs on port 3001 and is hit by the wizard's Step 3 SQL test button.",
+  "private": true,
+  "type": "module",
+  "main": "index.mjs",
+  "scripts": {
+    "start": "node index.mjs",
+    "dev":   "node --watch index.mjs"
+  },
+  "dependencies": {
+    "cors":    "^2.8.5",
+    "express": "^4.21.2",
+    "mssql":   "^11.0.1"
+  }
+}

@@ -1,8 +1,28 @@
+/* Runtime result of executing a report's SQL template against the live
+   customer DB via the local companion server. Not persisted — held in
+   Dashboard `useState` so it survives between wizard steps but disappears
+   on refresh. */
+export interface ReportRunResult {
+  state: 'idle' | 'running' | 'ok' | 'error';
+  rows?: Array<Record<string, unknown>>;
+  rowCount?: number;
+  latencyMs?: number;
+  windowDays?: number;
+  error?: string;
+  ranAt?: string;
+}
+
 export interface ReportDef {
   id: string;
   title: string;
   product: 'web' | 'dlp' | 'email';
   sqlKey: string;
+  /* Time window (days) used when the operator hasn't overridden it.
+     30 is a reasonable tactical default; advanced analytics use 100. */
+  defaultWindowDays?: number;
+  /* When true, the report uses a hard-coded window (e.g. the 7-vs-100
+     spike detector). The wizard hides the window selector for it. */
+  fixedWindow?: boolean;
 }
 
 export const WEB_REPORTS: ReportDef[] = [
@@ -23,22 +43,30 @@ export const WEB_REPORTS: ReportDef[] = [
   { id: 'web_ai_filesharing',         title: 'Top 5 Users Accessing Suspicious AI or File-Sharing Platforms',        product: 'web', sqlKey: 'web_ai_filesharing' },
 ];
 
+/* Data Security report queries are partition-aware. Each one looks up the
+   currently ONLINE_ACTIVE partition in PA_EVENT_PARTITION_CATALOG and runs
+   a templated dynamic SQL against PA_EVENTS_<partition>. Templates live
+   server-side in `server/queries.mjs` keyed by `sqlKey` below.
+
+   `defaultWindowDays` seeds the per-row window selector in Step 3.
+   `fixedWindow: true` hides the selector (the analysis is bound to a
+   specific window, e.g. the 7-vs-100 spike comparison). */
 export const DLP_REPORTS: ReportDef[] = [
-  { id: 'dlp_policy_violations',      title: 'Top 5 Users Triggering DLP Policy Violations',                         product: 'dlp', sqlKey: 'dlp_policy_violations' },
-  { id: 'dlp_frequent_policies',      title: 'Most Frequently Violated DLP Policies',                                product: 'dlp', sqlKey: 'dlp_frequent_policies' },
-  { id: 'dlp_sensitive_categories',   title: 'Top 5 Sensitive Data Categories Detected in Outbound Traffic',         product: 'dlp', sqlKey: 'dlp_sensitive_categories' },
-  { id: 'dlp_exfiltration',           title: 'Users with Repeated Data Exfiltration Attempts',                       product: 'dlp', sqlKey: 'dlp_exfiltration' },
-  { id: 'dlp_external_storage',       title: 'Top 5 Users Attempting to Transfer Files to External Storage',         product: 'dlp', sqlKey: 'dlp_external_storage' },
-  { id: 'dlp_email_outbound',         title: 'Top 5 Users Sending Sensitive Data via Outbound Email',                product: 'dlp', sqlKey: 'dlp_email_outbound' },
-  { id: 'dlp_classification_labels',  title: 'Most Common Data Classification Labels on Intercepted Files',          product: 'dlp', sqlKey: 'dlp_classification_labels' },
-  { id: 'dlp_cloud_upload',           title: 'Top 5 Cloud Applications Used for Unauthorized Data Upload',           product: 'dlp', sqlKey: 'dlp_cloud_upload' },
-  { id: 'dlp_removable_media',        title: 'Users Attempting to Copy Sensitive Data to Removable Media',           product: 'dlp', sqlKey: 'dlp_removable_media' },
-  { id: 'dlp_dept_violations',        title: 'Top 5 Departments with Highest DLP Policy Violation Rates',            product: 'dlp', sqlKey: 'dlp_dept_violations' },
-  { id: 'dlp_rules_by_category',      title: 'Most Triggered DLP Rules by Category',                                 product: 'dlp', sqlKey: 'dlp_rules_by_category' },
-  { id: 'dlp_pending_review',         title: 'Users with Pending DLP Incident Review',                               product: 'dlp', sqlKey: 'dlp_pending_review' },
-  { id: 'dlp_policy_override',        title: 'Top 5 Users Requesting Policy Override or Bypass',                     product: 'dlp', sqlKey: 'dlp_policy_override' },
-  { id: 'dlp_print_screenshot',       title: 'Sensitive Data Detected in Print or Screenshot Activity',              product: 'dlp', sqlKey: 'dlp_print_screenshot' },
-  { id: 'dlp_critical_alerts',        title: 'Top 5 Users Generating Critical-Severity DLP Alerts',                  product: 'dlp', sqlKey: 'dlp_critical_alerts' },
+  { id: 'dlp_top_violators',     title: 'Top Users Triggering DLP Policy Violations',         product: 'dlp', sqlKey: 'dlp_top_violators',     defaultWindowDays: 30 },
+  { id: 'dlp_top_policies',      title: 'Most Frequently Violated DLP Policies',              product: 'dlp', sqlKey: 'dlp_top_policies',      defaultWindowDays: 30 },
+  { id: 'dlp_sensitive_data',    title: 'Top Sensitive Data Categories Detected',             product: 'dlp', sqlKey: 'dlp_sensitive_data',    defaultWindowDays: 30 },
+  { id: 'dlp_repeated_exfil',    title: 'Users with Repeated Exfiltration Attempts',          product: 'dlp', sqlKey: 'dlp_repeated_exfil',    defaultWindowDays: 30 },
+  { id: 'dlp_cloud_uploads',     title: 'Top Cloud Applications Used for Upload Attempts',    product: 'dlp', sqlKey: 'dlp_cloud_uploads',     defaultWindowDays: 30 },
+  { id: 'dlp_critical_users',    title: 'Top Critical Severity Users',                        product: 'dlp', sqlKey: 'dlp_critical_users',    defaultWindowDays: 30 },
+
+  /* Advanced analytics — broader default window. Window selector remains
+     available so the analyst can shorten the view per assessment. */
+  { id: 'dlp_user_risk_profile', title: 'User Risk + Activity Profile',                       product: 'dlp', sqlKey: 'dlp_user_risk_profile', defaultWindowDays: 100 },
+  { id: 'dlp_user_anomaly',      title: 'User Anomaly Detection (7 vs 100-day spike)',        product: 'dlp', sqlKey: 'dlp_user_anomaly',      defaultWindowDays: 7,   fixedWindow: true },
+  { id: 'dlp_domain_cluster',    title: 'Domain Risk & Behavior Cluster',                     product: 'dlp', sqlKey: 'dlp_domain_cluster',    defaultWindowDays: 100 },
+  { id: 'dlp_ai_usage',          title: 'AI / GenAI Usage + User Mapping',                    product: 'dlp', sqlKey: 'dlp_ai_usage',          defaultWindowDays: 100 },
+  { id: 'dlp_genai_leaks',       title: 'GenAI & Cloud Destinations — Leak Incident Counts',  product: 'dlp', sqlKey: 'dlp_genai_leaks',       defaultWindowDays: 30  },
+  { id: 'dlp_false_positive',    title: 'False Positive Signal Engine',                       product: 'dlp', sqlKey: 'dlp_false_positive',    defaultWindowDays: 100 },
 ];
 
 export const EMAIL_REPORTS: ReportDef[] = [

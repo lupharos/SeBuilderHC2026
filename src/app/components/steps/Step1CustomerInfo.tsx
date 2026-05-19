@@ -1,17 +1,20 @@
 import {
   Cloud, FileText, Users, CreditCard, Ticket, Lightbulb,
-  Server, Upload, Plus, Trash2, Edit2, Check, X, AlertCircle, FileJson, Sparkles,
+  Server, Upload, Plus, Trash2, Edit2, Check, X, AlertCircle, FileJson, Sparkles, Shield, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import React, { useState, useRef, useEffect } from 'react';
-import type { SessionData, LicenseItem, CaseItem, FeatureRequestItem, HardwareItem, EntitlementItem } from '../Dashboard';
+import type { SessionData, LicenseItem, CaseItem, FeatureRequestItem, HardwareItem, EntitlementItem, ComplianceFrameworkItem } from '../Dashboard';
 import { mapSalesforceJsonToSession } from '../../services/salesforceJsonImport';
 import type { VersionDataStore } from '../../constants/versionData';
 import { lookupHardwareLifecycle, lifecycleMilestones, lifecycleStatus, lifecycleStatusColor } from '../../utils/hardwareLifecycle';
+import { suggestComplianceFrameworks, blankFramework } from '../../utils/complianceSuggest';
 
 interface Step1Props {
   sessionData: SessionData;
   updateSessionData: (updates: Partial<SessionData>) => void;
   versionData: VersionDataStore;
+  complianceFrameworks: ComplianceFrameworkItem[];
+  setComplianceFrameworks: React.Dispatch<React.SetStateAction<ComplianceFrameworkItem[]>>;
 }
 
 /* ─── tiny helpers ─── */
@@ -263,7 +266,7 @@ function SectionHeader({
 /* ════════════════════════════════════════
    MAIN COMPONENT
 ═══════════════════════════════════════ */
-export function Step1CustomerInfo({ sessionData, updateSessionData, versionData }: Step1Props) {
+export function Step1CustomerInfo({ sessionData, updateSessionData, versionData, complianceFrameworks, setComplianceFrameworks }: Step1Props) {
   const vSeriesModels = versionData['V Series Appliances'].map((e) => e['Model/Version']);
 
   /* ── Salesforce JSON import state ── */
@@ -1089,6 +1092,208 @@ export function Step1CustomerInfo({ sessionData, updateSessionData, versionData 
           </div>
         )}
       </div>
+
+      {/* ── COMPLIANCE FRAMEWORKS ───────────────────────────────────────────
+           Drives the Part 0 · Compliance Exposure section of the report.
+           Auto-suggests from country/industry, then the user curates. */}
+      <ComplianceFrameworksPanel
+        country={sessionData.country}
+        region={sessionData.region}
+        industry={sessionData.industry}
+        frameworks={complianceFrameworks}
+        setFrameworks={setComplianceFrameworks}
+      />
+    </div>
+  );
+}
+
+/* ─── Compliance Frameworks editor ──────────────────────────────────────── */
+function ComplianceFrameworksPanel({
+  country, region, industry,
+  frameworks, setFrameworks,
+}: {
+  country?: string; region?: string; industry?: string;
+  frameworks: ComplianceFrameworkItem[];
+  setFrameworks: React.Dispatch<React.SetStateAction<ComplianceFrameworkItem[]>>;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const enabledCount = frameworks.filter((f) => f.enabled).length;
+  const upd = (id: string, patch: Partial<ComplianceFrameworkItem>) =>
+    setFrameworks((prev) => prev.map((f) => (f.id === id ? { ...f, ...patch } : f)));
+  const del = (id: string) => setFrameworks((prev) => prev.filter((f) => f.id !== id));
+  const addBlank = () => {
+    const fresh = blankFramework();
+    setFrameworks((prev) => [...prev, fresh]);
+    setEditingId(fresh.id);
+  };
+  const autoSuggest = () => {
+    const suggested = suggestComplianceFrameworks({ country, region, industry });
+    /* Merge: keep user-edited entries, append any suggestions not already present by code */
+    setFrameworks((prev) => {
+      const haveCodes = new Set(prev.map((f) => f.code.toUpperCase()));
+      const fresh = suggested.filter((s) => !haveCodes.has(s.code.toUpperCase()));
+      return [...prev, ...fresh];
+    });
+  };
+  const reset = () => { setFrameworks([]); setEditingId(null); };
+
+  return (
+    <div className="bg-white rounded-xl border border-[rgba(15,41,82,0.08)] shadow-[0_1px_3px_rgba(15,41,82,0.08)] overflow-hidden">
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full flex items-center gap-3 p-[18px_22px] text-left"
+        style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}
+      >
+        <div className="w-[34px] h-[34px] rounded-xl flex items-center justify-center flex-shrink-0"
+          style={{ background: 'rgba(2,62,138,0.12)' }}>
+          <Shield size={15} style={{ color: '#023E8A' }} />
+        </div>
+        <div className="flex-1">
+          <div style={{ fontSize: '13px', fontWeight: 700, color: '#0F172A' }}>Compliance Frameworks</div>
+          <div style={{ fontSize: '10.5px', color: '#64748B', marginTop: '1px' }}>
+            {frameworks.length === 0
+              ? 'No frameworks selected. Click Auto-suggest to populate from customer jurisdiction, or add manually. Drives Part 0 · Compliance Exposure in the report.'
+              : `${enabledCount} of ${frameworks.length} enabled — appear in the report's Part 0 Compliance Exposure section.`}
+          </div>
+        </div>
+        {expanded ? <ChevronDown size={16} style={{ color: '#94A3B8' }} /> : <ChevronRight size={16} style={{ color: '#94A3B8' }} />}
+      </button>
+
+      {expanded && (
+        <div className="p-[0_22px_18px]">
+          <div className="flex items-center gap-2 mb-3">
+            <button
+              onClick={autoSuggest}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold text-white"
+              style={{ fontSize: '11px', background: 'linear-gradient(135deg,#023E8A,#012566)' }}
+              title="Suggest frameworks based on the customer's country, region, and industry"
+            >
+              <Sparkles size={11} /> Auto-suggest from jurisdiction
+            </button>
+            <button
+              onClick={addBlank}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold"
+              style={{ fontSize: '11px', background: 'rgba(2,62,138,0.08)', color: '#023E8A', border: '1px solid rgba(2,62,138,0.2)' }}
+            >
+              <Plus size={11} /> Add custom
+            </button>
+            {frameworks.length > 0 && (
+              <button
+                onClick={reset}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold ml-auto"
+                style={{ fontSize: '11px', background: 'rgba(220,38,38,0.05)', color: '#DA1B2E', border: '1px solid rgba(220,38,38,0.2)' }}
+              >
+                <Trash2 size={11} /> Clear all
+              </button>
+            )}
+          </div>
+
+          {frameworks.length === 0 ? (
+            <EmptyState label="No compliance frameworks recorded yet." />
+          ) : (
+            <div className="space-y-2">
+              {frameworks.map((f) => {
+                const isEditing = editingId === f.id;
+                return (
+                  <div key={f.id}
+                    className="rounded-lg p-3 transition-colors"
+                    style={{
+                      background: f.enabled ? '#F8FAFC' : 'rgba(241,245,249,0.5)',
+                      border: `1px solid ${f.enabled ? '#E2E8F0' : 'rgba(226,232,240,0.7)'}`,
+                      borderLeft: `3px solid ${f.enabled ? '#023E8A' : '#CBD5E1'}`,
+                      opacity: f.enabled ? 1 : 0.6,
+                    }}
+                  >
+                    {/* Header row: toggle + code + pillar + edit/del */}
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <button
+                        onClick={() => upd(f.id, { enabled: !f.enabled })}
+                        title={f.enabled ? 'Disable (hide from report)' : 'Enable (include in report)'}
+                        className="flex items-center justify-center rounded transition-all"
+                        style={{
+                          width: 22, height: 22, flexShrink: 0,
+                          background: f.enabled ? '#023E8A' : '#fff',
+                          border: f.enabled ? '1px solid #023E8A' : '1.5px solid #CBD5E1',
+                          color: '#fff',
+                        }}
+                      >
+                        {f.enabled && <Check size={13} strokeWidth={3} />}
+                      </button>
+                      <span style={{
+                        fontFamily: 'monospace', fontSize: '12px', fontWeight: 800, color: '#023E8A',
+                        background: '#E8EDF7', padding: '3px 8px', borderRadius: 3, letterSpacing: '0.04em',
+                      }}>
+                        {isEditing
+                          ? <EditCell value={f.code} onChange={(v) => upd(f.id, { code: v })} placeholder="KVKK" mono />
+                          : f.code || '—'}
+                      </span>
+                      <span style={{ fontSize: '9px', fontWeight: 700, color: '#228BA0', letterSpacing: '0.1em', textTransform: 'uppercase', marginLeft: 4 }}>
+                        {isEditing
+                          ? <EditCell value={f.pillar} onChange={(v) => upd(f.id, { pillar: v })} placeholder="Data Protection" />
+                          : f.pillar}
+                      </span>
+                      {f.isCustom && (
+                        <span style={{ fontSize: '8.5px', fontWeight: 700, background: '#fef3c7', color: '#92400e', padding: '1px 5px', borderRadius: 3, letterSpacing: '0.05em', marginLeft: 4 }}>
+                          CUSTOM
+                        </span>
+                      )}
+                      {/* Compliance status tri-state — cycles Unassessed → Compliant → Partial → Non-Compliant */}
+                      <ComplianceStatusToggle
+                        status={f.complianceStatus ?? 'unassessed'}
+                        onChange={(s) => upd(f.id, { complianceStatus: s })}
+                      />
+                      <button
+                        onClick={() => setEditingId(isEditing ? null : f.id)}
+                        className="ml-auto flex items-center gap-1 px-2 py-1 rounded transition-all"
+                        style={{ fontSize: '10px', fontWeight: 600, background: isEditing ? '#023E8A' : 'transparent', color: isEditing ? '#fff' : '#475569', border: `1px solid ${isEditing ? '#023E8A' : '#E2E8F0'}` }}
+                      >
+                        {isEditing ? <><Check size={10} /> Done</> : <><Edit2 size={10} /> Edit</>}
+                      </button>
+                      <button
+                        onClick={() => del(f.id)}
+                        className="w-6 h-6 rounded flex items-center justify-center transition-all"
+                        style={{ color: '#CBD5E1' }}
+                        onMouseEnter={(e) => { e.currentTarget.style.color = '#DA1B2E'; e.currentTarget.style.background = 'rgba(218,27,46,0.06)'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.color = '#CBD5E1'; e.currentTarget.style.background = 'transparent'; }}
+                        title="Remove framework"
+                      >
+                        <Trash2 size={11} />
+                      </button>
+                    </div>
+
+                    {/* Name */}
+                    <div style={{ fontSize: '11.5px', fontWeight: 600, color: '#0F172A', marginBottom: '4px' }}>
+                      {isEditing
+                        ? <EditCell value={f.name} onChange={(v) => upd(f.id, { name: v })} placeholder="Full descriptive name" />
+                        : f.name || <span style={{ color: '#CBD5E1', fontStyle: 'italic' }}>(no name)</span>}
+                    </div>
+
+                    {/* Relevance */}
+                    {isEditing ? (
+                      <textarea
+                        value={f.relevance}
+                        onChange={(e) => upd(f.id, { relevance: e.target.value })}
+                        placeholder="Why this framework applies to the customer — appears in the report below the framework name."
+                        rows={2}
+                        style={{
+                          width: '100%', fontSize: '11px', padding: '6px 9px', borderRadius: 6,
+                          border: '1.5px solid #023E8A', background: '#fff', color: '#0F172A',
+                          outline: 'none', resize: 'vertical', minHeight: 48, lineHeight: 1.55, fontFamily: 'inherit',
+                        }}
+                      />
+                    ) : (
+                      <div style={{ fontSize: '11px', color: '#475569', lineHeight: 1.6 }}>
+                        {f.relevance || <span style={{ color: '#CBD5E1', fontStyle: 'italic' }}>(no relevance set — click Edit)</span>}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1100,5 +1305,37 @@ function EmptyState({ label }: { label: string }) {
       style={{ background: '#F8FAFC', border: '1.5px dashed #E2E8F0' }}>
       <span style={{ fontSize: '12px', color: '#94A3B8' }}>{label}</span>
     </div>
+  );
+}
+
+/* ─── Tri-state compliance status toggle for the ComplianceFrameworksPanel ─── */
+type ComplianceStatus = 'unassessed' | 'compliant' | 'partial' | 'non_compliant';
+function ComplianceStatusToggle({ status, onChange }: { status: ComplianceStatus; onChange: (s: ComplianceStatus) => void }) {
+  const cfg: Record<ComplianceStatus, { label: string; bg: string; color: string; border: string; icon: React.ReactNode; title: string }> = {
+    unassessed:    { label: 'Not Assessed',  bg: '#F1F5F9',                  color: '#94A3B8', border: '#E2E8F0', icon: <span style={{ fontWeight: 700 }}>?</span>, title: 'Compliance not yet assessed — click to cycle: Compliant → Partial → Non-Compliant' },
+    compliant:     { label: 'Compliant',     bg: 'rgba(105,188,0,0.12)',     color: '#3D6E00', border: 'rgba(105,188,0,0.32)', icon: <Check size={10} strokeWidth={3} />, title: 'Customer is COMPLIANT with this framework via Forcepoint DLP — click to cycle' },
+    partial:       { label: 'Partial',       bg: 'rgba(253,206,18,0.18)',    color: '#92400E', border: 'rgba(253,206,18,0.45)', icon: <span style={{ fontWeight: 700 }}>◐</span>, title: 'PARTIAL coverage — some controls in place, others gaps. Click to cycle.' },
+    non_compliant: { label: 'Non-Compliant', bg: 'rgba(218,27,46,0.1)',      color: '#DA1B2E', border: 'rgba(218,27,46,0.3)', icon: <X size={10} strokeWidth={3} />, title: 'NOT COMPLIANT — explicit gap. Click to cycle back to Not Assessed.' },
+  };
+  const order: ComplianceStatus[] = ['unassessed', 'compliant', 'partial', 'non_compliant'];
+  const cycle = () => {
+    const idx = order.indexOf(status);
+    onChange(order[(idx + 1) % order.length]);
+  };
+  const c = cfg[status];
+  return (
+    <button
+      onClick={cycle}
+      title={c.title}
+      className="flex items-center gap-1 px-2 py-1 rounded transition-all"
+      style={{
+        fontSize: '9.5px', fontWeight: 700, letterSpacing: '0.04em',
+        background: c.bg, color: c.color, border: `1px solid ${c.border}`,
+        cursor: 'pointer', textTransform: 'uppercase', marginLeft: 4,
+      }}
+    >
+      <span className="flex items-center justify-center" style={{ width: 12, height: 12 }}>{c.icon}</span>
+      <span>{c.label}</span>
+    </button>
   );
 }

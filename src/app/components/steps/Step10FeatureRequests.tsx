@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, ThumbsUp, Trash2, Rocket, X } from 'lucide-react';
+import { Plus, ThumbsUp, Trash2, Rocket, X, Pencil } from 'lucide-react';
 
 type FRStatus = 'submitted' | 'under_review' | 'planned' | 'delivered';
 type Priority = 'critical' | 'high' | 'medium' | 'low';
@@ -36,6 +36,7 @@ const EMPTY_FORM = {
 
 export function Step10FeatureRequests({ items, setItems }: { items: FeatureRequest[]; setItems: React.Dispatch<React.SetStateAction<FeatureRequest[]>> }) {
   const [showForm, setShowForm] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
 
   const vote = (id: string) => {
@@ -48,20 +49,62 @@ export function Step10FeatureRequests({ items, setItems }: { items: FeatureReque
     );
   };
 
-  const deleteItem = (id: string) => setItems((prev) => prev.filter((i) => i.id !== id));
+  const deleteItem = (id: string) => {
+    setItems((prev) => prev.filter((i) => i.id !== id));
+    if (editId === id) { setEditId(null); setShowForm(false); }
+  };
+
+  const openAdd = () => {
+    setEditId(null);
+    setForm(EMPTY_FORM);
+    setShowForm(true);
+  };
+
+  const openEdit = (fr: FeatureRequest) => {
+    setEditId(fr.id);
+    setForm({
+      product: fr.product,
+      title: fr.title,
+      description: fr.description,
+      businessJustification: fr.businessJustification,
+      priority: fr.priority,
+    });
+    setShowForm(true);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const cancelForm = () => {
+    setShowForm(false);
+    setEditId(null);
+    setForm(EMPTY_FORM);
+  };
+
+  const cycleStatus = (id: string) => {
+    const order: FRStatus[] = ['submitted', 'under_review', 'planned', 'delivered'];
+    setItems((prev) => prev.map((i) => {
+      if (i.id !== id) return i;
+      const idx = order.indexOf(i.status);
+      return { ...i, status: order[(idx + 1) % order.length] };
+    }));
+  };
 
   const submit = () => {
     if (!form.title.trim() || !form.product.trim()) return;
-    const newFR: FeatureRequest = {
-      id: `fr-${Date.now()}`,
-      ...form,
-      status: 'submitted',
-      votes: 0,
-      hasVoted: false,
-    };
-    setItems((prev) => [newFR, ...prev]);
+    if (editId) {
+      setItems((prev) => prev.map((i) => (i.id === editId ? { ...i, ...form } : i)));
+    } else {
+      const newFR: FeatureRequest = {
+        id: `fr-${Date.now()}`,
+        ...form,
+        status: 'submitted',
+        votes: 0,
+        hasVoted: false,
+      };
+      setItems((prev) => [newFR, ...prev]);
+    }
     setForm(EMPTY_FORM);
     setShowForm(false);
+    setEditId(null);
   };
 
   const inputStyle = {
@@ -90,7 +133,7 @@ export function Step10FeatureRequests({ items, setItems }: { items: FeatureReque
             </div>
           </div>
           <button
-            onClick={() => setShowForm(!showForm)}
+            onClick={() => (showForm ? cancelForm() : openAdd())}
             className="flex items-center gap-1.5 h-[32px] px-4 rounded-lg font-semibold text-white transition-all"
             style={{ fontSize: '12px', background: 'linear-gradient(135deg, #7C3AED, #6D28D9)', boxShadow: '0 2px 8px rgba(124,58,237,0.3)' }}
           >
@@ -104,7 +147,7 @@ export function Step10FeatureRequests({ items, setItems }: { items: FeatureReque
       {showForm && (
         <div className="bg-white rounded-xl border border-[rgba(124,58,237,0.25)] shadow-[0_1px_3px_rgba(15,41,82,0.08)] p-[20px_22px]">
           <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#0F172A', marginBottom: '14px' }}>
-            New Customer Feature Request
+            {editId ? 'Edit Customer Feature Request' : 'New Customer Feature Request'}
           </div>
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-2.5">
@@ -194,10 +237,10 @@ export function Step10FeatureRequests({ items, setItems }: { items: FeatureReque
                   cursor: form.title.trim() && form.product.trim() ? 'pointer' : 'not-allowed',
                 }}
               >
-                <Plus size={13} /> Submit Request
+                {editId ? <>Save Changes</> : <><Plus size={13} /> Submit Request</>}
               </button>
               <button
-                onClick={() => setShowForm(false)}
+                onClick={cancelForm}
                 className="px-4 py-2 rounded-lg font-semibold"
                 style={{ fontSize: '12px', background: '#F1F5F9', color: '#64748B', border: '1px solid #E2E8F0' }}
               >
@@ -218,7 +261,7 @@ export function Step10FeatureRequests({ items, setItems }: { items: FeatureReque
               Log feature requests from the customer to forward to the Forcepoint product team.
             </div>
             <button
-              onClick={() => setShowForm(true)}
+              onClick={openAdd}
               className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-white"
               style={{ fontSize: '12.5px', background: 'linear-gradient(135deg, #7C3AED, #6D28D9)', boxShadow: '0 2px 8px rgba(124,58,237,0.3)' }}
             >
@@ -268,10 +311,14 @@ export function Step10FeatureRequests({ items, setItems }: { items: FeatureReque
                           style={{ fontSize: '8.5px', fontWeight: 700, background: pCfg.bg, color: pCfg.text, border: `1px solid ${pCfg.border}` }}>
                           {item.priority.toUpperCase()}
                         </span>
-                        <span className="px-2 py-0.5 rounded-full ml-auto"
-                          style={{ fontSize: '9.5px', fontWeight: 600, background: stCfg.bg, color: stCfg.text }}>
+                        <button
+                          onClick={() => cycleStatus(item.id)}
+                          className="px-2 py-0.5 rounded-full ml-auto transition-all"
+                          style={{ fontSize: '9.5px', fontWeight: 600, background: stCfg.bg, color: stCfg.text, border: '1px solid transparent', cursor: 'pointer' }}
+                          title="Click to advance status (Submitted → Under Review → Planned → Delivered)"
+                        >
                           {stCfg.label}
-                        </span>
+                        </button>
                       </div>
 
                       {item.description && (
@@ -288,15 +335,28 @@ export function Step10FeatureRequests({ items, setItems }: { items: FeatureReque
                       )}
                     </div>
 
-                    <button
-                      onClick={() => deleteItem(item.id)}
-                      className="w-7 h-7 rounded flex items-center justify-center flex-shrink-0 mt-0.5 transition-all"
-                      style={{ color: '#CBD5E1' }}
-                      onMouseEnter={(e) => { e.currentTarget.style.color = '#DC2626'; e.currentTarget.style.background = 'rgba(220,38,38,0.06)'; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.color = '#CBD5E1'; e.currentTarget.style.background = 'transparent'; }}
-                    >
-                      <Trash2 size={12} />
-                    </button>
+                    <div className="flex items-center gap-1 flex-shrink-0 mt-0.5">
+                      <button
+                        onClick={() => openEdit(item)}
+                        className="w-7 h-7 rounded flex items-center justify-center transition-all"
+                        style={{ color: '#CBD5E1' }}
+                        onMouseEnter={(e) => { e.currentTarget.style.color = '#7C3AED'; e.currentTarget.style.background = 'rgba(124,58,237,0.08)'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.color = '#CBD5E1'; e.currentTarget.style.background = 'transparent'; }}
+                        title="Edit request"
+                      >
+                        <Pencil size={12} />
+                      </button>
+                      <button
+                        onClick={() => deleteItem(item.id)}
+                        className="w-7 h-7 rounded flex items-center justify-center transition-all"
+                        style={{ color: '#CBD5E1' }}
+                        onMouseEnter={(e) => { e.currentTarget.style.color = '#DC2626'; e.currentTarget.style.background = 'rgba(220,38,38,0.06)'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.color = '#CBD5E1'; e.currentTarget.style.background = 'transparent'; }}
+                        title="Delete request"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>

@@ -1,14 +1,19 @@
-import { FolderOpen, Braces, Layers, ClipboardCheck } from 'lucide-react';
+import { FolderOpen, Braces, Layers, ClipboardCheck, MonitorSmartphone } from 'lucide-react';
 
-export type ActiveView = 'wizard' | 'templates' | 'sessions' | 'versions';
+export type ActiveView = 'wizard' | 'templates' | 'sessions' | 'versions' | 'endpoint_matrix';
 
 interface NavigationRailProps {
   activeView: ActiveView;
   onChangeView: (view: ActiveView) => void;
   onOpenProfile: () => void;
+  /* Clicking the Health Check Wizard icon starts a brand-new session (resets
+     all wizard state + navigates to the wizard view). This is intentionally
+     destructive — saved sessions remain in the HC Sessions list and can be
+     re-opened from there. */
+  onStartWizardSession: () => void;
 }
 
-export function NavigationRail({ activeView, onChangeView, onOpenProfile }: NavigationRailProps) {
+export function NavigationRail({ activeView, onChangeView, onOpenProfile, onStartWizardSession }: NavigationRailProps) {
   return (
     <div
       className="w-[60px] flex flex-col items-center py-4 gap-1 flex-shrink-0 relative z-20"
@@ -68,10 +73,16 @@ export function NavigationRail({ activeView, onChangeView, onOpenProfile }: Navi
         onClick={() => onChangeView('versions')}
       />
       <NavButton
+        icon={<MonitorSmartphone size={16} />}
+        label="OS / Browser Support Matrix"
+        active={activeView === 'endpoint_matrix'}
+        onClick={() => onChangeView('endpoint_matrix')}
+      />
+      <NavButton
         icon={<ClipboardCheck size={16} />}
-        label="Health Check Wizard"
+        label="Health Check Wizard — starts a new session"
         active={activeView === 'wizard'}
-        onClick={() => onChangeView('wizard')}
+        onClick={onStartWizardSession}
       />
 
       <div className="flex-1" />

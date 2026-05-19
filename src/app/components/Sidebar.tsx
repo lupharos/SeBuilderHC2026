@@ -1,25 +1,36 @@
 import { Check, ChevronRight, Plus } from 'lucide-react';
 import type { SessionData } from './Dashboard';
-import { STEP_COLORS, STEP_LABELS, TOTAL_STEPS } from '../constants/steps';
+import { STEP_COLORS, STEP_LABELS, TOTAL_STEPS, isStepSkipped } from '../constants/steps';
 
 interface SidebarProps {
   currentStep: number;
   onStepChange: (step: number) => void;
   sessionData: SessionData;
   onNewSession: () => void;
+  selectedProducts: Record<string, boolean>;
 }
 
-const steps = Array.from({ length: TOTAL_STEPS }, (_, i) => ({
+const ALL_STEPS = Array.from({ length: TOTAL_STEPS }, (_, i) => ({
   id: i + 1,
   label: STEP_LABELS[i + 1] ?? `Step ${i + 1}`,
   code: String(i + 1).padStart(2, '0'),
 }));
 
-export function Sidebar({ currentStep, onStepChange, sessionData, onNewSession }: SidebarProps) {
+export function Sidebar({ currentStep, onStepChange, sessionData, onNewSession, selectedProducts }: SidebarProps) {
+  /* Filter out steps the current product scope makes irrelevant. The original
+     step IDs are preserved (so STEP_COLORS / state keys still match); the
+     sidebar simply doesn't render them. */
+  const steps = ALL_STEPS.filter((s) => !isStepSkipped(s.id, selectedProducts));
   const initials = sessionData.customerName
     ? sessionData.customerName.substring(0, 2).toUpperCase()
     : '—';
-  const progress = Math.round(((currentStep - 1) / (steps.length - 1)) * 100);
+  /* Progress is measured against the VISIBLE wizard length, not TOTAL_STEPS,
+     so deselecting an unused product doesn't show 7/17 progress when only
+     15 steps actually apply. */
+  const visibleIdx = steps.findIndex((s) => s.id === currentStep);
+  const progress = steps.length > 1
+    ? Math.round((Math.max(0, visibleIdx) / (steps.length - 1)) * 100)
+    : 100;
   const activeColor = STEP_COLORS[currentStep] || '#3B82F6';
 
   return (

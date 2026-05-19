@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
-import { Database, CheckCircle2, XCircle, Loader, ChevronDown, ChevronRight, Check, Shield, Globe, Network, FolderOpen, Upload, Trash2, Server, FileText } from 'lucide-react';
-import { REPORT_GROUPS, ALL_REPORT_IDS } from '../../constants/reportDefinitions';
+import { Database, CheckCircle2, XCircle, Loader, ChevronDown, ChevronRight, Check, Shield, Globe, Network, FolderOpen, Upload, Trash2, Server, FileText, Play, X as XIcon, Clock } from 'lucide-react';
+import { REPORT_GROUPS, ALL_REPORT_IDS, type ReportRunResult, type ReportDef } from '../../constants/reportDefinitions';
 import { parseDlpBundle, formatMemoryGB, memoryUsagePct, statusColor, type DlpServerBundle, type UploadedFile } from './dlpServerInfoParser';
 import { parseDlpDashboardPdf, type DlpDashboardSummary } from './dlpDashboardParser';
 
@@ -42,7 +42,25 @@ export const DEFAULT_API_CONNECTORS: ApiConnectorsConfig = {
 };
 
 // ── Shared ───────────────────────────────────────────────────────────────────
-interface ConnStatus { state: 'idle' | 'testing' | 'ok' | 'error'; message?: string; }
+/* Server identity returned by /api/sql/test on a successful connection.
+   Carries everything the wizard needs to render a green "Connected to …"
+   row — version, edition, latency, login, current DB. Runtime-only; not
+   persisted to localStorage. */
+interface SqlServerInfo {
+  productVersion?: string;
+  edition?: string;
+  productLevel?: string;
+  collation?: string;
+  serverName?: string;
+  currentDatabase?: string;
+  currentLogin?: string;
+  latencyMs?: number;
+}
+interface ConnStatus {
+  state: 'idle' | 'testing' | 'ok' | 'error';
+  message?: string;
+  server?: SqlServerInfo;
+}
 
 interface Props {
   sqlConfig: SqlConfig;
@@ -51,6 +69,12 @@ interface Props {
   setApiConnectors: React.Dispatch<React.SetStateAction<ApiConnectorsConfig>>;
   selectedReports: string[];
   setSelectedReports: React.Dispatch<React.SetStateAction<string[]>>;
+  /* Per-report time-window override (persisted). */
+  reportWindows: Record<string, number>;
+  setReportWindows: React.Dispatch<React.SetStateAction<Record<string, number>>>;
+  /* Runtime results of executed report queries (NOT persisted). */
+  reportRuns: Record<string, ReportRunResult>;
+  setReportRuns: React.Dispatch<React.SetStateAction<Record<string, ReportRunResult>>>;
   selectedProducts: Record<string, boolean>;
   dlpBundles: DlpServerBundle[];
   setDlpBundles: React.Dispatch<React.SetStateAction<DlpServerBundle[]>>;
@@ -73,17 +97,25 @@ async function runTest(endpoint: string, payload: unknown): Promise<ConnStatus> 
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(8000),
+      /* 18s upper bound: SQL Server cold-start auth handshakes can take
+         8+ seconds; we cap above the server's own 8s connectionTimeout. */
+      signal: AbortSignal.timeout(18000),
     });
+    type SqlTestOk    = { ok: boolean; message?: string; server?: SqlServerInfo; latencyMs?: number };
+    type SqlTestError = { ok: false; message?: string };
     if (res.ok) {
-      const d = await res.json() as { message?: string };
-      return { state: 'ok', message: d.message || 'Connection successful' };
+      const d = await res.json() as SqlTestOk;
+      return {
+        state: 'ok',
+        message: d.message || 'Connection successful',
+        server: d.server ? { ...d.server, latencyMs: d.latencyMs } : undefined,
+      };
     }
-    const e = await res.json() as { message?: string };
+    const e = await res.json() as SqlTestError;
     return { state: 'error', message: e.message || `Server error (${res.status})` };
   } catch (e) {
     const timeout = e instanceof Error && e.name === 'TimeoutError';
-    return { state: 'error', message: timeout ? 'Connection timed out (8s)' : 'Local backend not running — start server on port 3001' };
+    return { state: 'error', message: timeout ? 'Connection timed out' : 'Local SQL companion not running — start it with `cd server && npm install && npm start`' };
   }
 }
 
@@ -371,6 +403,228 @@ function BundleCard({ bundle: b, expanded, onToggle, onRemove }: { bundle: DlpSe
             </Section>
           )}
 
+          {/* Event Partitions (PA_EVENT_PARTITION_CATALOG.csv) */}
+          {b.eventPartitions?.summary && (() => {
+            const s = b.eventPartitions.summary!;
+            const fmtN = (n: number) => n.toLocaleString();
+            return (
+              <Section title="Event Partitions"
+                badge={`${s.archivedPartitionCount + s.onlinePartitionCount} TOTAL`}
+                badgeColor={s.warnings.length > 0 ? '#DC2626' : '#2563EB'}>
+                <div className="grid grid-cols-3 gap-x-4 gap-y-1" style={{ fontSize: '11px' }}>
+                  <InfoRow label="Archived Parts" value={`${s.archivedPartitionCount}`} />
+                  <InfoRow label="Online Parts" value={`${s.onlinePartitionCount}`} />
+                  <InfoRow label="Total Events" value={fmtN(s.totalEvents)} />
+                  <InfoRow label="Archived Events" value={fmtN(s.archivedEvents)} />
+                  <InfoRow label="Online Events" value={fmtN(s.onlineEvents)} />
+                  <InfoRow label="Active Window" value={s.activePartitionFrom && s.activePartitionTo ? `${s.activePartitionFrom} → ${s.activePartitionTo}` : '—'} />
+                  <InfoRow label="Data History" value={s.dataHistoryStart && s.dataHistoryEnd ? `${s.dataHistoryStart} → ${s.dataHistoryEnd}` : '—'} />
+                </div>
+                {s.warnings.length > 0 && (
+                  <div className="mt-2 flex flex-col gap-1">
+                    {s.warnings.map((w, i) => (
+                      <div key={i} style={{ fontSize: '10.5px', color: '#92400E', background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 4, padding: '4px 7px' }}>{w}</div>
+                    ))}
+                  </div>
+                )}
+              </Section>
+            );
+          })()}
+
+          {/* DLP Config Properties (PA_CONFIG_PROPERTIES.csv) */}
+          {b.configProperties && (() => {
+            const c = b.configProperties;
+            const yn = (v: boolean) => v ? 'Yes' : 'No';
+            const flagPill = (label: string, on: boolean) => (
+              <span style={{
+                fontSize: '9.5px', fontWeight: 700, padding: '2px 7px', borderRadius: 3,
+                background: on ? '#DCFCE7' : '#F1F5F9',
+                color: on ? '#15803D' : '#64748B',
+                border: `1px solid ${on ? '#86EFAC' : '#E2E8F0'}`,
+                fontFamily: 'monospace',
+              }}>{label}: {on ? 'ON' : 'OFF'}</span>
+            );
+            const statusPill = (label: string, status: string) => {
+              const bad = status === 'UNSYNCHRONIZED_EDIT';
+              return (
+                <span style={{
+                  fontSize: '9.5px', fontWeight: 700, padding: '2px 7px', borderRadius: 3,
+                  background: bad ? '#FEF2F2' : '#DCFCE7',
+                  color: bad ? '#A30080' : '#15803D',
+                  border: `1px solid ${bad ? '#FECACA' : '#86EFAC'}`,
+                  fontFamily: 'monospace',
+                }}>{label}: {status || '—'}</span>
+              );
+            };
+            return (
+              <Section title="DLP Config Properties"
+                badge={`${c.warnings.length} WARN${c.warnings.length === 1 ? '' : 'S'}`}
+                badgeColor={c.warnings.length > 0 ? '#DC2626' : '#16A34A'}>
+                {/* Event traffic totals */}
+                <div style={{ fontSize: '9.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.05em', marginBottom: 4 }}>EVENT TRAFFIC TOTALS</div>
+                <div className="grid grid-cols-3 gap-x-4 gap-y-1" style={{ fontSize: '11px', marginBottom: 8 }}>
+                  <InfoRow label="Web tx" value={c.webTransactionsTotal} />
+                  <InfoRow label="Web size" value={c.webSizeTotal} />
+                  <InfoRow label="Email tx" value={c.emailTransactionsTotal} />
+                  <InfoRow label="Email size" value={c.emailSizeTotal} />
+                  <InfoRow label="Discovery tx" value={c.discoveryTransactionsTotal} />
+                  <InfoRow label="Discovery size" value={c.discoverySizeTotal} />
+                  <InfoRow label="Mobile tx" value={c.mobileTransactionsTotal} />
+                </div>
+                {/* Deploy policy status */}
+                <div style={{ fontSize: '9.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.05em', marginBottom: 4 }}>POLICY DEPLOY STATUS</div>
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {statusPill('Policy Engine', c.policyEngineConfigStatus)}
+                  {statusPill('DIM', c.dimPolicyStatus)}
+                  {statusPill('DAR', c.darPolicyStatus)}
+                </div>
+                {/* Feature flags */}
+                <div style={{ fontSize: '9.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.05em', marginBottom: 4 }}>FEATURE FLAGS</div>
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {flagPill('Behavior Analytics', c.behaviorAnalyticsEnabled)}
+                  {flagPill('RAP', c.rapEnabled)}
+                  {flagPill('MIP', c.mipEnabled)}
+                  {flagPill('Linking Service', c.linkingServiceEnabled)}
+                </div>
+                {/* LDAP repositories */}
+                {c.ldapRepos.length > 0 && (
+                  <>
+                    <div style={{ fontSize: '9.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.05em', marginBottom: 4 }}>LDAP REPOSITORIES ({c.ldapRepos.length})</div>
+                    <div className="flex flex-col gap-1 mb-2" style={{ fontSize: '10.5px' }}>
+                      {c.ldapRepos.map((r, i) => (
+                        <div key={i} className="flex items-center gap-2">
+                          <span style={{ color: '#0F2952', fontWeight: 600, flex: 1 }}>{r.name}</span>
+                          {flagPill('Enabled', r.enabled)}
+                          <span style={{
+                            fontSize: '9.5px', fontWeight: 700, padding: '2px 7px', borderRadius: 3,
+                            background: r.lastSyncOk ? '#DCFCE7' : '#FEF2F2',
+                            color: r.lastSyncOk ? '#15803D' : '#A30080',
+                            border: `1px solid ${r.lastSyncOk ? '#86EFAC' : '#FECACA'}`,
+                            fontFamily: 'monospace',
+                          }}>Last sync: {r.lastSyncOk ? 'OK' : 'FAIL'}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+                {/* Misc */}
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1" style={{ fontSize: '11px' }}>
+                  <InfoRow label="Audit retention" value={c.auditRetentionDays ? `${c.auditRetentionDays} days` : '—'} />
+                  <InfoRow label="Partition duration" value={c.partitionDurationDays ? `${c.partitionDurationDays} days` : '—'} />
+                  <InfoRow label="LDAP frequency" value={c.ldapImportFrequency} />
+                  <InfoRow label="LDAP import time" value={c.ldapImportTime} />
+                  <InfoRow label="SIEM host" value={c.siemSyslogHost} />
+                  <InfoRow label="SIEM port" value={c.siemSyslogPort} />
+                  <InfoRow label="Backup path" value={c.backupPath} />
+                  <InfoRow label="Backup copies" value={c.backupCopies} />
+                  <InfoRow label="Backup includes forensics" value={yn(c.backupIncludesForensics)} />
+                  <InfoRow label="Policy concurrency" value={c.policyConcurrencyLevel} />
+                </div>
+                {/* Warnings */}
+                {c.warnings.length > 0 && (
+                  <div className="mt-2 flex flex-col gap-1">
+                    {c.warnings.map((w, i) => (
+                      <div key={i} style={{ fontSize: '10.5px', color: '#92400E', background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 4, padding: '4px 7px' }}>{w}</div>
+                    ))}
+                  </div>
+                )}
+              </Section>
+            );
+          })()}
+
+          {/* Site Elements (WS_SM_SITE_ELEMENTS.csv) */}
+          {b.siteElements && (() => {
+            const se = b.siteElements;
+            const ss = se.syncStatus;
+            const versionCount = Object.keys(se.versionInventory).length;
+            return (
+              <Section title="Site Elements"
+                badge={`${ss.total} COMPONENTS · ${ss.syncPercentage}% SYNCED`}
+                badgeColor={ss.syncPercentage < 70 ? '#DC2626' : ss.syncPercentage < 95 ? '#D97706' : '#16A34A'}>
+                {/* Component counts */}
+                <div style={{ fontSize: '9.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.05em', marginBottom: 4 }}>COMPONENT INVENTORY</div>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 mb-2" style={{ fontSize: '11px' }}>
+                  {Object.entries(se.componentCounts).map(([name, n]) => (
+                    <InfoRow key={name} label={name} value={String(n)} />
+                  ))}
+                </div>
+                {/* Sync health */}
+                <div style={{ fontSize: '9.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.05em', marginBottom: 4 }}>SYNC HEALTH</div>
+                <div className="grid grid-cols-3 gap-x-4 gap-y-1 mb-2" style={{ fontSize: '11px' }}>
+                  <InfoRow label="Synchronized" value={`${ss.synchronized}`} />
+                  <InfoRow label="Unsync edit" value={`${ss.unsynchronizedEdit}`} />
+                  <InfoRow label="Marked unsync" value={`${ss.markedUnsynchronizedEdit}`} />
+                </div>
+                {/* Version inventory */}
+                {versionCount > 0 && (
+                  <>
+                    <div style={{ fontSize: '9.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.05em', marginBottom: 4 }}>
+                      VERSION MIX ({versionCount} {versionCount === 1 ? 'version' : 'versions'})
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {Object.entries(se.versionInventory).map(([v, n]) => (
+                        <span key={v} style={{
+                          fontSize: '9.5px', fontWeight: 700, padding: '2px 7px', borderRadius: 3,
+                          background: '#EFF6FF', color: '#2563EB', border: '1px solid #BFDBFE', fontFamily: 'monospace',
+                        }}>{v}: {n}</span>
+                      ))}
+                    </div>
+                  </>
+                )}
+                {/* Disabled components */}
+                {se.disabledComponents.length > 0 && (
+                  <>
+                    <div style={{ fontSize: '9.5px', fontWeight: 700, color: '#A30080', letterSpacing: '0.05em', marginBottom: 4 }}>DISABLED COMPONENTS ({se.disabledComponents.length})</div>
+                    <div className="flex flex-col gap-1 mb-2" style={{ fontSize: '10.5px' }}>
+                      {se.disabledComponents.map((d, i) => (
+                        <div key={i} className="flex items-center gap-2 px-2 py-1 rounded" style={{ background: '#FDF2F8', border: '1px solid #FBCFE8' }}>
+                          <span style={{ color: '#A30080', fontWeight: 600 }}>{d.name}</span>
+                          <span style={{ color: '#64748B', fontFamily: 'monospace', fontSize: '9.5px' }}>{d.type}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+                {/* Failed deployments */}
+                {se.failedDeployments.length > 0 && (
+                  <>
+                    <div style={{ fontSize: '9.5px', fontWeight: 700, color: '#A30080', letterSpacing: '0.05em', marginBottom: 4 }}>FAILED DEPLOYMENTS ({se.failedDeployments.length})</div>
+                    <div className="flex flex-col gap-1 mb-2" style={{ fontSize: '10.5px' }}>
+                      {se.failedDeployments.map((f, i) => (
+                        <div key={i} className="px-2 py-1 rounded" style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}>
+                          <div style={{ color: '#A30080', fontWeight: 600 }}>{f.name} · {f.type}</div>
+                          {f.reason && <div style={{ color: '#64748B', fontSize: '9.5px', marginTop: 2 }}>{f.reason}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+                {/* DLP Application Server hostnames */}
+                {se.dlpServerHostnames.length > 0 && (
+                  <>
+                    <div style={{ fontSize: '9.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.05em', marginBottom: 4 }}>DLP APPLICATION SERVERS ({se.dlpServerHostnames.length})</div>
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {se.dlpServerHostnames.map((h, i) => (
+                        <span key={i} style={{
+                          fontSize: '9.5px', fontWeight: 600, padding: '2px 7px', borderRadius: 3,
+                          background: '#F1F5F9', color: '#0F2952', border: '1px solid #E2E8F0', fontFamily: 'monospace',
+                        }}>{h}</span>
+                      ))}
+                    </div>
+                  </>
+                )}
+                {/* Warnings */}
+                {se.warnings.length > 0 && (
+                  <div className="mt-2 flex flex-col gap-1">
+                    {se.warnings.map((w, i) => (
+                      <div key={i} style={{ fontSize: '10.5px', color: '#92400E', background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 4, padding: '4px 7px' }}>{w}</div>
+                    ))}
+                  </div>
+                )}
+              </Section>
+            );
+          })()}
+
           {/* Endpoint Clients */}
           {b.endpointClients && (
             <Section title="Endpoint Clients">
@@ -438,6 +692,8 @@ export function Step3DataCollectors({
   sqlConfig, setSqlConfig,
   apiConnectors, setApiConnectors,
   selectedReports, setSelectedReports,
+  reportWindows, setReportWindows,
+  reportRuns, setReportRuns,
   selectedProducts,
   dlpBundles, setDlpBundles,
   dlpDashboardSummary, setDlpDashboardSummary,
@@ -541,6 +797,90 @@ export function Step3DataCollectors({
 
   const toggleGroup    = (p: string) => setExpandedGroups(prev => { const n = new Set(prev); n.has(p) ? n.delete(p) : n.add(p); return n; });
   const toggleReport   = (id: string) => setSelectedReports(prev => prev.includes(id) ? prev.filter(r => r !== id) : [...prev, id]);
+
+  /* Find a report by sqlKey so we can update its `state` slot. Reports
+     are keyed by `id` in reportRuns; sqlKey is the lookup the server
+     uses. We match them via the static ReportDef list. */
+  const reportIdBySqlKey = (sqlKey: string): string => {
+    for (const grp of REPORT_GROUPS) {
+      const r = grp.reports.find((r) => r.sqlKey === sqlKey);
+      if (r) return r.id;
+    }
+    return sqlKey;
+  };
+
+  /* Fire a single report against the companion SQL service. Pure runtime:
+     results land in reportRuns and disappear on refresh. `topN` is optional
+     and forwarded to the server for a TOP N clause; undefined = no cap. */
+  const runReport = async (sqlKey: string, windowDays: number, topN?: number) => {
+    const id = reportIdBySqlKey(sqlKey);
+    setReportRuns((prev) => ({ ...prev, [id]: { state: 'running', windowDays } }));
+    try {
+      const res = await fetch('http://localhost:3001/api/sql/query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...sqlConfig, sqlKey, windowDays, topN }),
+        signal: AbortSignal.timeout(45000),
+      });
+      type QueryOk = { ok: true; rows: Array<Record<string, unknown>>; rowCount: number; latencyMs: number; windowDays: number };
+      type QueryErr = { ok: false; message?: string; latencyMs?: number };
+      const d = await res.json() as QueryOk | QueryErr;
+      if (res.ok && (d as QueryOk).ok) {
+        const ok = d as QueryOk;
+        setReportRuns((prev) => ({
+          ...prev,
+          [id]: { state: 'ok', rows: ok.rows, rowCount: ok.rowCount, latencyMs: ok.latencyMs, windowDays: ok.windowDays, ranAt: new Date().toISOString() },
+        }));
+      } else {
+        const err = d as QueryErr;
+        setReportRuns((prev) => ({
+          ...prev,
+          [id]: { state: 'error', error: err.message || `Server returned ${res.status}`, latencyMs: err.latencyMs, windowDays, ranAt: new Date().toISOString() },
+        }));
+      }
+    } catch (e) {
+      const timeout = e instanceof Error && e.name === 'TimeoutError';
+      setReportRuns((prev) => ({
+        ...prev,
+        [id]: { state: 'error', error: timeout ? 'Query timed out (45s)' : 'Local SQL companion not reachable — start it with `cd server && npm start`', windowDays, ranAt: new Date().toISOString() },
+      }));
+    }
+  };
+
+  /* Bulk-run: fire every selected report sequentially against the companion
+     SQL service using a shared (windowDays, topN) tuple. Sequential to avoid
+     stampeding the SQL connection pool (server caps pool.max at 1). Each
+     report's per-row window is overridden to match the bulk window so the
+     UI stays consistent. */
+  const [bulkTopN, setBulkTopN] = useState<number>(10);
+  const [bulkDays, setBulkDays] = useState<number>(30);
+  const [bulkRunning, setBulkRunning] = useState<{ active: boolean; current: number; total: number }>({ active: false, current: 0, total: 0 });
+  const runAllSelected = async () => {
+    /* Build the run list from currently-selected reports. We resolve sqlKey
+       and id eagerly so a state change mid-loop can't desync the index. */
+    const targets: { id: string; sqlKey: string; fixedWindow?: boolean }[] = [];
+    for (const grp of REPORT_GROUPS) {
+      for (const r of grp.reports) {
+        if (selectedReports.includes(r.id)) {
+          targets.push({ id: r.id, sqlKey: r.sqlKey, fixedWindow: r.fixedWindow });
+        }
+      }
+    }
+    if (targets.length === 0) return;
+    setBulkRunning({ active: true, current: 0, total: targets.length });
+    for (let i = 0; i < targets.length; i++) {
+      const t = targets[i];
+      /* Persist the chosen window per row so the wizard reflects what was
+         actually run; fixed-window reports keep their intrinsic window. */
+      const effectiveDays = t.fixedWindow ? (reportWindows[t.id] ?? bulkDays) : bulkDays;
+      if (!t.fixedWindow) {
+        setReportWindows((prev) => ({ ...prev, [t.id]: bulkDays }));
+      }
+      setBulkRunning({ active: true, current: i + 1, total: targets.length });
+      await runReport(t.sqlKey, effectiveDays, bulkTopN);
+    }
+    setBulkRunning({ active: false, current: 0, total: 0 });
+  };
   const toggleGroupAll = (ids: string[], all: boolean) =>
     setSelectedReports(prev => all ? prev.filter(id => !ids.includes(id)) : [...new Set([...prev, ...ids])]);
 
@@ -574,7 +914,10 @@ export function Step3DataCollectors({
         </div>
       </div>
 
-      {/* DLP Server Info — bundle folder upload */}
+      {/* DLP Server Info — bundle folder upload. Hidden when Data Security
+          isn't in scope (Step 2) so the operator only sees collectors that
+          map to a selected product. */}
+      {selectedProducts.data && (
       <div className="bg-white rounded-xl overflow-hidden"
         style={{ border: `1.5px solid ${dlpBundles.length > 0 ? '#FCD34D' : '#E2E8F0'}`, boxShadow: '0 1px 4px rgba(15,41,82,0.06)' }}>
 
@@ -594,7 +937,7 @@ export function Step3DataCollectors({
           {dlpBundles.length > 0 && (
             <span className="px-2.5 py-1 rounded-lg font-mono font-bold"
               style={{ fontSize: '10.5px', background: 'rgba(217,119,6,0.1)', color: '#D97706', border: '1px solid rgba(217,119,6,0.25)' }}>
-              {dlpBundles.length} BUNDLE{dlpBundles.length !== 1 ? 'S' : ''}
+              {dlpBundles.length} FILE{dlpBundles.length !== 1 ? 'S' : ''}
             </span>
           )}
           {dlpExpanded
@@ -673,8 +1016,11 @@ export function Step3DataCollectors({
           </div>
         )}
       </div>
+      )}
 
-      {/* Customer DLP Dashboard PDF — extracts incident counts, top channels/policies into the HC report */}
+      {/* Customer DLP Dashboard PDF — DLP-only. Skipped when Data Security
+          isn't in scope. */}
+      {selectedProducts.data && (
       <div className="bg-white rounded-xl overflow-hidden"
         style={{ border: dlpDashboardSummary ? '1.5px solid rgba(14,165,233,0.3)' : '1.5px solid #E2E8F0', boxShadow: '0 1px 4px rgba(15,41,82,0.06)' }}>
         <div className="flex items-center gap-3 p-[16px_22px]"
@@ -789,8 +1135,12 @@ export function Step3DataCollectors({
           )}
         </div>
       </div>
+      )}
 
-      {/* SQL Server */}
+      {/* SQL Server — only shown if at least one telemetry-bearing product
+          (Web, DLP, or Email) is in scope. NGFW / V-Series don't query the
+          on-prem SQL store. */}
+      {(selectedProducts.web || selectedProducts.data || selectedProducts.email) && (
       <div className="bg-white rounded-xl overflow-hidden"
         style={{ border: `1.5px solid ${sqlConfig.enabled ? '#DBEAFE' : '#E2E8F0'}`, boxShadow: '0 1px 4px rgba(15,41,82,0.06)' }}>
 
@@ -843,13 +1193,19 @@ export function Step3DataCollectors({
             </div>
           </div>
 
-          {/* Database */}
+          {/* Database — only used by the connection-test endpoint. DLP report
+              queries are server-pinned to `wbsn-data-security` regardless of
+              this value, so it's optional and only matters when probing other
+              databases via Test Connection. */}
           <div>
             <label style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.04em' }}>DATABASE</label>
-            <input style={{ ...IS, marginTop: '4px' }} placeholder="e.g. fpdb or DLP_DB"
+            <input style={{ ...IS, marginTop: '4px' }} placeholder="auto: wbsn-data-security (DLP)"
               value={sqlConfig.database} onChange={e => updSql({ database: e.target.value })}
               onFocus={e => (e.currentTarget.style.border = '1.5px solid #93C5FD')}
               onBlur={e =>  (e.currentTarget.style.border = '1.5px solid #E2E8F0')} />
+            <div style={{ fontSize: '10px', color: '#94A3B8', marginTop: '4px', fontStyle: 'italic' }}>
+              Leave blank — DLP queries auto-target <span style={{ fontFamily: 'monospace', color: '#475569' }}>wbsn-data-security</span>. Only set this when testing connectivity against a different database.
+            </div>
           </div>
 
           {/* Auth type */}
@@ -945,11 +1301,57 @@ export function Step3DataCollectors({
               <span style={{ fontSize: '11px', color: '#94A3B8' }}>Enter server address to test</span>
             )}
           </div>
+
+          {/* Detected server identity — appears only on a successful test.
+              Runtime-only: SQL details are never persisted to localStorage. */}
+          {sqlStatus.state === 'ok' && sqlStatus.server && (
+            <div className="mt-3 rounded-lg p-3"
+              style={{ background: '#F0FDF4', border: '1px solid #BBF7D0' }}>
+              <div className="flex items-center gap-2 mb-2">
+                <Database size={12} style={{ color: '#16A34A' }} />
+                <span style={{ fontSize: '11px', fontWeight: 700, color: '#15803D', letterSpacing: '0.06em' }}>
+                  SQL SERVER DETECTED
+                </span>
+                {typeof sqlStatus.server.latencyMs === 'number' && (
+                  <span style={{ fontSize: '9.5px', fontFamily: 'monospace', color: '#16A34A', background: 'rgba(22,163,74,0.12)', border: '1px solid rgba(22,163,74,0.3)', padding: '1px 6px', borderRadius: 4 }}>
+                    {sqlStatus.server.latencyMs} ms
+                  </span>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1" style={{ fontSize: '11px' }}>
+                {sqlStatus.server.edition && (
+                  <div><span style={{ color: '#64748B', fontWeight: 600 }}>Edition:</span> <span style={{ color: '#0F172A', fontFamily: 'monospace' }}>{sqlStatus.server.edition}</span></div>
+                )}
+                {sqlStatus.server.productVersion && (
+                  <div><span style={{ color: '#64748B', fontWeight: 600 }}>Version:</span> <span style={{ color: '#0F172A', fontFamily: 'monospace' }}>{sqlStatus.server.productVersion}{sqlStatus.server.productLevel ? ` (${sqlStatus.server.productLevel})` : ''}</span></div>
+                )}
+                {sqlStatus.server.serverName && (
+                  <div><span style={{ color: '#64748B', fontWeight: 600 }}>Server name:</span> <span style={{ color: '#0F172A', fontFamily: 'monospace' }}>{sqlStatus.server.serverName}</span></div>
+                )}
+                {sqlStatus.server.currentDatabase && (
+                  <div><span style={{ color: '#64748B', fontWeight: 600 }}>Database:</span> <span style={{ color: '#0F172A', fontFamily: 'monospace' }}>{sqlStatus.server.currentDatabase}</span></div>
+                )}
+                {sqlStatus.server.currentLogin && (
+                  <div><span style={{ color: '#64748B', fontWeight: 600 }}>Login:</span> <span style={{ color: '#0F172A', fontFamily: 'monospace' }}>{sqlStatus.server.currentLogin}</span></div>
+                )}
+                {sqlStatus.server.collation && (
+                  <div><span style={{ color: '#64748B', fontWeight: 600 }}>Collation:</span> <span style={{ color: '#0F172A', fontFamily: 'monospace', fontSize: '10px' }}>{sqlStatus.server.collation}</span></div>
+                )}
+              </div>
+            </div>
+          )}
         </div>}
       </div>
+      )}
 
-      {/* REST API connectors */}
-      {API_DEFS.map(def => {
+      {/* REST API connectors — each is filtered against Step 2 so only
+          connectors whose product is in scope are shown. */}
+      {API_DEFS.filter((def) => {
+        if (def.key === 'dlpApi')   return !!selectedProducts.data;
+        if (def.key === 'vSeries')  return !!(selectedProducts.appl || selectedProducts.vappl);
+        if (def.key === 'ngfwSmc')  return !!selectedProducts.ngfw;
+        return true;
+      }).map(def => {
         const cfg = apiConnectors[def.key];
         const st  = apiStatus[def.key] ?? { state: 'idle' as const };
         const pw  = showPw[def.key] ?? false;
@@ -1116,7 +1518,11 @@ export function Step3DataCollectors({
         );
       })}
 
-      {/* Report Selection */}
+      {/* Report Selection — only relevant when there's at least one product
+          that ships SQL reports (Web / DLP / Email). NGFW + V-Series + DSPM
+          have no reports in REPORT_GROUPS, so the whole panel is hidden when
+          none of the report-bearing products are in scope. */}
+      {(selectedProducts.web || selectedProducts.data || selectedProducts.email) && (
       <div className="bg-white rounded-xl p-[20px_22px]"
         style={{ border: '1.5px solid #E2E8F0', boxShadow: '0 1px 4px rgba(15,41,82,0.06)' }}>
 
@@ -1132,21 +1538,66 @@ export function Step3DataCollectors({
               style={{ fontSize: '11px', fontWeight: 700, background: 'rgba(37,99,235,0.07)', color: '#2563EB', border: '1px solid rgba(37,99,235,0.18)' }}>
               {selectedReports.length} / {ALL_REPORT_IDS.length} selected
             </span>
-            <button onClick={() => setSelectedReports(ALL_REPORT_IDS)}
-              className="px-3 py-1.5 rounded-lg font-semibold"
-              style={{ fontSize: '11px', background: '#F1F5F9', color: '#475569', border: '1.5px solid #E2E8F0' }}>
-              All
-            </button>
-            <button onClick={() => setSelectedReports([])}
-              className="px-3 py-1.5 rounded-lg font-semibold"
-              style={{ fontSize: '11px', background: '#F1F5F9', color: '#475569', border: '1.5px solid #E2E8F0' }}>
-              None
-            </button>
           </div>
         </div>
 
+        {/* Bulk runner — fires every selected report in one go, sharing a
+            Top X / Last Y window. Disabled when no SQL connection is configured
+            or when nothing is selected. Sequential under the hood so the SQL
+            pool isn't stampeded. */}
+        <div className="rounded-lg p-[12px_14px] mb-4 flex items-center gap-3 flex-wrap"
+          style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <Play size={13} style={{ color: '#2563EB' }} />
+            <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#0F172A' }}>Bulk Run</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <label style={{ fontSize: '10.5px', color: '#64748B', fontWeight: 600 }}>Top</label>
+            <select value={bulkTopN} onChange={(e) => setBulkTopN(parseInt(e.target.value, 10))}
+              disabled={bulkRunning.active}
+              style={{ fontSize: '10.5px', fontWeight: 600, color: '#475569', background: '#fff', border: '1px solid #E2E8F0', borderRadius: 4, padding: '2px 6px', cursor: bulkRunning.active ? 'not-allowed' : 'pointer' }}>
+              {[5, 10, 20, 50, 100].map((n) => (<option key={n} value={n}>{n}</option>))}
+              <option value={0}>All</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Clock size={11} style={{ color: '#94A3B8' }} />
+            <label style={{ fontSize: '10.5px', color: '#64748B', fontWeight: 600 }}>Last</label>
+            <select value={bulkDays} onChange={(e) => setBulkDays(parseInt(e.target.value, 10))}
+              disabled={bulkRunning.active}
+              style={{ fontSize: '10.5px', fontWeight: 600, color: '#475569', background: '#fff', border: '1px solid #E2E8F0', borderRadius: 4, padding: '2px 6px', cursor: bulkRunning.active ? 'not-allowed' : 'pointer' }}>
+              {WINDOW_OPTIONS.map((d) => (<option key={d} value={d}>{d} days</option>))}
+            </select>
+          </div>
+          <div className="flex-1" />
+          {bulkRunning.active && (
+            <span className="font-mono" style={{ fontSize: '10.5px', color: '#2563EB', fontWeight: 600 }}>
+              Running {bulkRunning.current}/{bulkRunning.total}…
+            </span>
+          )}
+          <button onClick={runAllSelected}
+            disabled={bulkRunning.active || selectedReports.length === 0 || !sqlConfig.enabled || !sqlConfig.server.trim()}
+            title={!sqlConfig.enabled || !sqlConfig.server.trim()
+              ? 'Enable + configure SQL Server above to run reports'
+              : selectedReports.length === 0
+                ? 'Select at least one report to run'
+                : 'Run every selected report sequentially'}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded font-semibold transition-all"
+            style={{
+              fontSize: '11px',
+              background: bulkRunning.active || selectedReports.length === 0 || !sqlConfig.enabled || !sqlConfig.server.trim() ? '#F1F5F9' : '#2563EB',
+              color:      bulkRunning.active || selectedReports.length === 0 || !sqlConfig.enabled || !sqlConfig.server.trim() ? '#94A3B8' : '#fff',
+              border: `1px solid ${bulkRunning.active || selectedReports.length === 0 || !sqlConfig.enabled || !sqlConfig.server.trim() ? '#E2E8F0' : '#1D4ED8'}`,
+              cursor: bulkRunning.active || selectedReports.length === 0 || !sqlConfig.enabled || !sqlConfig.server.trim() ? 'not-allowed' : 'pointer',
+              boxShadow: bulkRunning.active || selectedReports.length === 0 || !sqlConfig.enabled || !sqlConfig.server.trim() ? 'none' : '0 2px 8px rgba(37,99,235,0.3)',
+            }}>
+            {bulkRunning.active ? <Loader size={11} className="animate-spin" /> : <Play size={11} />}
+            {bulkRunning.active ? 'Running…' : `Run ${selectedReports.length} Selected`}
+          </button>
+        </div>
+
         <div className="space-y-3">
-          {REPORT_GROUPS.map(group => {
+          {REPORT_GROUPS.filter((g) => activeProducts.has(g.product)).map(group => {
             const inScope = activeProducts.has(group.product);
             const groupIds = group.reports.map(r => r.id);
             const selCount = groupIds.filter(id => selectedReports.includes(id)).length;
@@ -1189,28 +1640,25 @@ export function Step3DataCollectors({
                   <div style={{ borderTop: `1px solid ${inScope ? group.border : '#E2E8F0'}` }}>
                     {group.reports.map((report, idx) => {
                       const sel = selectedReports.includes(report.id);
+                      const defaultDays = report.defaultWindowDays ?? 30;
+                      const days = reportWindows[report.id] ?? defaultDays;
+                      const run = reportRuns[report.id];
+                      const isLast = idx === group.reports.length - 1;
                       return (
-                        <div key={report.id}
-                          className="flex items-center gap-3 px-4 py-2.5 cursor-pointer transition-all"
-                          style={{
-                            borderBottom: idx < group.reports.length - 1 ? '1px solid #F4F6FB' : 'none',
-                            background: sel ? `${group.color}06` : 'transparent',
-                          }}
-                          onClick={() => toggleReport(report.id)}
-                          onMouseEnter={e => { if (!sel) e.currentTarget.style.background = '#F8FAFF'; }}
-                          onMouseLeave={e => { if (!sel) e.currentTarget.style.background = 'transparent'; }}>
-                          <div className="w-4 h-4 rounded flex items-center justify-center flex-shrink-0"
-                            style={{ background: sel ? group.color : 'transparent', border: `2px solid ${sel ? group.color : '#CBD5E1'}` }}>
-                            {sel && <Check size={10} color="#fff" strokeWidth={3} />}
-                          </div>
-                          <span className="flex-1"
-                            style={{ fontSize: '11.5px', color: sel ? '#0F172A' : '#475569', fontWeight: sel ? 500 : 400 }}>
-                            {report.title}
-                          </span>
-                          <span className="font-mono flex-shrink-0" style={{ fontSize: '9px', color: '#CBD5E1' }}>
-                            {String(idx + 1).padStart(2, '0')}
-                          </span>
-                        </div>
+                        <ReportRow key={report.id}
+                          report={report}
+                          group={group}
+                          selected={sel}
+                          windowDays={days}
+                          runResult={run}
+                          isLast={isLast}
+                          onToggle={() => toggleReport(report.id)}
+                          onChangeWindow={(d) => setReportWindows((prev) => ({ ...prev, [report.id]: d }))}
+                          onRun={() => runReport(report.sqlKey, days)}
+                          onClear={() => setReportRuns((prev) => {
+                            const next = { ...prev }; delete next[report.id]; return next;
+                          })}
+                        />
                       );
                     })}
                   </div>
@@ -1220,6 +1668,167 @@ export function Step3DataCollectors({
           })}
         </div>
       </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── Report row — checkbox + title + per-row window selector + Run button.
+       When a run produces results, an expandable result preview appears below
+       the row. Per-row state lives in Dashboard so it survives wizard step
+       navigation; query results are intentionally NOT persisted. */
+const WINDOW_OPTIONS: number[] = [7, 14, 30, 60, 90, 100, 180, 365];
+
+function ReportRow({
+  report, group, selected, windowDays, runResult, isLast,
+  onToggle, onChangeWindow, onRun, onClear,
+}: {
+  report: ReportDef;
+  group: { color: string };
+  selected: boolean;
+  windowDays: number;
+  runResult: ReportRunResult | undefined;
+  isLast: boolean;
+  onToggle: () => void;
+  onChangeWindow: (days: number) => void;
+  onRun: () => void;
+  onClear: () => void;
+}) {
+  const running = runResult?.state === 'running';
+  const hasResult = runResult && (runResult.state === 'ok' || runResult.state === 'error');
+  return (
+    <div style={{ borderBottom: isLast ? 'none' : '1px solid #F4F6FB', background: selected ? `${group.color}06` : 'transparent' }}>
+      <div className="flex items-center gap-3 px-4 py-2.5 transition-all">
+        <button onClick={onToggle}
+          aria-label={selected ? `Deselect ${report.title}` : `Select ${report.title}`}
+          className="w-4 h-4 rounded flex items-center justify-center flex-shrink-0"
+          style={{ background: selected ? group.color : 'transparent', border: `2px solid ${selected ? group.color : '#CBD5E1'}`, cursor: 'pointer' }}>
+          {selected && <Check size={10} color="#fff" strokeWidth={3} />}
+        </button>
+        <span className="flex-1 cursor-pointer"
+          onClick={onToggle}
+          style={{ fontSize: '11.5px', color: selected ? '#0F172A' : '#475569', fontWeight: selected ? 500 : 400 }}>
+          {report.title}
+        </span>
+
+        {/* Window selector — hidden for fixed-window analyses */}
+        {!report.fixedWindow && (
+          <div className="flex items-center gap-1 flex-shrink-0">
+            <Clock size={11} style={{ color: '#94A3B8' }} />
+            <select value={windowDays} onChange={(e) => onChangeWindow(parseInt(e.target.value, 10))}
+              style={{ fontSize: '10.5px', fontWeight: 600, color: '#475569', background: '#fff', border: '1px solid #E2E8F0', borderRadius: 4, padding: '2px 5px', cursor: 'pointer' }}>
+              {WINDOW_OPTIONS.map((d) => (
+                <option key={d} value={d}>Last {d} days</option>
+              ))}
+            </select>
+          </div>
+        )}
+        {report.fixedWindow && (
+          <span style={{ fontSize: '10px', color: '#94A3B8', fontStyle: 'italic', flexShrink: 0, fontFamily: 'monospace' }}>
+            window: fixed (7 vs 100d)
+          </span>
+        )}
+
+        {/* Run button */}
+        <button onClick={onRun} disabled={running}
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded font-semibold transition-all flex-shrink-0"
+          style={{
+            fontSize: '10.5px',
+            background: running ? '#F1F5F9' : runResult?.state === 'ok' ? '#DCFCE7' : runResult?.state === 'error' ? '#FEF2F2' : '#EFF6FF',
+            color: running ? '#94A3B8' : runResult?.state === 'ok' ? '#16A34A' : runResult?.state === 'error' ? '#DC2626' : '#2563EB',
+            border: `1px solid ${running ? '#E2E8F0' : runResult?.state === 'ok' ? '#BBF7D0' : runResult?.state === 'error' ? '#FECACA' : '#BFDBFE'}`,
+            cursor: running ? 'not-allowed' : 'pointer',
+          }}
+          title="Run this query against the connected SQL Server">
+          {running ? <Loader size={10} className="animate-spin" /> : <Play size={10} />}
+          {running ? 'Running…' : runResult?.state === 'ok' ? 'Re-run' : runResult?.state === 'error' ? 'Retry' : 'Run'}
+        </button>
+      </div>
+
+      {hasResult && runResult && (
+        <ReportResultPreview result={runResult} accent={group.color} onClear={onClear} />
+      )}
+    </div>
+  );
+}
+
+/* Inline expandable preview — small table for SUCCESS, error pill for ERROR.
+   Renders first 10 rows; the rest are loaded into runtime state but
+   omitted from the preview to keep the page scrollable. */
+function ReportResultPreview({ result, accent, onClear }: { result: ReportRunResult; accent: string; onClear: () => void }) {
+  if (result.state === 'error') {
+    return (
+      <div className="mx-4 mb-3 px-3 py-2 rounded-lg flex items-start gap-2"
+        style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}>
+        <XCircle size={13} style={{ color: '#DC2626', marginTop: 1, flexShrink: 0 }} />
+        <div style={{ fontSize: '11px', color: '#7F1D1D', lineHeight: 1.55, flex: 1 }}>
+          <strong>Query failed</strong> · last {result.windowDays}d
+          <div style={{ marginTop: 2, fontFamily: 'monospace', fontSize: '10.5px' }}>{result.error}</div>
+        </div>
+        <button onClick={onClear} aria-label="Dismiss"
+          style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#94A3B8', padding: 2 }}>
+          <XIcon size={11} />
+        </button>
+      </div>
+    );
+  }
+  if (result.state !== 'ok' || !result.rows) return null;
+  const rows = result.rows;
+  const columns = rows[0] ? Object.keys(rows[0]) : [];
+  const preview = rows.slice(0, 10);
+  const remainder = rows.length - preview.length;
+  return (
+    <div className="mx-4 mb-3 rounded-lg overflow-hidden"
+      style={{ background: '#FFFFFF', border: '1px solid #E2E8F0' }}>
+      <div className="flex items-center justify-between px-3 py-1.5"
+        style={{ background: `${accent}08`, borderBottom: '1px solid #E2E8F0' }}>
+        <div className="flex items-center gap-2">
+          <CheckCircle2 size={11} style={{ color: '#16A34A' }} />
+          <span style={{ fontSize: '10.5px', fontWeight: 700, color: '#15803D' }}>{result.rowCount ?? rows.length} rows</span>
+          <span style={{ fontSize: '10px', color: '#94A3B8', fontFamily: 'monospace' }}>· {result.latencyMs} ms · last {result.windowDays}d</span>
+        </div>
+        <button onClick={onClear} title="Clear result"
+          style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#94A3B8', padding: 2 }}>
+          <XIcon size={11} />
+        </button>
+      </div>
+      {rows.length === 0 ? (
+        <div style={{ fontSize: '11px', color: '#94A3B8', textAlign: 'center', padding: '12px 0', fontStyle: 'italic' }}>
+          Query ran successfully but returned no rows.
+        </div>
+      ) : (
+        <div style={{ maxHeight: 240, overflowY: 'auto', overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '10.5px', fontFamily: "'JetBrains Mono', monospace" }}>
+            <thead>
+              <tr style={{ background: '#F8FAFC', position: 'sticky', top: 0 }}>
+                {columns.map((c) => (
+                  <th key={c} style={{ textAlign: 'left', padding: '5px 10px', fontWeight: 700, color: '#64748B', fontSize: '9.5px', letterSpacing: '0.05em', textTransform: 'uppercase', borderBottom: '1px solid #E2E8F0', whiteSpace: 'nowrap' }}>{c}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {preview.map((row, i) => (
+                <tr key={i} style={{ borderBottom: i < preview.length - 1 ? '1px solid #F1F5F9' : 'none' }}>
+                  {columns.map((c) => {
+                    const v = row[c];
+                    const display = v == null ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v);
+                    return (
+                      <td key={c} style={{ padding: '4px 10px', color: '#0F172A', whiteSpace: 'nowrap', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis' }} title={display}>
+                        {display}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {remainder > 0 && (
+            <div style={{ fontSize: '10px', color: '#94A3B8', textAlign: 'center', padding: '6px 0', borderTop: '1px dashed #E2E8F0', background: '#FAFCFF', fontStyle: 'italic' }}>
+              + {remainder} more rows (held in runtime state)
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

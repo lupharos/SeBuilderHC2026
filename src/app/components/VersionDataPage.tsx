@@ -1,5 +1,5 @@
-import { useState, useRef } from 'react';
-import { Plus, Trash2, Pencil, Check, X, RotateCcw, Download, Upload, AlertCircle } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { Plus, Trash2, Pencil, Check, X, Download, Upload, AlertCircle, Save, FileJson, Layers, FileCode, ExternalLink } from 'lucide-react';
 import {
   ALL_CATEGORIES,
   SOFTWARE_CATEGORIES,
@@ -129,10 +129,32 @@ export function VersionDataPage({ data, onChange }: VersionDataPageProps) {
   const [importImpact, setImportImpact] = useState<MergeImpact[]>([]);
   const [importError, setImportError] = useState<string | null>(null);
   const [importFileName, setImportFileName] = useState<string | null>(null);
+  const jsonInputRef = useRef<HTMLInputElement>(null);
+  /* JSON import + saved-flash state — mirrors the Endpoint Matrix page so
+     the two global-catalogue pages feel identical. */
+  const [jsonImportError, setJsonImportError] = useState<string | null>(null);
+  const [jsonImportInfo, setJsonImportInfo] = useState<string | null>(null);
+  const [savedFlash, setSavedFlash] = useState(false);
+  const firstRender = useRef(true);
+  useEffect(() => {
+    if (firstRender.current) { firstRender.current = false; return; }
+    setSavedFlash(true);
+    const t = setTimeout(() => setSavedFlash(false), 1500);
+    return () => clearTimeout(t);
+  }, [data]);
 
   const isSoftware = isSoftwareCategory(activeCategory);
   const columns = isSoftware ? SOFTWARE_COLUMNS : HARDWARE_COLUMNS;
   const rows = data[activeCategory] as AnyEntry[];
+
+  /* Catalogue-wide empty check: when no category holds any entry, the page
+     renders an Import-HTML CTA instead of the tabs+table chrome, mirroring
+     the OS / Browser Support Matrix empty state. */
+  const totalEntries = ALL_CATEGORIES.reduce(
+    (sum, k) => sum + (data[k] as AnyEntry[]).length,
+    0,
+  );
+  const allEmpty = totalEntries === 0;
 
   function startEdit(index: number) {
     setEditingIndex(index);
@@ -173,22 +195,91 @@ export function VersionDataPage({ data, onChange }: VersionDataPageProps) {
     setEditBuffer({ ...editBuffer, [col]: value === '' ? null : value });
   }
 
-  function handleReset() {
+  function handleClearAll() {
     if (!confirmReset) { setConfirmReset(true); return; }
-    onChange(INITIAL_VERSION_DATA);
+    /* Wipes every category to an empty array — matches the OS / Browser
+       Support Matrix page's "Clear all" semantics. The bundled defaults in
+       INITIAL_VERSION_DATA are NOT re-applied; the operator can re-import
+       from HTML or JSON to repopulate. */
+    const empty = ALL_CATEGORIES.reduce(
+      (acc, k) => ({ ...acc, [k]: [] }),
+      {} as VersionDataStore,
+    );
+    onChange(empty);
     setConfirmReset(false);
     setEditingIndex(null);
     setEditBuffer(null);
   }
 
   function exportJSON() {
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const payload = {
+      _format: 'forcepoint-hc-version-data',
+      _version: 1,
+      _exportedAt: new Date().toISOString(),
+      data,
+    };
+    const stamp = new Date().toISOString().slice(0, 10);
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'VersiyonKontrol.json';
+    a.download = `product-lifecycle-${stamp}.json`;
+    document.body.appendChild(a);
     a.click();
+    a.remove();
     URL.revokeObjectURL(url);
+  }
+
+  function manualSave() {
+    /* useLocalStorage upstream auto-persists every edit — this is a visible
+       confirmation gesture for the operator. */
+    setSavedFlash(true);
+    setTimeout(() => setSavedFlash(false), 1500);
+  }
+
+  function triggerJSONImport() {
+    setJsonImportError(null);
+    setJsonImportInfo(null);
+    jsonInputRef.current?.click();
+  }
+
+  async function handleJSONFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setJsonImportError(null);
+    setJsonImportInfo(null);
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      /* Accept either a bare VersionDataStore or our wrapped export envelope.
+         Pre-export files (`exportJSON` v0) wrote the bare store, so unwrap is
+         best-effort: if `data` exists on the envelope, use that; otherwise
+         treat the payload as the store directly. */
+      const candidate: unknown = parsed && typeof parsed === 'object' && 'data' in parsed
+        ? (parsed as { data: unknown }).data
+        : parsed;
+      if (!candidate || typeof candidate !== 'object') {
+        throw new Error('JSON payload is not an object.');
+      }
+      const c = candidate as Partial<VersionDataStore>;
+      /* Build a normalised store from whichever categories the file provided.
+         Unknown keys are ignored. Missing arrays default to empty. */
+      const normalized: VersionDataStore = { ...INITIAL_VERSION_DATA };
+      for (const cat of ALL_CATEGORIES) {
+        const v = c[cat];
+        if (v === undefined) { normalized[cat] = [] as never; continue; }
+        if (!Array.isArray(v)) {
+          throw new Error(`Field "${cat}" must be an array of entries.`);
+        }
+        normalized[cat] = v as never;
+      }
+      onChange(normalized);
+      const total = ALL_CATEGORIES.reduce((s, k) => s + (normalized[k] as AnyEntry[]).length, 0);
+      setJsonImportInfo(`Loaded ${total} ${total === 1 ? 'entry' : 'entries'} from ${file.name}.`);
+    } catch (err) {
+      setJsonImportError(`Could not import JSON: ${(err as Error).message}`);
+    }
   }
 
   function triggerImport() {
@@ -259,7 +350,9 @@ export function VersionDataPage({ data, onChange }: VersionDataPageProps) {
 
   return (
     <div className="flex h-full overflow-hidden" style={{ background: '#F4F7FB' }}>
-      {/* Left: category tabs */}
+      {/* Left: category tabs — hidden while the catalogue is empty so the
+          Empty-state CTA stays the focus. */}
+      {!allEmpty && (
       <div
         className="flex flex-col flex-shrink-0 overflow-y-auto py-5 px-3 gap-1"
         style={{
@@ -317,21 +410,30 @@ export function VersionDataPage({ data, onChange }: VersionDataPageProps) {
           </div>
         ))}
       </div>
+      )}
 
       {/* Right: table area */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-        {/* Header bar */}
-        <div
-          className="flex items-center justify-between px-6 py-3.5 flex-shrink-0"
-          style={{ background: '#FFFFFF', borderBottom: '1px solid #EEF0F5' }}
-        >
-          <div>
-            <div style={{ fontSize: '15px', fontWeight: 700, color: '#0F172A' }}>{activeCategory}</div>
-            <div style={{ fontSize: '11px', color: '#94A3B8', marginTop: '1px' }}>
-              {rows.length} {rows.length === 1 ? 'entry' : 'entries'} &middot; click a row to edit inline
+        {/* Header bar — mirrors the OS / Browser Support Matrix page so the
+            two global-catalogue pages feel coherent. Add Row is the primary
+            (blue) action in the leading position. */}
+        <div className="flex items-center justify-between px-8 py-5 flex-shrink-0"
+          style={{ background: '#FFFFFF', borderBottom: '1px solid #EEF0F5' }}>
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0"
+              style={{ background: 'linear-gradient(135deg,#2563EB,#7C3AED)' }}>
+              <Layers size={20} color="#fff" />
+            </div>
+            <div className="min-w-0">
+              <div style={{ fontSize: '17px', fontWeight: 700, color: '#0F2952', letterSpacing: '-0.01em' }}>
+                Product Lifecycle
+              </div>
+              <div style={{ fontSize: '11.5px', color: '#64748B', marginTop: '2px' }} className="truncate">
+                {activeCategory} &middot; {rows.length} {rows.length === 1 ? 'entry' : 'entries'} &middot; click a row to edit inline
+              </div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap justify-end">
             <input
               ref={importInputRef}
               type="file"
@@ -339,51 +441,117 @@ export function VersionDataPage({ data, onChange }: VersionDataPageProps) {
               style={{ display: 'none' }}
               onChange={handleImportFile}
             />
-            <button
-              onClick={triggerImport}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all"
-              style={{ fontSize: '11.5px', fontWeight: 600, color: '#0EA5E9', background: '#F0F9FF', border: '1px solid #BAE6FD' }}
-              title="Import from a saved Forcepoint Product Support Lifecycle HTML page"
-            >
-              <Upload size={13} />
-              Import from Forcepoint HTML
+            <input
+              ref={jsonInputRef}
+              type="file"
+              accept=".json,application/json"
+              style={{ display: 'none' }}
+              onChange={handleJSONFile}
+            />
+            {savedFlash && (
+              <span className="flex items-center gap-1.5" style={{ fontSize: '11px', fontWeight: 600, color: '#16A34A', background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: '5px', padding: '4px 9px' }}>
+                <Check size={11} /> Saved
+              </span>
+            )}
+
+            <button onClick={addRow}
+              className="flex items-center gap-1.5 rounded-lg font-semibold transition-all"
+              style={{ fontSize: '12px', padding: '7px 13px', background: '#0EA5E9', color: '#fff', border: '1px solid #0284C7', cursor: 'pointer' }}
+              title="Add a new entry to this category">
+              <Plus size={13} /> Add Row
             </button>
-            <button
-              onClick={exportJSON}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all"
-              style={{ fontSize: '11.5px', fontWeight: 600, color: '#475569', background: '#F1F5F9', border: '1px solid #E2E8F0' }}
-              title="Export all data as JSON"
-            >
-              <Download size={13} />
-              Export JSON
+
+            {!allEmpty && (
+              <button onClick={manualSave}
+                className="flex items-center gap-1.5 rounded-lg font-semibold transition-all"
+                style={{ fontSize: '12px', padding: '7px 13px', background: '#FFFFFF', color: '#0F2952', border: '1px solid #CBD5E1', cursor: 'pointer' }}
+                title="Confirm save — catalogue is auto-persisted to localStorage on every edit">
+                <Save size={12} /> Save
+              </button>
+            )}
+
+            {!allEmpty && (
+              <button onClick={exportJSON}
+                className="flex items-center gap-1.5 rounded-lg font-semibold transition-all"
+                style={{ fontSize: '12px', padding: '7px 13px', background: '#FFFFFF', color: '#0F2952', border: '1px solid #CBD5E1', cursor: 'pointer' }}
+                title="Download the current catalogue as JSON">
+                <Download size={12} /> Export JSON
+              </button>
+            )}
+
+            <button onClick={triggerJSONImport}
+              className="flex items-center gap-1.5 rounded-lg font-semibold transition-all"
+              style={{ fontSize: '12px', padding: '7px 13px', background: '#FFFFFF', color: '#0F2952', border: '1px solid #CBD5E1', cursor: 'pointer' }}
+              title="Load a previously-exported lifecycle JSON">
+              <FileJson size={12} /> Import JSON
             </button>
-            <button
-              onClick={handleReset}
-              onBlur={() => setConfirmReset(false)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all"
-              style={{
-                fontSize: '11.5px', fontWeight: 600,
-                color: confirmReset ? '#FFFFFF' : '#EF4444',
-                background: confirmReset ? '#EF4444' : '#FEF2F2',
-                border: `1px solid ${confirmReset ? '#EF4444' : '#FECACA'}`,
-              }}
-              title="Reset all data to defaults"
-            >
-              <RotateCcw size={13} />
-              {confirmReset ? 'Confirm Reset' : 'Reset All'}
+
+            <button onClick={triggerImport}
+              className="flex items-center gap-1.5 rounded-lg font-semibold transition-all"
+              style={{ fontSize: '12px', padding: '7px 13px', background: '#FFFFFF', color: '#0F2952', border: '1px solid #CBD5E1', cursor: 'pointer' }}
+              title="Import from a saved Forcepoint Product Support Lifecycle HTML page">
+              <Upload size={12} /> Import HTML
             </button>
-            <button
-              onClick={addRow}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all hover:opacity-90"
-              style={{ fontSize: '11.5px', fontWeight: 600, color: '#FFFFFF', background: 'linear-gradient(135deg,#2563EB,#7C3AED)', border: 'none' }}
-            >
-              <Plus size={13} />
-              Add Row
-            </button>
+
+            {!allEmpty && (
+              <button onClick={handleClearAll}
+                onBlur={() => setConfirmReset(false)}
+                className="flex items-center gap-1.5 rounded-lg font-semibold transition-all"
+                style={{
+                  fontSize: '12px', padding: '7px 13px',
+                  background: confirmReset ? '#FEF2F2' : '#FFFFFF',
+                  color: confirmReset ? '#A30080' : '#475569',
+                  border: `1px solid ${confirmReset ? '#FECACA' : '#CBD5E1'}`,
+                  cursor: 'pointer',
+                }}
+                title="Clear every category — leaves an empty catalogue">
+                <Trash2 size={12} /> {confirmReset ? 'Click again to clear' : 'Clear all'}
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Table */}
+        {/* Empty state — shown when no category holds any entry. Mirrors the
+            OS / Browser Support Matrix page's empty CTA so the two global
+            catalogue pages feel coherent. */}
+        {allEmpty && (
+          <div className="flex-1 overflow-auto px-8 py-8">
+            <div className="rounded-xl flex flex-col items-center justify-center text-center px-8 py-16 max-w-[860px] mx-auto"
+              style={{ background: '#FFFFFF', border: '1px dashed #CBD5E1' }}>
+              <div className="w-14 h-14 rounded-2xl flex items-center justify-center mb-4"
+                style={{ background: 'linear-gradient(135deg,#DBEAFE,#C7D2FE)' }}>
+                <FileCode size={28} color="#2563EB" />
+              </div>
+              <div style={{ fontSize: '17px', fontWeight: 700, color: '#0F2952', marginBottom: '6px' }}>
+                No product lifecycle data imported yet
+              </div>
+              <div style={{ fontSize: '13px', color: '#64748B', maxWidth: '560px', lineHeight: 1.6 }}>
+                Import the official Forcepoint Product Support Lifecycle HTML page to populate version, EoSale,
+                EoM, EoSupport, and migration-path data for every Forcepoint product line. The wizard's
+                Version &amp; EoS step and the HC report's lifecycle tables will reference this catalogue once
+                it's populated — until then they show as empty.
+              </div>
+              <button onClick={triggerImport}
+                className="flex items-center gap-2 mt-6 rounded-lg font-semibold transition-all"
+                style={{ fontSize: '13px', padding: '10px 18px', background: '#0EA5E9', color: '#fff', border: '1px solid #0284C7', cursor: 'pointer', boxShadow: '0 2px 8px rgba(14,165,233,0.25)' }}>
+                <Upload size={14} /> Import HTML
+              </button>
+              <a
+                href="https://support.forcepoint.com/s/productsupportlifecycle"
+                target="_blank" rel="noreferrer"
+                className="flex items-center gap-1.5 mt-3"
+                style={{ fontSize: '11.5px', color: '#0284C7', textDecoration: 'none' }}>
+                <ExternalLink size={11} /> Source: Forcepoint Product Support Lifecycle
+              </a>
+              <div style={{ fontSize: '10.5px', color: '#94A3B8', marginTop: 14, lineHeight: 1.5 }}>
+                Alternatively, use <strong>Import JSON</strong> in the toolbar to load a previously-exported catalogue.
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Table — only when at least one category has entries. */}
+        {!allEmpty && (
         <div ref={tableRef} className="flex-1 overflow-auto px-6 py-4">
           <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
             <thead>
@@ -513,19 +681,27 @@ export function VersionDataPage({ data, onChange }: VersionDataPageProps) {
                           </button>
                         </div>
                       ) : (
-                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        /* Edit + Delete are now visible on every row by default —
+                           the previous opacity-0 / group-hover:opacity-100 wrapper
+                           hid them entirely on touch devices and was easy to miss
+                           on desktop too. */
+                        <div className="flex items-center gap-1">
                           <button
                             onClick={(e) => { e.stopPropagation(); startEdit(ri); }}
-                            className="w-6 h-6 rounded-md flex items-center justify-center"
-                            style={{ background: '#EFF6FF', color: '#2563EB', border: '1px solid #BFDBFE' }}
+                            className="w-6 h-6 rounded-md flex items-center justify-center transition-all"
+                            style={{ background: '#EFF6FF', color: '#2563EB', border: '1px solid #BFDBFE', cursor: 'pointer' }}
+                            onMouseEnter={(e) => { e.currentTarget.style.background = '#DBEAFE'; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.background = '#EFF6FF'; }}
                             title={`Edit ${keyVal}`}
                           >
                             <Pencil size={11} />
                           </button>
                           <button
                             onClick={(e) => { e.stopPropagation(); deleteRow(ri); }}
-                            className="w-6 h-6 rounded-md flex items-center justify-center"
-                            style={{ background: '#FEF2F2', color: '#EF4444', border: '1px solid #FECACA' }}
+                            className="w-6 h-6 rounded-md flex items-center justify-center transition-all"
+                            style={{ background: '#FEF2F2', color: '#EF4444', border: '1px solid #FECACA', cursor: 'pointer' }}
+                            onMouseEnter={(e) => { e.currentTarget.style.background = '#FEE2E2'; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.background = '#FEF2F2'; }}
                             title={`Delete ${keyVal}`}
                           >
                             <Trash2 size={11} />
@@ -552,8 +728,10 @@ export function VersionDataPage({ data, onChange }: VersionDataPageProps) {
             </div>
           )}
         </div>
+        )}
 
-        {/* Legend */}
+        {/* Legend — hidden when the catalogue is empty so the empty-state CTA isn't visually competing. */}
+        {!allEmpty && (
         <div
           className="flex items-center gap-4 px-6 py-2.5 flex-shrink-0"
           style={{ borderTop: '1px solid #EEF0F5', background: '#FFFFFF' }}
@@ -582,6 +760,7 @@ export function VersionDataPage({ data, onChange }: VersionDataPageProps) {
             Click any row to edit · Dates: YYYY-MM-DD
           </span>
         </div>
+        )}
       </div>
 
       {importError && (
@@ -611,6 +790,34 @@ export function VersionDataPage({ data, onChange }: VersionDataPageProps) {
             onClick={() => setImportError(null)}
             style={{ background: 'transparent', border: 'none', color: '#991B1B', cursor: 'pointer', padding: 0 }}
           >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
+      {jsonImportError && (
+        <div style={{ position: 'fixed', top: '20px', right: '20px', zIndex: 1000, background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: '8px', padding: '12px 16px', display: 'flex', alignItems: 'flex-start', gap: '10px', maxWidth: '420px', boxShadow: '0 8px 24px rgba(0,0,0,0.08)' }}>
+          <AlertCircle size={16} style={{ color: '#991B1B', marginTop: '1px', flexShrink: 0 }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: '12px', fontWeight: 600, color: '#991B1B', marginBottom: '2px' }}>JSON import failed</div>
+            <div style={{ fontSize: '11.5px', color: '#7F1D1D' }}>{jsonImportError}</div>
+          </div>
+          <button onClick={() => setJsonImportError(null)}
+            style={{ background: 'transparent', border: 'none', color: '#991B1B', cursor: 'pointer', padding: 0 }}>
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
+      {jsonImportInfo && (
+        <div style={{ position: 'fixed', top: '20px', right: '20px', zIndex: 1000, background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: '8px', padding: '12px 16px', display: 'flex', alignItems: 'flex-start', gap: '10px', maxWidth: '420px', boxShadow: '0 8px 24px rgba(0,0,0,0.08)' }}>
+          <Check size={16} style={{ color: '#16A34A', marginTop: '1px', flexShrink: 0 }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: '12px', fontWeight: 600, color: '#15803D', marginBottom: '2px' }}>JSON imported</div>
+            <div style={{ fontSize: '11.5px', color: '#166534' }}>{jsonImportInfo}</div>
+          </div>
+          <button onClick={() => setJsonImportInfo(null)}
+            style={{ background: 'transparent', border: 'none', color: '#15803D', cursor: 'pointer', padding: 0 }}>
             <X size={14} />
           </button>
         </div>

@@ -1,4 +1,5 @@
 import { ChevronLeft, ArrowRight, Save, Check, CheckCircle2, AlertCircle, X } from 'lucide-react';
+import { isStepSkipped } from '../constants/steps';
 
 interface BottomPanelProps {
   currentStep: number;
@@ -11,6 +12,7 @@ interface BottomPanelProps {
   onPrev: () => void;
   onNext: () => void;
   blockReason?: string;
+  selectedProducts: Record<string, boolean>;
 }
 
 export function BottomPanel({
@@ -24,10 +26,18 @@ export function BottomPanel({
   onPrev,
   onNext,
   blockReason,
+  selectedProducts,
 }: BottomPanelProps) {
-  const progress = Math.round(((currentStep - 1) / (totalSteps - 1)) * 100);
-  const isFirst = currentStep === 1;
-  const isLast = currentStep === totalSteps;
+  /* Dots reflect visible-only steps so a deselected product doesn't show as
+     an inert grey dot on the progress strip. */
+  const visibleSteps = Array.from({ length: totalSteps }, (_, i) => i + 1)
+    .filter((s) => !isStepSkipped(s, selectedProducts));
+  const visibleIdx = visibleSteps.indexOf(currentStep);
+  const progress = visibleSteps.length > 1
+    ? Math.round((Math.max(0, visibleIdx) / (visibleSteps.length - 1)) * 100)
+    : 100;
+  const isFirst = visibleIdx === 0;
+  const isLast = visibleIdx === visibleSteps.length - 1;
   const isBlocked = !!blockReason && !isLast;
 
   return (
@@ -87,9 +97,10 @@ export function BottomPanel({
           </div>
         </div>
 
-        {/* Center: dots + percentage */}
+        {/* Center: dots + percentage — driven by visibleSteps so skipped
+            steps don't leave grey gaps on the strip. */}
         <div className="flex-1 flex items-center justify-center gap-1.5">
-          {Array.from({ length: totalSteps }, (_, i) => i + 1).map((s) => (
+          {visibleSteps.map((s) => (
             <div
               key={s}
               className="rounded-full transition-all duration-300"

@@ -12,4 +12,5 @@ export interface CheckData {
   enhancementsCount: number;
   licenseGapCount: number;
   dlpBundleCount: number;
+  versionUpgradeCount: number;
 }

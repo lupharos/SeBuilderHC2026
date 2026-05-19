@@ -1,10 +1,15 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   FolderOpen, Folder, Trash2, ArrowUpRight, Search, Clock,
   CheckCircle2, ChevronRight, BarChart2, Layers, Plus,
+  Download, Upload, AlertCircle, X, ShieldCheck,
 } from 'lucide-react';
 import type { HCSession } from './Dashboard';
 import { STEP_COLORS, STEP_LABELS, TOTAL_STEPS } from '../constants/steps';
+import {
+  downloadBackup, parseBackup, summarize, applyBackup,
+  type SystemBackup, type BackupSummary,
+} from '../utils/systemBackup';
 
 interface SessionsPageProps {
   sessions: HCSession[];
@@ -27,13 +32,62 @@ export function SessionsPage({
   const [search, setSearch] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
+  /* System backup state — Export downloads immediately; Import shows a
+     summary modal so the operator confirms before the destructive restore. */
+  const backupInputRef = useRef<HTMLInputElement>(null);
+  const [restorePreview, setRestorePreview] = useState<{ backup: SystemBackup; summary: BackupSummary; fileName: string } | null>(null);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
+
+  function handleExportBackup() {
+    try {
+      downloadBackup();
+    } catch (err) {
+      setRestoreError(`Backup export failed: ${(err as Error).message}`);
+    }
+  }
+
+  function triggerRestore() {
+    setRestoreError(null);
+    backupInputRef.current?.click();
+  }
+
+  async function handleBackupFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setRestoreError(null);
+    try {
+      const text = await file.text();
+      const backup = parseBackup(text);
+      setRestorePreview({ backup, summary: summarize(backup), fileName: file.name });
+    } catch (err) {
+      setRestoreError((err as Error).message);
+    }
+  }
+
+  function confirmRestore() {
+    if (!restorePreview) return;
+    try {
+      applyBackup(restorePreview.backup);
+      /* React state mirrors localStorage via useLocalStorage hooks, which
+         only read on mount. A page reload is the cleanest way to re-hydrate
+         the whole tree from the restored payload. */
+      window.location.reload();
+    } catch (err) {
+      setRestoreError(`Restore failed: ${(err as Error).message}`);
+      setRestorePreview(null);
+    }
+  }
+
   const filtered = sessions.filter(
     (s) =>
       s.customerName.toLowerCase().includes(search.toLowerCase()) ||
       s.forcepointId.toLowerCase().includes(search.toLowerCase()),
   );
 
-  const completedCount = sessions.filter((s) => s.currentStep === TOTAL_STEPS).length;
+  /* Completed = operator clicked Done on the last step. Reaching the last
+     step without clicking Done still counts as in-progress. */
+  const completedCount = sessions.filter((s) => !!s.completedAt).length;
   const inProgressCount = sessions.length - completedCount;
   const avgProgress = sessions.length
     ? Math.round(sessions.reduce((a, s) => a + ((s.currentStep - 1) / (TOTAL_STEPS - 1)) * 100, 0) / sessions.length)
@@ -70,6 +124,31 @@ export function SessionsPage({
         </div>
 
         <div className="flex items-center gap-3">
+          <input
+            ref={backupInputRef}
+            type="file"
+            accept=".json,application/json"
+            style={{ display: 'none' }}
+            onChange={handleBackupFile}
+          />
+          <button
+            onClick={handleExportBackup}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl font-semibold transition-all"
+            style={{ fontSize: '12px', color: '#0F2952', background: '#FFFFFF', border: '1px solid #CBD5E1', cursor: 'pointer' }}
+            title="Download a full backup of sessions, templates, and every catalogue (hc_* localStorage keys)"
+          >
+            <Download size={13} />
+            Export Backup
+          </button>
+          <button
+            onClick={triggerRestore}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl font-semibold transition-all"
+            style={{ fontSize: '12px', color: '#0F2952', background: '#FFFFFF', border: '1px solid #CBD5E1', cursor: 'pointer' }}
+            title="Restore from a previously-exported backup JSON. Replaces all current HC data."
+          >
+            <Upload size={13} />
+            Import Backup
+          </button>
           <button
             onClick={onNewSession}
             className="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-white transition-all hover:scale-[1.02]"
@@ -285,11 +364,22 @@ export function SessionsPage({
                       {initials}
                     </div>
                     <div className="min-w-0">
-                      <div
-                        className="truncate"
-                        style={{ fontSize: '13px', fontWeight: 600, color: isActive ? '#2563EB' : '#0F172A' }}
-                      >
-                        {session.customerName || 'Unnamed Session'}
+                      <div className="flex items-center gap-1.5">
+                        <div
+                          className="truncate"
+                          style={{ fontSize: '13px', fontWeight: 600, color: isActive ? '#2563EB' : '#0F172A' }}
+                        >
+                          {session.customerName || 'Unnamed Session'}
+                        </div>
+                        {session.completedAt && (
+                          <span
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded flex-shrink-0"
+                            title={`Marked complete on ${formatDate(session.completedAt)}`}
+                            style={{ fontSize: '8.5px', fontWeight: 800, color: '#16A34A', background: '#F0FDF4', border: '1px solid #BBF7D0', letterSpacing: '0.06em' }}
+                          >
+                            <CheckCircle2 size={9} strokeWidth={3} /> COMPLETED
+                          </span>
+                        )}
                       </div>
                       {isActive && (
                         <div style={{ fontSize: '9.5px', color: '#2563EB', fontWeight: 600 }}>
@@ -376,6 +466,78 @@ export function SessionsPage({
           </div>
         )}
       </div>
+
+      {/* Restore-error toast */}
+      {restoreError && !restorePreview && (
+        <div style={{ position: 'fixed', top: 20, right: 20, zIndex: 1000, background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 8, padding: '12px 16px', display: 'flex', alignItems: 'flex-start', gap: 10, maxWidth: 460, boxShadow: '0 8px 24px rgba(0,0,0,0.1)' }}>
+          <AlertCircle size={16} style={{ color: '#991B1B', marginTop: 1, flexShrink: 0 }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: '#991B1B', marginBottom: 2 }}>Backup restore failed</div>
+            <div style={{ fontSize: 11.5, color: '#7F1D1D' }}>{restoreError}</div>
+          </div>
+          <button onClick={() => setRestoreError(null)}
+            style={{ background: 'transparent', border: 'none', color: '#991B1B', cursor: 'pointer', padding: 0 }}>
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* Restore confirmation modal */}
+      {restorePreview && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(15,41,82,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+          <div style={{ background: '#FFFFFF', borderRadius: 14, maxWidth: 540, width: '100%', boxShadow: '0 24px 60px rgba(0,0,0,0.25)', overflow: 'hidden' }}>
+            <div style={{ padding: '18px 22px', borderBottom: '1px solid #EEF0F5', display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ width: 36, height: 36, borderRadius: 10, background: 'linear-gradient(135deg,#FBBF24,#F59E0B)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <ShieldCheck size={18} color="#fff" />
+              </div>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: '#0F2952' }}>Restore from backup</div>
+                <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2, fontFamily: 'monospace' }}>{restorePreview.fileName}</div>
+              </div>
+            </div>
+            <div style={{ padding: '16px 22px' }}>
+              <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderLeft: '3px solid #F59E0B', borderRadius: 6, padding: '10px 12px', marginBottom: 14, fontSize: 11.5, color: '#92400E', lineHeight: 1.55 }}>
+                <strong>Heads up:</strong> Restore is destructive. Every saved session, template, certificate, matrix, and catalogue currently in this browser will be replaced with the backup's contents. The page will reload once the restore completes.
+              </div>
+
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Backup contents</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                <SummaryTile label="Sessions"              value={restorePreview.summary.sessionCount} />
+                <SummaryTile label="Templates"             value={restorePreview.summary.templateCount} />
+                <SummaryTile label="Version Upgrades"      value={restorePreview.summary.versionUpgradesCount} />
+                <SummaryTile label="Certificates"          value={restorePreview.summary.certificatesCount} />
+                <SummaryTile label="DLP Telemetry Files"   value={restorePreview.summary.dlpBundlesCount} />
+                <SummaryTile label="Compliance Frameworks" value={restorePreview.summary.complianceFrameworksCount} />
+                <SummaryTile label="OS / Browser Matrix"   value={restorePreview.summary.hasMatrix ? 'Yes' : '—'} />
+                <SummaryTile label="Product Lifecycle"     value={restorePreview.summary.hasVersionData ? 'Yes' : '—'} />
+              </div>
+
+              <div style={{ marginTop: 12, fontSize: 10.5, color: '#94A3B8', fontFamily: 'monospace' }}>
+                {restorePreview.summary.keyCount} hc_* keys total · exported {restorePreview.summary.exportedAt ? new Date(restorePreview.summary.exportedAt).toLocaleString('en-GB') : 'unknown'}
+              </div>
+            </div>
+            <div style={{ padding: '12px 22px', borderTop: '1px solid #EEF0F5', display: 'flex', justifyContent: 'flex-end', gap: 8, background: '#F8FAFC' }}>
+              <button onClick={() => setRestorePreview(null)}
+                style={{ fontSize: 12, fontWeight: 600, padding: '8px 14px', background: '#FFFFFF', color: '#475569', border: '1px solid #CBD5E1', borderRadius: 8, cursor: 'pointer' }}>
+                Cancel
+              </button>
+              <button onClick={confirmRestore}
+                style={{ fontSize: 12, fontWeight: 700, padding: '8px 14px', background: '#F59E0B', color: '#fff', border: '1px solid #D97706', borderRadius: 8, cursor: 'pointer' }}>
+                Replace all data &amp; restore
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SummaryTile({ label, value }: { label: string; value: number | string }) {
+  return (
+    <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 6, padding: '8px 10px' }}>
+      <div style={{ fontSize: 9, fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</div>
+      <div style={{ fontSize: 15, fontWeight: 700, color: '#0F2952', fontFamily: 'Inter, sans-serif', marginTop: 2, lineHeight: 1 }}>{value}</div>
     </div>
   );
 }

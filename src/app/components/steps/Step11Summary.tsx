@@ -1,10 +1,10 @@
 import { useState, useMemo, useRef } from 'react';
-import { CheckCircle2, Circle, Download, Loader, AlertCircle, FileText, Shield, Image as ImageIcon, X, Upload } from 'lucide-react';
+import { CheckCircle2, Circle, Download, Loader, AlertCircle, FileText, Shield, Image as ImageIcon, X, Upload, Flag } from 'lucide-react';
 import type { Template } from '../types/templates';
 import type { TemplateAnswers } from '../rules/ruleEngine';
 import type { SessionData, LicenseGapItem } from '../Dashboard';
 import { CATALOG, GROUP_CONFIG, resolveLatest, resolveInstalledDates, STATUS_CFG, type VersionEntry } from './Step4VersionCheck';
-import { WEB_REPORTS, DLP_REPORTS, EMAIL_REPORTS } from '../../constants/reportDefinitions';
+import { WEB_REPORTS, DLP_REPORTS, EMAIL_REPORTS, type ReportRunResult } from '../../constants/reportDefinitions';
 import type { VersionDataStore } from '../../constants/versionData';
 import type { Recommendation as StoredRec } from './Step8Recommendations';
 import type { ActionItem as StoredAction } from './Step9NextSteps';
@@ -14,6 +14,12 @@ import { formatMemoryGB, memoryUsagePct, statusColor as statusColorDlp, type Dlp
 import { formatRemaining, certStatusColor, certStatusIcon, type ParsedCertificate } from './certificateParser';
 import type { EndpointAgentSummary } from './endpointAgentParser';
 import type { DlpDashboardSummary } from './dlpDashboardParser';
+import type { ComplianceFrameworkItem, EnhancementOverride } from '../Dashboard';
+import type { VersionUpgradeProposal } from './StepVersionUpgrades';
+import { mergeEnhancement } from './StepRecommendedEnhancements';
+import { suggestComplianceFrameworks } from '../../utils/complianceSuggest';
+import { type EndpointSupportMatrix, isMatrixEmpty } from '../../constants/endpointSupportMatrix';
+import type { EndpointCompatibilityAssessment } from '../../utils/endpointCompatibilityEngine';
 import { ENHANCEMENTS } from '../../constants/enhancements';
 import { lookupHardwareLifecycle, lifecycleStatus, lifecycleStatusColor } from '../../utils/hardwareLifecycle';
 import type { CheckData } from './report/types';
@@ -41,10 +47,21 @@ interface Step11Props {
   dlpDashboardSummary: DlpDashboardSummary | null;
   customerLogo: string | null;
   setCustomerLogo: React.Dispatch<React.SetStateAction<string | null>>;
+  complianceFrameworks: ComplianceFrameworkItem[];
+  enhancementOverrides: Record<string, EnhancementOverride>;
+  versionUpgrades: VersionUpgradeProposal[];
+  endpointMatrix: EndpointSupportMatrix;
+  endpointCompatAssessment: EndpointCompatibilityAssessment | null;
+  /* Runtime SQL report results keyed by ReportDef.id — produced by clicking
+     Run on a row in Step 3. Not persisted; survives only the wizard session. */
+  reportRuns: Record<string, ReportRunResult>;
+  onComplete: () => void;
+  isComplete: boolean;
 }
 
 function buildReportHTML(p: {
   sessionData: SessionData; selectedTemplates: Template[];
+  selectedProducts: Record<string, boolean>;
   checklistAnswers: TemplateAnswers;
   allFindings: Array<{ text: string; severity: string; section: string; note?: string; templateName: string; answer: string; description?: string; remediation?: string; }>;
   versionEntries: Record<string, VersionEntry>;
@@ -60,6 +77,12 @@ function buildReportHTML(p: {
   endpointAgentSummary: EndpointAgentSummary | null;
   dlpDashboardSummary: DlpDashboardSummary | null;
   customerLogo: string | null;
+  complianceFrameworks: ComplianceFrameworkItem[];
+  enhancementOverrides: Record<string, EnhancementOverride>;
+  versionUpgrades: VersionUpgradeProposal[];
+  endpointMatrix: EndpointSupportMatrix;
+  endpointCompatAssessment: EndpointCompatibilityAssessment | null;
+  reportRuns: Record<string, ReportRunResult>;
   healthBreakdown: {
     questionPenalty: number;
     eosCount: number;
@@ -70,32 +93,59 @@ function buildReportHTML(p: {
     infraPenalty: number;
   };
 }) {
-  const criticalCount = p.allFindings.filter(f => f.severity === 'CRITICAL').length;
-  const highCount     = p.allFindings.filter(f => f.severity === 'HIGH').length;
+  /* Checklist-only counts (kept for legacy callsites in this file). For the
+     cover/Part 0 "Critical Findings" headline we use the aggregate below. */
+  const checklistCritical = p.allFindings.filter(f => f.severity === 'CRITICAL').length;
+  const checklistHigh     = p.allFindings.filter(f => f.severity === 'HIGH').length;
+  const checklistMedium   = p.allFindings.filter(f => f.severity === 'MEDIUM').length;
+  const checklistLow      = p.allFindings.filter(f => f.severity === 'LOW').length;
 
   const hasWeb   = p.selectedTemplates.some(t => t.id === 'web');
   const hasDLP   = p.selectedTemplates.some(t => t.id === 'dlp');
   const hasEmail = p.selectedTemplates.some(t => t.id === 'email');
 
-  const webUsageReports   = WEB_REPORTS.filter(r => p.selectedReports.includes(r.id)).map(r => r.title);
-  const dataUsageReports  = DLP_REPORTS.filter(r => p.selectedReports.includes(r.id)).map(r => r.title);
-  const emailUsageReports = EMAIL_REPORTS.filter(r => p.selectedReports.includes(r.id)).map(r => r.title);
+  /* Usage-report descriptors — combine the static report definition with
+     whatever runtime SQL result the operator has produced via Step 3's Run
+     button. `run` is undefined when the report is selected but hasn't been
+     executed yet; the render path shows a PENDING placeholder in that case. */
+  const enrichUsage = (defs: typeof WEB_REPORTS) =>
+    defs.filter((r) => p.selectedReports.includes(r.id))
+        .map((r) => ({ ...r, run: p.reportRuns?.[r.id] }));
+  const webUsageReports   = enrichUsage(WEB_REPORTS);
+  const dataUsageReports  = enrichUsage(DLP_REPORTS);
+  const emailUsageReports = enrichUsage(EMAIL_REPORTS);
 
   const effectiveStatus = (e: VersionEntry) => e.statusOverride ?? e.status;
   const customEntriesByGroup = Object.values(p.versionEntries).filter(
     (e): e is VersionEntry => !!e?.isCustom,
   );
+  /* Must mirror Step 4's rendering rules so the report and the wizard agree on
+     which components are "in" the assessment:
+       - Skip groups whose product isn't selected ([Step4VersionCheck.tsx:678](src/app/components/steps/Step4VersionCheck.tsx#L678)).
+       - Drop tombstoned entries (`removed:true`) — Step 4 hides these via the Restore banner.
+       - For catalog rows the user flipped to "overridden" (isCustom + catalog id),
+         render once under catalogEntries; exclude them from customEntries to
+         avoid the duplicate that was showing as inflated component counts. */
   const versionGroups = Object.entries(GROUP_CONFIG).map(([groupKey, grp]) => {
+    if (!p.selectedProducts[grp.productId]) return { grp, entries: [] };
     const catalogEntries = grp.componentIds
       .map(id => ({ id, entry: p.versionEntries[id] }))
-      .filter((x): x is { id: string; entry: VersionEntry } => !!(x.entry?.installedVersion));
+      .filter((x): x is { id: string; entry: VersionEntry } =>
+        !!(x.entry?.installedVersion) && !x.entry.removed);
     const customEntries = customEntriesByGroup
-      .filter(e => e.groupId === groupKey && e.installedVersion)
+      .filter(e => e.groupId === groupKey
+        && !!e.installedVersion
+        && !e.removed
+        && !grp.componentIds.includes(e.id))
       .map(e => ({ id: e.id, entry: e }));
     return { grp, entries: [...catalogEntries, ...customEntries] };
   }).filter(({ entries }) => entries.length > 0);
 
-  const allVEntries = Object.values(p.versionEntries).filter(e => e.installedVersion);
+  /* Flat list of every entry actually rendered above — used for the four
+     summary pills so they stay consistent with the tables. Iterating
+     `p.versionEntries` directly would re-include tombstoned and deselected-
+     product entries. */
+  const allVEntries = versionGroups.flatMap(({ entries }) => entries.map(({ entry }) => entry));
   const vCounts = {
     ok:       allVEntries.filter(e => effectiveStatus(e) === 'ok').length,
     warning:  allVEntries.filter(e => effectiveStatus(e) === 'warning').length,
@@ -105,17 +155,30 @@ function buildReportHTML(p: {
   const activeServers = p.serverDetails.filter(s => s.applicable);
 
   const infraAlerts: string[] = [];
+  /* Critical = ≥85% utilisation, High = 70–85%. Tracked separately so we
+     can roll them into the Part 0 Finding Breakdown by category. */
+  let infraCritCount = 0;
+  let infraHighCount = 0;
   for (const s of activeServers) {
     const name = s.hostname || SRV_LABELS[s.type] || s.type;
     for (const d of s.drives) {
       const dp = pct(d.usedGB, d.totalGB);
-      if (dp >= 70) infraAlerts.push(`${name} — ${d.label || 'Drive'}: ${dp}% disk used`);
+      if (dp >= 85) { infraCritCount++; infraAlerts.push(`${name} — ${d.label || 'Drive'}: ${dp}% disk used`); }
+      else if (dp >= 70) { infraHighCount++; infraAlerts.push(`${name} — ${d.label || 'Drive'}: ${dp}% disk used`); }
     }
-    if (s.ramTotalGB > 0) { const rp = pct(s.ramUsedGB, s.ramTotalGB); if (rp >= 70) infraAlerts.push(`${name}: ${rp}% RAM used`); }
-    if (s.cpuUsagePercent >= 70) infraAlerts.push(`${name}: ${s.cpuUsagePercent}% CPU`);
+    if (s.ramTotalGB > 0) {
+      const rp = pct(s.ramUsedGB, s.ramTotalGB);
+      if (rp >= 85) { infraCritCount++; infraAlerts.push(`${name}: ${rp}% RAM used`); }
+      else if (rp >= 70) { infraHighCount++; infraAlerts.push(`${name}: ${rp}% RAM used`); }
+    }
+    if (s.cpuUsagePercent >= 85) { infraCritCount++; infraAlerts.push(`${name}: ${s.cpuUsagePercent}% CPU`); }
+    else if (s.cpuUsagePercent >= 70) { infraHighCount++; infraAlerts.push(`${name}: ${s.cpuUsagePercent}% CPU`); }
   }
 
-  const productRows = p.selectedTemplates.map(t => {
+  /* Per-product widget data — separated from the legacy `productRows` HTML
+     stringification so the new Part 0 CISO dashboard can reuse the same
+     numbers without re-iterating templates. */
+  const productCards = p.selectedTemplates.map(t => {
     let answered = 0;
     const bySev: Record<string, number> = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
     for (const q of t.questions) {
@@ -125,8 +188,12 @@ function buildReportHTML(p: {
       if (q.severity && ans?.value === (q.triggerOn ?? 'no')) bySev[q.severity] = (bySev[q.severity] ?? 0) + 1;
     }
     const totalF = Object.values(bySev).reduce((a, b) => a + b, 0);
-    const score  = answered === 0 ? null : Math.round(Math.max(0, (answered - totalF) / answered * 100));
-    const sc     = score === null ? '#64748b' : score >= 80 ? '#69BC00' : score >= 60 ? '#B58800' : '#A30080';
+    const score = answered === 0 ? null : Math.round(Math.max(0, (answered - totalF) / answered * 100));
+    const sc = score === null ? '#64748b' : score >= 80 ? '#69BC00' : score >= 60 ? '#B58800' : '#A30080';
+    return { template: t, answered, total: t.questions.length, bySev, totalF, score, sc };
+  });
+
+  const productRows = productCards.map(({ template: t, answered, bySev, score, sc }) => {
     return `<tr>
       <td style="font-weight:600;color:#023E8A;">${esc(t.icon)} ${esc(t.name.replace(' HC', ''))}</td>
       <td style="text-align:center;font-family:monospace;">${answered}/${t.questions.length}</td>
@@ -153,6 +220,80 @@ function buildReportHTML(p: {
     !!p.sessionData.supportLevel
     && !!p.sessionData.recommendedSupportLevel
     && p.sessionData.supportLevel.trim().toLowerCase() !== p.sessionData.recommendedSupportLevel.trim().toLowerCase();
+
+  /* ─────────────────────────────────────────────────────────────────────
+     PART 0 · Aggregate Finding Breakdown
+     Rolls every risk source (version lifecycle, infrastructure, checklist,
+     and configuration/cert/support) into a single category × severity matrix.
+     This is the source of truth for the cover "Critical Findings" headline
+     and the Part 0 breakdown table — replaces the previous behaviour where
+     only checklist findings counted, hiding 80% of real critical issues.
+     ───────────────────────────────────────────────────────────────────── */
+  const findingBreakdown = {
+    versionLifecycle: {
+      label: 'Version / Lifecycle',
+      critical: eosEntries.length,
+      high: 0,
+      medium: warnEntries.length,
+      low: 0,
+    },
+    infrastructure: {
+      label: 'Infrastructure',
+      critical: infraCritCount,
+      high: infraHighCount,
+      medium: 0,
+      low: 0,
+    },
+    checklist: {
+      label: 'Per-Product Checklist',
+      critical: checklistCritical,
+      high: checklistHigh,
+      medium: checklistMedium,
+      low: checklistLow,
+    },
+    configuration: {
+      label: 'Configuration / Trust',
+      critical: expiredCerts.length,
+      high: expiringCerts.length + (supportUpgradeNeeded ? 1 : 0),
+      medium: 0,
+      low: 0,
+    },
+  };
+  const breakdownTotals = {
+    critical: findingBreakdown.versionLifecycle.critical + findingBreakdown.infrastructure.critical + findingBreakdown.checklist.critical + findingBreakdown.configuration.critical,
+    high:     findingBreakdown.versionLifecycle.high     + findingBreakdown.infrastructure.high     + findingBreakdown.checklist.high     + findingBreakdown.configuration.high,
+    medium:   findingBreakdown.versionLifecycle.medium   + findingBreakdown.infrastructure.medium   + findingBreakdown.checklist.medium   + findingBreakdown.configuration.medium,
+    low:      findingBreakdown.versionLifecycle.low      + findingBreakdown.infrastructure.low      + findingBreakdown.checklist.low      + findingBreakdown.configuration.low,
+  };
+  /* These are the AGGREGATE numbers shown on the cover and in the Executive
+     Summary verdict. They replace the prior "Critical = checklist criticals"
+     behaviour which produced the "cover says 3, body shows 15" inconsistency. */
+  const criticalCount = breakdownTotals.critical;
+  const highCount = breakdownTotals.high;
+
+  /* Broader aggregate that also rolls in analyst-curated work — recommendations
+     and action items by priority. Used by the Executive Details severity tiles
+     and the Part 0 CISO Dashboard severity heat tiles so those numbers reflect
+     "everything we'd raise to leadership", not just the checklist findings. */
+  const recBySev = {
+    CRITICAL: p.recommendations.filter((r) => r.priority === 'critical').length,
+    HIGH:     p.recommendations.filter((r) => r.priority === 'high').length,
+    MEDIUM:   p.recommendations.filter((r) => r.priority === 'medium').length,
+    LOW:      p.recommendations.filter((r) => r.priority === 'low').length,
+  };
+  const actBySev = {
+    CRITICAL: p.actionItems.filter((a) => a.priority === 'critical').length,
+    HIGH:     p.actionItems.filter((a) => a.priority === 'high').length,
+    MEDIUM:   p.actionItems.filter((a) => a.priority === 'medium').length,
+    LOW:      p.actionItems.filter((a) => a.priority === 'low').length,
+  };
+  const aggregateSev = {
+    CRITICAL: breakdownTotals.critical + recBySev.CRITICAL + actBySev.CRITICAL,
+    HIGH:     breakdownTotals.high     + recBySev.HIGH     + actBySev.HIGH,
+    MEDIUM:   breakdownTotals.medium   + recBySev.MEDIUM   + actBySev.MEDIUM,
+    LOW:      breakdownTotals.low      + recBySev.LOW      + actBySev.LOW,
+  };
+  const aggregateTotal = aggregateSev.CRITICAL + aggregateSev.HIGH + aggregateSev.MEDIUM + aggregateSev.LOW;
 
   type Obs = { level: string; text: string; source?: 'finding' | 'recommendation' | 'action' };
 
@@ -196,18 +337,148 @@ function buildReportHTML(p: {
     || (sd.featureRequests?.length ?? 0) > 0
     || (p.licenseGaps?.length ?? 0) > 0;
 
+  /* ─── Compliance frameworks (Part 0) ────────────────────────────────
+     User-curated selection from Step 1 wins. If the user hasn't run
+     Auto-suggest yet, we fall back to the jurisdictional defaults so the
+     report still renders something sensible (the customer's report must
+     never be empty just because they skipped that section). */
+  type ComplianceFw = { code: string; name: string; relevance: string; pillar: string; complianceStatus?: 'compliant' | 'partial' | 'non_compliant' | 'unassessed' };
+  const userFrameworks = (p.complianceFrameworks ?? []).filter((f) => f.enabled && f.code.trim());
+  const complianceFrameworks: ComplianceFw[] = userFrameworks.length > 0
+    ? userFrameworks.map((f) => ({ code: f.code, name: f.name, relevance: f.relevance, pillar: f.pillar, complianceStatus: f.complianceStatus }))
+    : suggestComplianceFrameworks({
+        country:  p.sessionData.country,
+        region:   p.sessionData.region,
+        industry: p.sessionData.industry,
+      }).map((f) => ({ code: f.code, name: f.name, relevance: f.relevance, pillar: f.pillar }));
+
+  /* Top critical risks — business-language framing for Part 0 CISO briefing.
+     Aggregates from the same sources as the Finding Breakdown but rephrases each
+     into an executive-readable risk statement. Capped to 6 cards. */
+  type TopRisk = { icon: string; severity: 'CRITICAL' | 'HIGH'; title: string; impact: string; component: string };
+  const topRisks: TopRisk[] = [];
+  for (const e of eosEntries.slice(0, 4)) {
+    topRisks.push({
+      icon: '⚠',
+      severity: 'CRITICAL',
+      title: 'Unsupported software in production',
+      impact: 'No patches, no vendor accountability, no zero-day mitigations. Audit and regulatory exposure on a Tier-1 control.',
+      component: `${e.component} v${e.installedVersion}`,
+    });
+  }
+  if (infraCritCount > 0) {
+    topRisks.push({
+      icon: '🖥',
+      severity: 'CRITICAL',
+      title: 'Infrastructure capacity past safe threshold',
+      impact: `${infraCritCount} server metric${infraCritCount === 1 ? '' : 's'} above 85% utilisation — risk of enforcement degradation and unplanned outage.`,
+      component: `${infraCritCount} server metric${infraCritCount === 1 ? '' : 's'}`,
+    });
+  }
+  for (const c of expiredCerts.slice(0, 2)) {
+    topRisks.push({
+      icon: '🔐',
+      severity: 'CRITICAL',
+      title: 'Trust chain broken — expired certificate',
+      impact: 'Encrypted services may fail; users see browser warnings; integrations may silently break. Immediate rotation required.',
+      component: `${c.subjectCN} (${c.fileName})`,
+    });
+  }
+  for (const f of p.allFindings.filter(f => f.severity === 'CRITICAL').slice(0, 3)) {
+    topRisks.push({
+      icon: '📋',
+      severity: 'CRITICAL',
+      title: f.text.length > 80 ? f.text.slice(0, 78) + '…' : f.text,
+      impact: f.description ? (f.description.length > 140 ? f.description.slice(0, 138) + '…' : f.description) : 'Critical-severity checklist gap identified during the assessment.',
+      component: f.templateName.replace(' HC', ''),
+    });
+  }
+  if (supportUpgradeNeeded) {
+    topRisks.push({
+      icon: '🎯',
+      severity: 'HIGH',
+      title: `Support tier upgrade recommended: ${p.sessionData.supportLevel} → ${p.sessionData.recommendedSupportLevel}`,
+      impact: 'Current entitlement level no longer aligned with deployment footprint and risk profile — affects incident response SLAs.',
+      component: 'Forcepoint Support Contract',
+    });
+  }
+  const topRisksCapped = topRisks.slice(0, 6);
+
+  /* ─── Part 0 · CISO Dashboard widgets ────────────────────────────────
+     Mirrors Step 17 Summary & Review — verdict banner, severity heat tiles,
+     coverage stats, activity pulse, and top-concern chips. All numbers
+     come from the same aggregates used elsewhere in the report so the
+     dashboard never contradicts the technical body. */
+  type ConcernChip = { icon: string; text: string; color: string; bg: string; border: string };
+  const topConcerns: ConcernChip[] = [];
+  if (eosEntries.length > 0) topConcerns.push({ icon: '⚠', text: `${eosEntries.length} component${eosEntries.length === 1 ? '' : 's'} past EoS`, color: '#A30080', bg: '#FDF2F8', border: '#FBCFE8' });
+  if (infraCritCount > 0) topConcerns.push({ icon: '🖥', text: `${infraCritCount} server metric${infraCritCount === 1 ? '' : 's'} ≥ 85%`, color: '#A30080', bg: '#FDF2F8', border: '#FBCFE8' });
+  if (expiredCerts.length > 0) topConcerns.push({ icon: '🔐', text: `${expiredCerts.length} expired cert${expiredCerts.length === 1 ? '' : 's'}`, color: '#A30080', bg: '#FDF2F8', border: '#FBCFE8' });
+  if (p.endpointAgentSummary && p.endpointAgentSummary.outdatedCount > 0) {
+    topConcerns.push({ icon: '💻', text: `${p.endpointAgentSummary.outdatedPct}% endpoints outdated`, color: '#DC2626', bg: '#FEF2F2', border: '#FECACA' });
+  }
+  if (p.endpointCompatAssessment && p.endpointCompatAssessment.compatibilityStatus === 'CRITICAL') {
+    topConcerns.push({ icon: '🛡', text: 'Agent compatibility CRITICAL', color: '#A30080', bg: '#FDF2F8', border: '#FBCFE8' });
+  }
+  if (checklistHigh > 0 && topConcerns.length < 6) topConcerns.push({ icon: '⚠', text: `${checklistHigh} HIGH finding${checklistHigh === 1 ? '' : 's'}`, color: '#DC2626', bg: '#FEF2F2', border: '#FECACA' });
+  if (warnEntries.length > 0 && topConcerns.length < 6) topConcerns.push({ icon: '↑', text: `${warnEntries.length} update${warnEntries.length === 1 ? '' : 's'} available`, color: '#B58800', bg: '#FFFBEB', border: '#FDE68A' });
+  if (expiringCerts.length > 0 && topConcerns.length < 6) topConcerns.push({ icon: '⏳', text: `${expiringCerts.length} cert${expiringCerts.length === 1 ? '' : 's'} expiring < 90d`, color: '#B58800', bg: '#FFFBEB', border: '#FDE68A' });
+
+  /* Verdict — driven by aggregate severity totals. */
+  let verdictLabel = 'Good Health';
+  let verdictColor = '#16A34A';
+  let verdictBg = '#F0FDF4';
+  let verdictBorder = '#BBF7D0';
+  let verdictIcon = '✓';
+  if (breakdownTotals.critical > 0) {
+    verdictLabel = 'Critical Attention Required';
+    verdictColor = '#A30080';
+    verdictBg = '#FDF2F8';
+    verdictBorder = '#FBCFE8';
+    verdictIcon = '⨯';
+  } else if (breakdownTotals.high > 0) {
+    verdictLabel = 'Action Required';
+    verdictColor = '#B58800';
+    verdictBg = '#FFFBEB';
+    verdictBorder = '#FDE68A';
+    verdictIcon = '⚠';
+  }
+
+  /* Health gauge — composite score drives a CSS conic-gradient donut. */
+  const hsc = p.healthScore === null ? '#94A3B8' : p.healthScore >= 80 ? '#16A34A' : p.healthScore >= 60 ? '#B58800' : '#A30080';
+  const gaugeArc = (p.healthScore ?? 0) * 3.6;
+  const dedQ = p.healthBreakdown.questionPenalty;
+  const dedV = p.healthBreakdown.versionPenalty;
+  const dedI = p.healthBreakdown.infraPenalty;
+  const dedTotal = Math.max(1, dedQ + dedV + dedI);
+
+  /* Risk × source heatmap data (4 rows × 4 severity columns). */
+  const riskMatrixRows = [
+    { label: 'Version / Lifecycle',     icon: '📦', critical: findingBreakdown.versionLifecycle.critical, high: findingBreakdown.versionLifecycle.high, medium: findingBreakdown.versionLifecycle.medium, low: findingBreakdown.versionLifecycle.low },
+    { label: 'Infrastructure',          icon: '🖥', critical: findingBreakdown.infrastructure.critical,   high: findingBreakdown.infrastructure.high,   medium: findingBreakdown.infrastructure.medium,   low: findingBreakdown.infrastructure.low },
+    { label: 'Checklist',               icon: '📋', critical: findingBreakdown.checklist.critical,        high: findingBreakdown.checklist.high,        medium: findingBreakdown.checklist.medium,        low: findingBreakdown.checklist.low },
+    { label: 'Configuration / Trust',   icon: '🔐', critical: findingBreakdown.configuration.critical,    high: findingBreakdown.configuration.high,    medium: findingBreakdown.configuration.medium,    low: findingBreakdown.configuration.low },
+  ];
+
   /* Grouped TOC by Part — each part renders as a sub-header in the TOC list */
   type TocEntry = { kind: 'part'; label: string } | { kind: 'item'; label: string };
   const tocEntries: TocEntry[] = [
+    { kind: 'part', label: 'Foreword' },
+    { kind: 'item', label: 'Purpose of This Report' },
+
+    { kind: 'part', label: 'Part 0 · Executive Briefing' },
+    { kind: 'item', label: 'Risk Posture &amp; CISO Dashboard' },
+    { kind: 'item', label: 'Compliance Exposure' },
+
     { kind: 'part', label: 'Part I · Executive Overview' },
     { kind: 'item', label: 'Introduction' },
     ...(hasAccountSection ? [{ kind: 'item' as const, label: 'Customer Account &amp; Licensing' }] : []),
-    { kind: 'item', label: 'Executive Summary' },
+    { kind: 'item', label: 'Executive Details' },
 
     { kind: 'part', label: 'Part II · Technical Assessment' },
     { kind: 'item', label: 'Infrastructure &amp; Version Review' },
     ...(activeServers.length > 0 ? [{ kind: 'item' as const, label: 'Server Infrastructure' }] : []),
-    ...(p.dlpBundles.length > 0 ? [{ kind: 'item' as const, label: 'DLP Server Bundle Analysis' }] : []),
+    ...(p.dlpBundles.length > 0 ? [{ kind: 'item' as const, label: 'DLP Telemetry File Analysis' }] : []),
     ...(p.endpointAgentSummary && p.endpointAgentSummary.totalRecords > 0 ? [{ kind: 'item' as const, label: 'Endpoint Agent Analysis' }] : []),
     ...(p.certificates.length > 0 ? [{ kind: 'item' as const, label: 'Certificate Analysis' }] : []),
     ...(p.selectedTemplates.length > 0 ? [{ kind: 'item' as const, label: 'Per-Product Security Assessment' }] : []),
@@ -218,6 +489,12 @@ function buildReportHTML(p: {
 
     { kind: 'part', label: 'Part III · Roadmap &amp; Strategy' },
     ...(p.recommendations.length > 0 ? [{ kind: 'item' as const, label: 'Recommendations' }] : []),
+    ...(p.versionUpgrades.length > 0 ? [{ kind: 'item' as const, label: 'Version Upgrade Proposals' }] : []),
+    /* Agent Compatibility section only renders when DLP is in scope AND we
+       have either a customer assessment or a non-empty matrix to fall back
+       on. TOC stays in sync with what actually gets emitted further down. */
+    ...(p.selectedProducts.data && (p.endpointCompatAssessment || !isMatrixEmpty(p.endpointMatrix))
+      ? [{ kind: 'item' as const, label: 'Agent Compatibility' }] : []),
     ...(p.actionItems.length > 0 ? [{ kind: 'item' as const, label: 'Action Items &amp; Next Steps' }] : []),
     ...(p.featureRequests.length > 0 ? [{ kind: 'item' as const, label: 'Customer Feature Requests' }] : []),
     ...((p.licenseGaps?.length ?? 0) > 0 ? [{ kind: 'item' as const, label: 'Recommended License Extension' }] : []),
@@ -225,10 +502,121 @@ function buildReportHTML(p: {
 
     { kind: 'part', label: 'Part IV · Reference' },
     { kind: 'item', label: 'Appendix — Effort Score Card' },
+
+    { kind: 'part', label: 'Closing' },
+    { kind: 'item', label: "Forcepoint's Commitment" },
   ];
   /* Backward-compat: keep the old flat list reachable for any downstream code that scans it */
   const tocItems = tocEntries.filter((e): e is { kind: 'item'; label: string } => e.kind === 'item').map(e => e.label);
   void tocItems;
+
+  /* Renders one Web/DLP/Email usage-report card. Three terminal states:
+       - run.state === 'ok'         → small data table (first 12 rows)
+       - run.state === 'error'      → red error pill
+       - undefined / idle / running → PENDING placeholder
+     Closure so it captures `esc` from buildReportHTML scope. */
+  const renderUsageReportCard = (
+    r: { id: string; title: string; sqlKey: string; run?: ReportRunResult },
+    i: number,
+    theme: { accent: string; border: string; bg: string },
+  ): string => {
+    const num = String(i + 1).padStart(2, '0');
+    const titleBar = `
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+        <div style="width:26px;height:26px;border-radius:5px;background:${theme.accent};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:11px;font-family:'JetBrains Mono',monospace;">${num}</div>
+        <div style="font-weight:700;color:#0f2952;font-size:12.5px;">${esc(r.title)}</div>
+      </div>`;
+
+    const run = r.run;
+
+    // Success — render a compact preview table.
+    if (run && run.state === 'ok' && Array.isArray(run.rows) && run.rows.length > 0) {
+      const columns = Object.keys(run.rows[0] as Record<string, unknown>);
+      const preview = run.rows.slice(0, 12);
+      const remainder = (run.rowCount ?? run.rows.length) - preview.length;
+      const fmtCell = (v: unknown): string => {
+        if (v === null || v === undefined) return '<span style="color:#94a3b8;">—</span>';
+        if (v instanceof Date) return esc(v.toISOString().replace('T', ' ').slice(0, 19));
+        if (typeof v === 'number') return esc(String(v));
+        if (typeof v === 'string') {
+          // ISO timestamp prettifier
+          if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(v)) return esc(v.replace('T', ' ').slice(0, 19));
+          return esc(v.length > 80 ? v.slice(0, 77) + '…' : v);
+        }
+        try { return esc(JSON.stringify(v)); } catch { return '—'; }
+      };
+      const meta = `
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px 0;font-size:10px;">
+          <span style="background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;border-radius:4px;padding:2px 7px;font-weight:700;letter-spacing:0.3px;">OK</span>
+          <span style="background:#f8fafc;color:#475569;border:1px solid #e2e8f0;border-radius:4px;padding:2px 7px;font-family:'JetBrains Mono',monospace;">${run.rowCount ?? run.rows.length} row${(run.rowCount ?? run.rows.length) === 1 ? '' : 's'}</span>
+          ${run.windowDays ? `<span style="background:#f8fafc;color:#475569;border:1px solid #e2e8f0;border-radius:4px;padding:2px 7px;font-family:'JetBrains Mono',monospace;">window: ${run.windowDays}d</span>` : ''}
+          ${run.latencyMs !== undefined ? `<span style="background:#f8fafc;color:#475569;border:1px solid #e2e8f0;border-radius:4px;padding:2px 7px;font-family:'JetBrains Mono',monospace;">${run.latencyMs} ms</span>` : ''}
+          ${run.ranAt ? `<span style="background:#f8fafc;color:#475569;border:1px solid #e2e8f0;border-radius:4px;padding:2px 7px;font-family:'JetBrains Mono',monospace;">ran: ${esc(run.ranAt.replace('T', ' ').slice(0, 19))}</span>` : ''}
+        </div>`;
+      const head = columns.map(c => `<th style="text-align:left;padding:6px 9px;background:#0f2952;color:#fff;font-weight:700;font-size:9.5px;letter-spacing:0.4px;border-left:1px solid rgba(255,255,255,0.12);">${esc(c)}</th>`).join('');
+      const body = preview.map((row, rowIdx) => {
+        const stripe = rowIdx % 2 === 0 ? '#ffffff' : '#fafbfd';
+        return `<tr>${columns.map(c => `<td style="padding:6px 9px;border-top:1px solid #e2e8f0;background:${stripe};font-size:10px;color:#1e293b;font-family:'JetBrains Mono',monospace;">${fmtCell((row as Record<string, unknown>)[c])}</td>`).join('')}</tr>`;
+      }).join('');
+      const tail = remainder > 0
+        ? `<div style="margin-top:6px;font-size:9.5px;color:#64748b;font-style:italic;">+ ${remainder} more row${remainder === 1 ? '' : 's'} not shown — full result available via Step 3 preview.</div>`
+        : '';
+      return `
+      <div style="background:${theme.bg};border:1px solid ${theme.border};border-left:4px solid ${theme.accent};border-radius:6px;padding:12px 14px;">
+        ${titleBar}
+        ${meta}
+        <div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:5px;background:#fff;">
+          <table style="width:100%;border-collapse:collapse;">
+            <thead><tr>${head}</tr></thead>
+            <tbody>${body}</tbody>
+          </table>
+        </div>
+        ${tail}
+      </div>`;
+    }
+
+    // Successful run that returned zero rows.
+    if (run && run.state === 'ok') {
+      return `
+      <div style="background:${theme.bg};border:1px solid ${theme.border};border-left:4px solid ${theme.accent};border-radius:6px;padding:12px 14px;">
+        ${titleBar}
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;font-size:10px;">
+          <span style="background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;border-radius:4px;padding:2px 7px;font-weight:700;">OK</span>
+          <span style="background:#f8fafc;color:#475569;border:1px solid #e2e8f0;border-radius:4px;padding:2px 7px;font-family:'JetBrains Mono',monospace;">0 rows</span>
+          ${run.windowDays ? `<span style="background:#f8fafc;color:#475569;border:1px solid #e2e8f0;border-radius:4px;padding:2px 7px;font-family:'JetBrains Mono',monospace;">window: ${run.windowDays}d</span>` : ''}
+        </div>
+        <div style="font-size:10.5px;color:#475569;font-style:italic;">Query executed successfully but returned no rows for the selected window — no qualifying activity in the customer's dataset.</div>
+      </div>`;
+    }
+
+    // Errored run.
+    if (run && run.state === 'error') {
+      return `
+      <div style="background:#fff1f2;border:1px solid #fecdd3;border-left:4px solid #e11d48;border-radius:6px;padding:12px 14px;">
+        ${titleBar}
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;font-size:10px;">
+          <span style="background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;border-radius:4px;padding:2px 7px;font-weight:700;letter-spacing:0.3px;">ERROR</span>
+          ${run.windowDays ? `<span style="background:#f8fafc;color:#475569;border:1px solid #e2e8f0;border-radius:4px;padding:2px 7px;font-family:'JetBrains Mono',monospace;">window: ${run.windowDays}d</span>` : ''}
+        </div>
+        <div style="font-size:10.5px;color:#7f1d1d;font-family:'JetBrains Mono',monospace;white-space:pre-wrap;">${esc(run.error || 'Unknown error')}</div>
+      </div>`;
+    }
+
+    // Not run yet (idle / running / undefined).
+    const pendingLabel = run?.state === 'running' ? 'RUNNING' : 'PENDING';
+    const pendingHint = run?.state === 'running'
+      ? 'Query is currently executing against the customer SQL connection — re-export once it completes.'
+      : 'Selected by the analyst but the SQL query has not been executed. Open Step 3 → Data Collectors → press Run on this report to populate it.';
+    return `
+    <div style="background:${theme.bg};border:1px solid ${theme.border};border-left:4px solid ${theme.accent};border-radius:6px;padding:12px 14px;">
+      ${titleBar}
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;font-size:10px;">
+        <span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:4px;padding:2px 7px;font-weight:700;letter-spacing:0.3px;">${pendingLabel}</span>
+        <span style="background:#f8fafc;color:#475569;border:1px solid #e2e8f0;border-radius:4px;padding:2px 7px;font-family:'JetBrains Mono',monospace;">sqlKey: ${esc(r.sqlKey)}</span>
+      </div>
+      <div style="font-size:10.5px;color:#475569;font-style:italic;">${pendingHint}</div>
+    </div>`;
+  };
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -757,6 +1145,109 @@ tr:last-child td{border-bottom:none;}
 .exec-deduct-pill-dot{width:9px;height:9px;border-radius:2px;flex-shrink:0;}
 .exec-deduct-pill-num{font-family:'JetBrains Mono',monospace;font-weight:700;color:var(--fp-red);}
 
+/* ───── PART 0 · EXECUTIVE BRIEFING ───── */
+.brief-intro{
+  background:#fff;border:1px solid var(--fp-rule);border-left:4px solid var(--fp-violette);
+  border-radius:6px;padding:18px 22px;margin-bottom:18px;box-shadow:0 2px 8px rgba(0,0,0,0.05);
+}
+.brief-intro-label{font-size:9.5px;font-weight:700;letter-spacing:0.16em;text-transform:uppercase;color:var(--fp-violette);margin-bottom:6px;}
+.brief-intro-text{font-size:13.5px;font-weight:500;color:var(--fp-ink);line-height:1.6;}
+
+/* Finding breakdown matrix */
+.brief-bd-table{width:100%;border-collapse:collapse;font-size:11px;border-radius:6px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.06);border:1px solid var(--fp-rule);margin-bottom:6px;}
+.brief-bd-table th{background:var(--fp-navy);color:#fff;padding:10px 14px;text-align:left;font-size:10px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;}
+.brief-bd-table td{padding:10px 14px;border-bottom:1px solid var(--fp-rule-soft);background:#fff;}
+.brief-bd-table tr:nth-child(even) td{background:#F7F9FC;}
+.brief-bd-table tr.brief-bd-total td{background:var(--fp-navy-soft)!important;font-weight:700;border-top:2px solid var(--fp-navy);}
+.brief-bd-num{font-family:'JetBrains Mono',monospace;text-align:center;font-weight:700;font-size:12px;}
+.brief-bd-num-crit{color:var(--fp-violette);}
+.brief-bd-num-high{color:var(--fp-red);}
+.brief-bd-num-med{color:var(--fp-warn);}
+.brief-bd-num-zero{color:var(--fp-ink-faint);font-weight:400;}
+
+/* Risk Heat Map — 2×2 Impact × Likelihood quadrants */
+.heat-wrap{display:grid;grid-template-columns:36px 1fr;gap:8px;margin-top:8px;}
+.heat-ylabel{
+  display:flex;align-items:center;justify-content:center;
+  writing-mode:vertical-rl;transform:rotate(180deg);
+  font-size:9.5px;font-weight:700;letter-spacing:0.16em;text-transform:uppercase;color:var(--fp-ink-muted);
+}
+.heat-grid{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:6px;height:280px;}
+.heat-cell{border-radius:6px;padding:10px 12px;display:flex;flex-direction:column;border:1px solid;position:relative;}
+.heat-cell-label{font-size:8.5px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.heat-cell-count{font-family:'Inter',sans-serif;font-size:22px;font-weight:800;line-height:1;letter-spacing:-0.02em;}
+.heat-cell-list{display:flex;flex-direction:column;gap:3px;margin-top:8px;font-size:10px;line-height:1.4;overflow:hidden;}
+.heat-cell-item{padding:3px 7px;background:rgba(255,255,255,0.6);border-radius:3px;border:1px solid currentColor;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.heat-q-tr{background:var(--fp-violette-soft);border-color:#E9CCDF;color:var(--fp-violette);}     /* high impact + high likelihood = CRITICAL */
+.heat-q-tl{background:var(--fp-red-soft);border-color:#FECACA;color:var(--fp-red);}            /* high impact + low likelihood = HIGH */
+.heat-q-br{background:var(--fp-yellow-soft);border-color:#FDE68A;color:var(--fp-warn);}         /* low impact + high likelihood = MEDIUM */
+.heat-q-bl{background:var(--fp-green-soft);border-color:#D4EBA8;color:var(--fp-green);}         /* low impact + low likelihood = LOW */
+.heat-xlabel-row{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px;font-size:9.5px;font-weight:700;letter-spacing:0.16em;text-transform:uppercase;color:var(--fp-ink-muted);text-align:center;padding-left:44px;}
+
+/* Top Critical Risks — business-language card grid */
+.top-risk-grid{display:grid;grid-template-columns:1fr 1fr;gap:11px;margin-top:6px;}
+.top-risk-card{
+  background:#fff;border:1px solid var(--fp-rule);border-radius:6px;padding:14px 16px;
+  display:flex;flex-direction:column;gap:6px;box-shadow:0 2px 8px rgba(0,0,0,0.05);
+  border-left:4px solid var(--fp-violette);page-break-inside:avoid;
+}
+.top-risk-card-high{border-left-color:var(--fp-red);}
+.top-risk-head{display:flex;align-items:center;gap:8px;}
+.top-risk-icon{font-size:16px;line-height:1;flex-shrink:0;}
+.top-risk-title{flex:1;font-size:12.5px;font-weight:700;color:var(--fp-ink);line-height:1.35;}
+.top-risk-impact{font-size:11px;color:var(--fp-ink-muted);line-height:1.6;}
+.top-risk-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-top:6px;border-top:1px solid var(--fp-rule-soft);font-size:10px;}
+.top-risk-component{font-family:'JetBrains Mono',monospace;color:var(--fp-navy);font-weight:600;}
+
+/* Compliance Exposure */
+.comp-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px;}
+.comp-card{
+  background:#fff;border:1px solid var(--fp-rule);border-radius:6px;padding:12px 16px;
+  display:flex;flex-direction:column;gap:5px;box-shadow:0 2px 8px rgba(0,0,0,0.05);
+  border-top:3px solid var(--fp-cyan);page-break-inside:avoid;
+}
+.comp-card-head{display:flex;align-items:center;gap:10px;}
+.comp-code{
+  font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:800;color:var(--fp-navy);
+  background:var(--fp-navy-soft);padding:3px 9px;border-radius:3px;letter-spacing:0.04em;flex-shrink:0;
+}
+.comp-pillar{font-size:8.5px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:var(--fp-cyan-deep);margin-left:auto;}
+.comp-name{font-size:11.5px;font-weight:600;color:var(--fp-ink);}
+.comp-relevance{font-size:10.5px;color:var(--fp-ink-muted);line-height:1.5;}
+
+/* Key Observations — card grid (replaces vertical bullet list) */
+.kobs-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:6px;}
+.kobs-card{
+  display:flex;gap:10px;align-items:flex-start;padding:11px 14px;border-radius:6px;
+  border:1px solid var(--fp-rule);background:#fff;box-shadow:0 1px 4px rgba(0,0,0,0.04);
+  position:relative;overflow:hidden;page-break-inside:avoid;
+}
+.kobs-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:4px;}
+.kobs-card-CRITICAL::before{background:var(--fp-violette);} .kobs-card-CRITICAL{background:var(--fp-violette-soft);border-color:#E9CCDF;}
+.kobs-card-HIGH::before{background:var(--fp-red);}          .kobs-card-HIGH{background:var(--fp-red-soft);border-color:#FECACA;}
+.kobs-card-WARNING::before{background:var(--fp-yellow);}    .kobs-card-WARNING{background:var(--fp-yellow-soft);border-color:#FDE68A;}
+.kobs-card-MEDIUM::before{background:var(--fp-yellow);}     .kobs-card-MEDIUM{background:var(--fp-yellow-soft);border-color:#FDE68A;}
+.kobs-card-LOW::before{background:var(--fp-green);}         .kobs-card-LOW{background:var(--fp-green-soft);border-color:#D4EBA8;}
+.kobs-icon{font-size:14px;line-height:1.1;flex-shrink:0;padding-top:1px;}
+.kobs-body{flex:1;min-width:0;}
+.kobs-sev{font-size:8.5px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;display:inline-block;margin-bottom:3px;}
+.kobs-text{font-size:11px;color:var(--fp-ink);line-height:1.5;}
+
+/* High-Level Recommendations — card grid (replaces long paragraph list) */
+.rec-card-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:6px 0 10px;}
+.rec-mini-card{
+  background:#fff;border:1px solid var(--fp-rule);border-radius:6px;padding:11px 14px;
+  display:flex;flex-direction:column;gap:5px;box-shadow:0 1px 4px rgba(0,0,0,0.04);
+  border-left:3px solid var(--fp-cyan);page-break-inside:avoid;
+}
+.rec-mini-card-critical{border-left-color:var(--fp-violette);}
+.rec-mini-card-high{border-left-color:var(--fp-red);}
+.rec-mini-card-medium{border-left-color:var(--fp-yellow);}
+.rec-mini-head{display:flex;align-items:center;gap:8px;}
+.rec-mini-title{flex:1;font-size:11.5px;font-weight:600;color:var(--fp-ink);line-height:1.4;}
+.rec-mini-detail{font-size:10.5px;color:var(--fp-ink-muted);line-height:1.55;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+.rec-mini-foot{display:flex;align-items:center;gap:8px;padding-top:5px;border-top:1px solid var(--fp-rule-soft);font-size:9.5px;color:var(--fp-ink-faint);font-family:'JetBrains Mono',monospace;}
+
 /* ───── FINDINGS ───── */
 .finding{
   padding:14px 18px 14px 22px;border-radius:6px;
@@ -963,6 +1454,491 @@ tr:last-child td{border-bottom:none;}
 </div>
 
 <!-- ══════════════════════════════════════
+     OPENING NOTE — Purpose of this report
+     Sits between the TOC and Part 0 so the CISO sees framing context
+     before the risk numbers. Customer name interpolated everywhere
+     [CUSTOMER_NAME] appeared in the source template.
+══════════════════════════════════════ -->
+<div class="content">
+<div class="section" style="page-break-after:always;">
+  <div class="section-eyebrow">Foreword · Forcepoint Customer Success</div>
+  <div class="section-title">Purpose of This Report</div>
+  <p style="font-size:12.5px;line-height:1.7;color:var(--fp-ink);margin:14px 0 12px;">
+    This document presents the findings of the Forcepoint Health Check conducted for <strong>${esc(p.sessionData.customerName || 'the customer')}</strong>. The Health Check is a structured technical and operational review performed by Forcepoint to evaluate the current state of the customer's Forcepoint deployment across all active product lines.
+  </p>
+  <p style="font-size:12.5px;line-height:1.7;color:var(--fp-ink);margin:0 0 10px;">
+    The objective of this review is threefold:
+  </p>
+  <ul style="font-size:12px;line-height:1.7;color:var(--fp-ink);margin:0 0 14px 22px;padding:0;">
+    <li style="margin-bottom:6px;"><strong style="color:var(--fp-navy);">Validate</strong> that deployed solutions are configured in alignment with Forcepoint best practices and the customer's stated security objectives.</li>
+    <li style="margin-bottom:6px;"><strong style="color:var(--fp-navy);">Identify</strong> configuration gaps, operational risks, and areas where the deployment may not be delivering its full intended value.</li>
+    <li style="margin-bottom:6px;"><strong style="color:var(--fp-navy);">Recommend</strong> prioritized corrective actions and improvement opportunities to maximize security posture and return on investment.</li>
+  </ul>
+  <p style="font-size:11.5px;line-height:1.65;color:var(--fp-ink-muted);font-style:italic;margin:0;">
+    The chapters that follow open with an executive briefing for security leadership, then progress through the technical evidence supporting each conclusion, and close with a prioritized roadmap.
+  </p>
+</div>
+</div>
+
+<!-- ══════════════════════════════════════
+     PART 0 — EXECUTIVE BRIEFING (CISO, ≤3 pages)
+══════════════════════════════════════ -->
+<div class="chapter">
+  <div class="chapter-part">PART 0</div>
+  <div class="chapter-title">Executive Briefing</div>
+  <div class="chapter-sub">A decision-ready three-page brief for the CISO and security leadership — the risk posture at a glance, the top critical risks framed in business terms, and the compliance exposure created by today's deployment. The detailed technical evidence follows in Parts I–III.</div>
+</div>
+
+<div class="content">
+
+<!-- ══════════════════════════════════════
+     PART 0 · 01 RISK POSTURE & FINDING BREAKDOWN
+══════════════════════════════════════ -->
+<div class="section">
+  <div class="section-eyebrow">Part 0 · Risk Posture</div>
+  <div class="section-title">Risk Posture &amp; CISO Dashboard</div>
+
+  <div class="brief-intro">
+    <div class="brief-intro-label">Executive Position</div>
+    <div class="brief-intro-text">
+      ${(() => {
+        const cust = esc(p.sessionData.customerName || 'The customer');
+        if (breakdownTotals.critical === 0 && breakdownTotals.high === 0) {
+          return `${cust}'s Forcepoint estate shows <strong>no critical or high-severity exposure</strong> across version, infrastructure, checklist, or configuration dimensions. The roadmap that follows is enhancement-focused rather than remediation-focused.`;
+        }
+        return `${cust}'s Forcepoint estate carries <strong style="color:var(--fp-violette);">${breakdownTotals.critical} critical</strong> and <strong style="color:var(--fp-red);">${breakdownTotals.high} high-severity</strong> exposures aggregated across version, infrastructure, checklist and configuration dimensions. The top six business-impact items are summarized below; supporting technical evidence is in Parts I–III.`;
+      })()}
+    </div>
+  </div>
+
+  <!-- ─── CISO Dashboard widget grid ───────────────────────────────
+       Replaces the Finding Breakdown table — same numbers expressed as
+       a glanceable widget layout (gauge + verdict + severity tiles +
+       risk × source matrix + coverage + per-product + activity pulse +
+       top-concerns chips). Mirrors Step 17 Summary & Review so the wizard
+       preview and the printed report stay visually identical. -->
+
+  <!-- Row 1: health gauge + verdict -->
+  <div style="display:grid;grid-template-columns:340px 1fr;gap:12px;margin:6px 0 12px;page-break-inside:avoid;">
+    <div style="background:#FFFFFF;border:1px solid var(--fp-rule);border-radius:8px;padding:14px 16px;display:flex;align-items:center;gap:14px;">
+      <div style="width:104px;height:104px;border-radius:50%;background:conic-gradient(${hsc} 0deg ${gaugeArc}deg, #EEF2F8 ${gaugeArc}deg 360deg);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+        <div style="width:82px;height:82px;border-radius:50%;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;">
+          <div style="font-size:24px;font-weight:800;color:${hsc};line-height:1;letter-spacing:-0.02em;">${p.healthScore === null ? '—' : p.healthScore}</div>
+          <div style="font-size:9px;font-weight:700;color:#94A3B8;letter-spacing:0.08em;margin-top:2px;">HEALTH</div>
+        </div>
+      </div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:9.5px;font-weight:700;color:#94A3B8;letter-spacing:0.08em;margin-bottom:6px;">SCORE BREAKDOWN</div>
+        ${[
+          { label: 'Questions',      pct: Math.round(dedQ / dedTotal * 100), value: dedQ, color: '#0EA5E9' },
+          { label: 'Version EoS',    pct: Math.round(dedV / dedTotal * 100), value: dedV, color: '#B58800' },
+          { label: 'Infrastructure', pct: Math.round(dedI / dedTotal * 100), value: dedI, color: '#A30080' },
+        ].map((b) => `
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;">
+          <span style="font-size:10.5px;color:#64748B;width:80px;flex-shrink:0;">${b.label}</span>
+          <div style="flex:1;height:5px;border-radius:3px;background:#EEF2F8;overflow:hidden;">
+            <div style="height:100%;width:${Math.max(0, Math.min(100, b.pct))}%;background:${b.color};border-radius:3px;"></div>
+          </div>
+          <span style="font-size:10px;font-weight:700;color:#475569;font-family:'JetBrains Mono',monospace;width:30px;text-align:right;">−${b.value}</span>
+        </div>`).join('')}
+        <div style="font-size:10px;color:#94A3B8;margin-top:6px;font-family:'JetBrains Mono',monospace;">${p.totalAnswered}/${p.totalQuestions} questions answered</div>
+      </div>
+    </div>
+    <div style="background:${verdictBg};border:1px solid ${verdictBorder};border-left:4px solid ${verdictColor};border-radius:8px;padding:16px 20px;display:flex;align-items:center;gap:16px;">
+      <div style="font-size:28px;color:${verdictColor};flex-shrink:0;line-height:1;">${verdictIcon}</div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:16px;font-weight:800;color:${verdictColor};letter-spacing:-0.01em;">${esc(verdictLabel)}</div>
+        <div style="font-size:11px;color:#475569;margin-top:3px;">${p.allFindings.length} finding${p.allFindings.length === 1 ? '' : 's'} · ${eosEntries.length} EoS · ${infraCritCount + infraHighCount} infra alerts</div>
+      </div>
+      <div style="display:flex;gap:18px;flex-shrink:0;">
+        ${[
+          { label: 'CRIT + HIGH',  value: breakdownTotals.critical + breakdownTotals.high, color: breakdownTotals.critical + breakdownTotals.high > 0 ? '#A30080' : '#16A34A' },
+          { label: 'EOS',          value: eosEntries.length, color: eosEntries.length > 0 ? '#A30080' : '#16A34A' },
+          { label: 'INFRA ALERTS', value: infraCritCount + infraHighCount, color: infraCritCount > 0 ? '#A30080' : infraHighCount > 0 ? '#B58800' : '#16A34A' },
+        ].map((s) => `
+        <div style="text-align:center;">
+          <div style="font-size:22px;font-weight:800;color:${s.color};line-height:1;letter-spacing:-0.02em;font-family:'Inter',sans-serif;">${s.value}</div>
+          <div style="font-size:9px;font-weight:700;color:#64748B;letter-spacing:0.06em;margin-top:4px;">${s.label}</div>
+        </div>`).join('')}
+      </div>
+    </div>
+  </div>
+
+  <!-- Row 2: severity heat tiles -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px;page-break-inside:avoid;">
+    ${(['critical','high','medium','low'] as const).map((sev) => {
+      const cfg: Record<string, { color: string; bg: string; border: string; label: string }> = {
+        critical: { color: '#A30080', bg: '#FDF2F8', border: '#FBCFE8', label: 'CRITICAL' },
+        high:     { color: '#DC2626', bg: '#FEF2F2', border: '#FECACA', label: 'HIGH' },
+        medium:   { color: '#B58800', bg: '#FFFBEB', border: '#FDE68A', label: 'MEDIUM' },
+        low:      { color: '#0284C7', bg: '#F0F9FF', border: '#BAE6FD', label: 'LOW' },
+      };
+      const c = cfg[sev];
+      const count = sev === 'critical' ? aggregateSev.CRITICAL : sev === 'high' ? aggregateSev.HIGH : sev === 'medium' ? aggregateSev.MEDIUM : aggregateSev.LOW;
+      return `<div style="background:${c.bg};border:1px solid ${c.border};border-top:3px solid ${c.color};border-radius:6px;padding:12px 14px;">
+        <div style="font-size:9px;font-weight:800;color:${c.color};letter-spacing:0.1em;">${c.label}</div>
+        <div style="font-size:28px;font-weight:800;color:${c.color};line-height:1;margin-top:4px;letter-spacing:-0.02em;font-family:'Inter',sans-serif;">${count}</div>
+        <div style="font-size:10px;color:#64748B;margin-top:4px;">findings &amp; recommendations</div>
+      </div>`;
+    }).join('')}
+  </div>
+
+  <!-- Row 3: risk × source matrix + coverage stats -->
+  <div style="display:grid;grid-template-columns:1.55fr 1fr;gap:12px;margin-bottom:12px;page-break-inside:avoid;">
+    <div style="background:#FFFFFF;border:1px solid var(--fp-rule);border-radius:8px;padding:14px 16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+        <div style="font-size:11.5px;font-weight:700;color:var(--fp-navy);">Risk Posture by Category</div>
+        <div style="font-size:10px;color:#94A3B8;">Severity × source</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1.5fr repeat(4,1fr);gap:5px;align-items:center;">
+        <div></div>
+        ${[
+          { label: 'CRIT', color: '#A30080' },
+          { label: 'HIGH', color: '#DC2626' },
+          { label: 'MED',  color: '#B58800' },
+          { label: 'LOW',  color: '#0284C7' },
+        ].map((h) => `<div style="font-size:9px;font-weight:800;color:${h.color};text-align:center;letter-spacing:0.07em;">${h.label}</div>`).join('')}
+        ${riskMatrixRows.map((row) => {
+          const cellHtml = (count: number, color: string) => {
+            const bg = count === 0 ? '#F8FAFC' : count >= 5 ? color : count >= 3 ? `${color}80` : `${color}33`;
+            const txt = count === 0 ? '#CBD5E1' : count >= 5 ? '#fff' : color;
+            const brd = count === 0 ? '#E2E8F0' : `${color}40`;
+            return `<div style="height:28px;display:flex;align-items:center;justify-content:center;border-radius:5px;background:${bg};border:1px solid ${brd};font-size:12px;font-weight:800;color:${txt};font-family:'Inter',sans-serif;">${count}</div>`;
+          };
+          return `
+            <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--fp-ink);font-weight:600;">
+              <span style="font-size:14px;">${row.icon}</span>${esc(row.label)}
+            </div>
+            ${cellHtml(row.critical, '#A30080')}
+            ${cellHtml(row.high, '#DC2626')}
+            ${cellHtml(row.medium, '#B58800')}
+            ${cellHtml(row.low, '#0284C7')}
+          `;
+        }).join('')}
+      </div>
+    </div>
+    <div style="background:#FFFFFF;border:1px solid var(--fp-rule);border-radius:8px;padding:14px 16px;">
+      <div style="font-size:11.5px;font-weight:700;color:var(--fp-navy);margin-bottom:10px;">Coverage Stats</div>
+      ${(() => {
+        const bars: { label: string; value: number; max: number; color: string }[] = [];
+        const activeSrvCount = activeServers.length;
+        if (p.serverDetails.length > 0) bars.push({ label: 'Servers reviewed', value: activeSrvCount, max: p.serverDetails.length, color: '#0EA5E9' });
+        const versionEntriesCount = allVEntries.length;
+        if (versionEntriesCount > 0) bars.push({ label: 'Version entries', value: versionEntriesCount, max: Math.max(versionEntriesCount, 10), color: '#A30080' });
+        if (p.dlpBundles.length > 0) {
+          /* Count the actual files successfully parsed across every uploaded
+             DLP Server Info folder — the figure executives care about ("how
+             much raw telemetry did we consume?"), not how many top-level
+             folders were uploaded. */
+          const parsedFileTotal = p.dlpBundles.reduce((sum, b) => sum + (b.parsedFiles?.length ?? 0), 0);
+          bars.push({ label: 'DLP Telemetry Files', value: parsedFileTotal, max: Math.max(parsedFileTotal, 20), color: '#B58800' });
+        }
+        if (p.certificates.length > 0) bars.push({ label: 'Certificates', value: p.certificates.length, max: Math.max(p.certificates.length, 5), color: '#7C3AED' });
+        if (p.endpointAgentSummary) bars.push({ label: 'Endpoints (current)', value: p.endpointAgentSummary.totalRecords - p.endpointAgentSummary.outdatedCount, max: p.endpointAgentSummary.totalRecords || 1, color: '#16A34A' });
+        return bars.map((b) => {
+          const pctVal = b.max > 0 ? Math.min(100, Math.round((b.value / b.max) * 100)) : 0;
+          return `
+          <div style="margin-bottom:8px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;">
+              <span style="font-size:10.5px;color:#475569;font-weight:500;">${esc(b.label)}</span>
+              <span style="font-size:10.5px;font-weight:700;color:var(--fp-navy);font-family:'JetBrains Mono',monospace;">${b.value.toLocaleString()}</span>
+            </div>
+            <div style="height:5px;border-radius:3px;background:#EEF2F8;overflow:hidden;">
+              <div style="height:100%;width:${pctVal}%;background:${b.color};border-radius:3px;"></div>
+            </div>
+          </div>`;
+        }).join('');
+      })()}
+    </div>
+  </div>
+
+  <!-- Row 4: per-product scorecards -->
+  ${productCards.length > 0 ? `
+  <div style="background:#FFFFFF;border:1px solid var(--fp-rule);border-radius:8px;padding:14px 16px;margin-bottom:12px;page-break-inside:avoid;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <div style="font-size:11.5px;font-weight:700;color:var(--fp-navy);">Per-Product Posture</div>
+      <div style="font-size:10px;color:#94A3B8;">Severity-weighted checklist completion</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(${Math.min(productCards.length, 4)},minmax(0,1fr));gap:10px;">
+      ${productCards.map(({ template, score, totalF, answered, total, bySev, sc }) => {
+        const pctScore = score ?? 0;
+        return `<div style="background:#FAFCFF;border:1px solid ${template.color}26;border-radius:6px;padding:10px;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:7px;">
+            <div style="width:52px;height:52px;border-radius:50%;background:conic-gradient(${sc} 0deg ${pctScore * 3.6}deg, #EEF2F8 ${pctScore * 3.6}deg 360deg);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+              <div style="width:40px;height:40px;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:${sc};letter-spacing:-0.01em;">${score === null ? '—' : score}</div>
+            </div>
+            <div style="flex:1;min-width:0;">
+              <div style="display:flex;align-items:center;gap:5px;">
+                <span style="font-size:14px;">${esc(template.icon)}</span>
+                <span style="font-size:11.5px;font-weight:700;color:var(--fp-ink);">${esc(template.name.replace(' HC', ''))}</span>
+              </div>
+              <div style="font-size:9.5px;color:#64748B;font-family:'JetBrains Mono',monospace;margin-top:2px;">${answered}/${total} answered · ${totalF} finding${totalF === 1 ? '' : 's'}</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:4px;flex-wrap:wrap;">
+            ${(['CRITICAL','HIGH','MEDIUM','LOW'] as const).map((sv) => {
+              const sevColor: Record<string, { bg: string; border: string; color: string }> = {
+                CRITICAL: { bg: '#FDF2F8', border: '#FBCFE8', color: '#A30080' },
+                HIGH:     { bg: '#FEF2F2', border: '#FECACA', color: '#DC2626' },
+                MEDIUM:   { bg: '#FFFBEB', border: '#FDE68A', color: '#B58800' },
+                LOW:      { bg: '#F0F9FF', border: '#BAE6FD', color: '#0284C7' },
+              };
+              const cfg = sevColor[sv];
+              const n = bySev[sv] ?? 0;
+              const bg = n > 0 ? cfg.bg : '#F8FAFC';
+              const co = n > 0 ? cfg.color : '#CBD5E1';
+              const brd = n > 0 ? cfg.border : '#E2E8F0';
+              return `<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;background:${bg};color:${co};border:1px solid ${brd};font-family:'JetBrains Mono',monospace;">${sv.charAt(0)}:${n}</span>`;
+            }).join('')}
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>` : ''}
+
+  <!-- Row 5: activity pulse strip -->
+  <div style="background:#FFFFFF;border:1px solid var(--fp-rule);border-radius:8px;padding:12px 16px;margin-bottom:12px;page-break-inside:avoid;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <div style="font-size:11.5px;font-weight:700;color:var(--fp-navy);">Activity Pulse</div>
+      <div style="font-size:10px;color:#94A3B8;">Roadmap items captured so far</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:7px;">
+      ${[
+        { label: 'Recommendations',   value: p.recommendations.length, accent: '#0EA5E9' },
+        { label: 'Action Items',      value: p.actionItems.filter((i) => i.status !== 'done').length, sub: `${p.actionItems.filter((i) => i.status === 'done').length} done`, accent: '#16A34A' },
+        { label: 'Customer FRs',      value: p.featureRequests.length, accent: '#7C3AED' },
+        { label: 'License Gap',       value: p.licenseGaps?.length ?? 0, accent: '#B58800' },
+        { label: 'Enhancements',      value: p.selectedEnhancements.length, accent: '#0284C7' },
+        { label: 'Version Upgrades',  value: p.versionUpgrades.length, accent: '#A30080' },
+      ].map((t) => `
+      <div style="background:${t.accent}08;border:1px solid ${t.accent}26;border-left:3px solid ${t.accent};border-radius:5px;padding:9px 10px;">
+        <div style="font-size:9px;font-weight:700;color:${t.accent};letter-spacing:0.06em;text-transform:uppercase;">${t.label}</div>
+        <div style="font-size:20px;font-weight:800;color:var(--fp-navy);line-height:1;letter-spacing:-0.02em;margin-top:4px;font-family:'Inter',sans-serif;">${t.value}</div>
+        ${t.sub ? `<div style="font-size:9.5px;color:#94A3B8;margin-top:2px;font-family:'JetBrains Mono',monospace;">${t.sub}</div>` : ''}
+      </div>`).join('')}
+    </div>
+  </div>
+
+  <!-- Row 5b: DLP Estate Pulse — only when DLP is in scope AND we have at
+       least one parsed bundle to draw telemetry from. Aggregates across all
+       uploaded bundles so a multi-server estate folds into one set of KPIs. -->
+  ${p.selectedProducts.data && p.dlpBundles.length > 0 ? (() => {
+    let archivedEvents = 0, onlineEvents = 0, totalEvents = 0;
+    let dataStart = '', dataEnd = '';
+    let totalComponents = 0, totalSynced = 0;
+    let totalRules = 0, totalPolicies = 0;
+    let syncedEp = 0, unsyncedEp = 0;
+    for (const bundle of p.dlpBundles) {
+      const ep = bundle.eventPartitions?.summary;
+      if (ep) {
+        archivedEvents += ep.archivedEvents;
+        onlineEvents   += ep.onlineEvents;
+        totalEvents    += ep.totalEvents;
+        if (ep.dataHistoryStart && (!dataStart || ep.dataHistoryStart < dataStart)) dataStart = ep.dataHistoryStart;
+        if (ep.dataHistoryEnd && (!dataEnd || ep.dataHistoryEnd > dataEnd)) dataEnd = ep.dataHistoryEnd;
+      }
+      const se = bundle.siteElements;
+      if (se) {
+        totalComponents += se.syncStatus.total;
+        totalSynced     += se.syncStatus.synchronized;
+      }
+      const ap = bundle.activePolicies;
+      if (ap) {
+        totalRules += ap.totalRules;
+        totalPolicies += ap.policyNames.length;
+      }
+      const ec = bundle.endpointClients;
+      if (ec) {
+        syncedEp   += ec.syncedCount;
+        unsyncedEp += ec.unsyncedCount;
+      }
+    }
+    const syncPct = totalComponents > 0 ? Math.round((totalSynced / totalComponents) * 1000) / 10 : 0;
+    const incidents = p.dlpDashboardSummary?.totalIncidents ?? 0;
+    const fmt = (n: number): string => n.toLocaleString();
+    /* Compact date — "Jan 2024" rather than "2024-01-15" so the date-range
+       tile fits in one column without truncating. */
+    const fmtMonth = (iso: string): string => {
+      if (!iso) return '—';
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return iso;
+      return d.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
+    };
+    const range = dataStart && dataEnd ? `${fmtMonth(dataStart)} → ${fmtMonth(dataEnd)}` : '—';
+
+    const tiles = [
+      { label: 'Archived Events',  value: fmt(archivedEvents), accent: '#64748B' },
+      { label: 'Online Events',    value: fmt(onlineEvents),   accent: '#0284C7' },
+      { label: 'Total Events',     value: fmt(totalEvents),    accent: '#0F2952', big: true },
+      { label: 'Incidents (PDF)',  value: fmt(incidents),      accent: incidents > 0 ? '#A30080' : '#16A34A', sub: incidents > 0 ? 'from DLP dashboard' : 'none reported' },
+      { label: 'Components',       value: `${totalComponents}`, accent: syncPct < 70 ? '#A30080' : syncPct < 95 ? '#B58800' : '#16A34A', sub: totalComponents > 0 ? `${syncPct}% synced` : 'no inventory' },
+      { label: 'Active Policies',  value: `${totalPolicies}`,   accent: '#7C3AED', sub: totalRules > 0 ? `${totalRules} rules` : '' },
+    ];
+
+    return `
+  <div style="background:#FFFFFF;border:1px solid var(--fp-rule);border-radius:8px;padding:12px 16px;margin-bottom:12px;page-break-inside:avoid;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <div style="font-size:11.5px;font-weight:700;color:var(--fp-navy);">DLP Estate Pulse</div>
+      <div style="font-size:10px;color:#94A3B8;">Telemetry aggregated from ${p.dlpBundles.length} bundle${p.dlpBundles.length === 1 ? '' : 's'}</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:7px;">
+      ${tiles.map((t) => `
+      <div style="background:${t.accent}08;border:1px solid ${t.accent}26;border-left:3px solid ${t.accent};border-radius:5px;padding:9px 10px;">
+        <div style="font-size:9px;font-weight:700;color:${t.accent};letter-spacing:0.06em;text-transform:uppercase;">${t.label}</div>
+        <div style="font-size:${t.big ? 22 : 19}px;font-weight:800;color:var(--fp-navy);line-height:1;letter-spacing:-0.02em;margin-top:4px;font-family:'Inter',sans-serif;">${esc(t.value)}</div>
+        ${t.sub ? `<div style="font-size:9.5px;color:#94A3B8;margin-top:2px;font-family:'JetBrains Mono',monospace;">${esc(t.sub)}</div>` : ''}
+      </div>`).join('')}
+    </div>
+    <!-- Second row: 2 wider tiles for date range + endpoint client split -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:7px;">
+      <div style="background:#FAFCFF;border:1px solid #E2E8F0;border-left:3px solid #0F2952;border-radius:5px;padding:9px 10px;">
+        <div style="font-size:9px;font-weight:700;color:#0F2952;letter-spacing:0.06em;text-transform:uppercase;">Data History</div>
+        <div style="font-size:14px;font-weight:700;color:var(--fp-navy);line-height:1.15;margin-top:4px;font-family:'JetBrains Mono',monospace;">${esc(range)}</div>
+      </div>
+      <div style="background:#FAFCFF;border:1px solid #E2E8F0;border-left:3px solid #16A34A;border-radius:5px;padding:9px 10px;">
+        <div style="font-size:9px;font-weight:700;color:#16A34A;letter-spacing:0.06em;text-transform:uppercase;">Endpoint Clients</div>
+        <div style="display:flex;align-items:baseline;gap:10px;margin-top:4px;">
+          <span style="font-size:18px;font-weight:800;color:#16A34A;line-height:1;font-family:'Inter',sans-serif;">${fmt(syncedEp)}</span>
+          <span style="font-size:9.5px;color:#16A34A;font-weight:700;letter-spacing:0.05em;">SYNCED</span>
+          <span style="color:#CBD5E1;">·</span>
+          <span style="font-size:18px;font-weight:800;color:${unsyncedEp > 0 ? '#A30080' : '#94A3B8'};line-height:1;font-family:'Inter',sans-serif;">${fmt(unsyncedEp)}</span>
+          <span style="font-size:9.5px;color:${unsyncedEp > 0 ? '#A30080' : '#94A3B8'};font-weight:700;letter-spacing:0.05em;">UNSYNCED</span>
+        </div>
+      </div>
+    </div>
+  </div>`;
+  })() : ''}
+
+  <!-- Top Concerns chip strip -->
+  ${topConcerns.length > 0 ? `
+  <div style="background:#FFFFFF;border:1px solid var(--fp-rule);border-radius:8px;padding:12px 16px;margin-bottom:14px;page-break-inside:avoid;">
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
+      <span style="font-size:13px;color:#A30080;">⚠</span>
+      <div style="font-size:11.5px;font-weight:700;color:var(--fp-navy);">Top Concerns</div>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;">
+      ${topConcerns.slice(0, 6).map((c) => `<span style="display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border-radius:6px;background:${c.bg};color:${c.color};border:1px solid ${c.border};font-size:10.5px;font-weight:600;">${c.icon} ${esc(c.text)}</span>`).join('')}
+    </div>
+  </div>` : ''}
+
+  <!-- Risk Heat Map — pure 2×2 heatmap. No labels inside cells; axis labels
+       sit outside the grid as a discrete 3×3 CSS grid layout (axis row +
+       axis column + 2×2 cell block). Each cell shows only the count, big
+       and centered; colour intensity scales with how full that quadrant is. -->
+  <div class="subsection-title">Risk Heat Map</div>
+  ${(() => {
+    const critN = eosEntries.length + expiredCerts.length + p.allFindings.filter((f) => f.severity === 'CRITICAL').length;
+    const highN = infraCritCount + expiringCerts.length + (supportUpgradeNeeded ? 1 : 0) + p.allFindings.filter((f) => f.severity === 'HIGH').length;
+    const medN  = infraHighCount + warnEntries.length + p.allFindings.filter((f) => f.severity === 'MEDIUM').length;
+    const lowN  = p.allFindings.filter((f) => f.severity === 'LOW').length;
+    /* Cell colouring: filled cells use a solid saturated background with
+       WHITE numerals for maximum contrast (standard heatmap convention).
+       Empty cells use a near-transparent tint of the zone colour with a
+       muted grey "0" — they should fade into the background, not compete
+       with the populated zones. */
+    const cell = (n: number, baseColor: string) => {
+      const bg = n === 0 ? `${baseColor}14` : baseColor;
+      const txt = n === 0 ? '#94A3B8' : '#FFFFFF';
+      const borderC = n === 0 ? `${baseColor}40` : baseColor;
+      const shadow = n === 0 ? 'none' : 'inset 0 0 0 1px rgba(255,255,255,0.18)';
+      return `
+      <div style="background:${bg};border:1px solid ${borderC};border-radius:6px;display:flex;align-items:center;justify-content:center;height:110px;box-shadow:${shadow};">
+        <span style="font-size:46px;font-weight:800;color:${txt};line-height:1;letter-spacing:-0.03em;font-family:'Inter',sans-serif;text-shadow:${n > 0 ? '0 1px 2px rgba(0,0,0,0.18)' : 'none'};">${n}</span>
+      </div>`;
+    };
+    const axisLabel = (text: string) => `<div style="font-size:9.5px;font-weight:800;color:#64748B;letter-spacing:0.1em;text-transform:uppercase;display:flex;align-items:center;justify-content:center;">${text}</div>`;
+    return `
+    <div style="display:grid;grid-template-columns:34px 50px 1fr 1fr;grid-template-rows:auto auto auto auto;gap:6px;page-break-inside:avoid;margin-bottom:10px;">
+      <!-- Top axis title row -->
+      <div></div>
+      <div></div>
+      <div style="grid-column:3 / 5;text-align:center;font-size:10px;font-weight:800;color:#0F2952;letter-spacing:0.12em;text-transform:uppercase;padding-bottom:2px;">Likelihood</div>
+      <!-- Top axis tick row -->
+      <div></div>
+      <div></div>
+      ${axisLabel('Low')}
+      ${axisLabel('High')}
+      <!-- Row 1: High impact -->
+      <div style="grid-row:3 / 5;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#0F2952;letter-spacing:0.12em;text-transform:uppercase;writing-mode:vertical-rl;transform:rotate(180deg);">Impact</div>
+      ${axisLabel('High')}
+      ${cell(highN, '#B58800')}
+      ${cell(critN, '#A30080')}
+      <!-- Row 2: Low impact -->
+      ${axisLabel('Low')}
+      ${cell(lowN, '#16A34A')}
+      ${cell(medN, '#B58800')}
+    </div>
+    <!-- Legend -->
+    <div style="display:flex;align-items:center;justify-content:center;gap:20px;font-size:10px;color:#64748B;margin-bottom:10px;">
+      <span style="display:flex;align-items:center;gap:6px;"><span style="width:16px;height:10px;border-radius:3px;background:#A30080;border:1px solid #A30080;"></span> Critical zone</span>
+      <span style="display:flex;align-items:center;gap:6px;"><span style="width:16px;height:10px;border-radius:3px;background:#B58800;border:1px solid #B58800;"></span> Watch zone</span>
+      <span style="display:flex;align-items:center;gap:6px;"><span style="width:16px;height:10px;border-radius:3px;background:#16A34A;border:1px solid #16A34A;"></span> Safe zone</span>
+    </div>
+
+    <!-- Explanation block: what the heat map means and how to read it. -->
+    <div style="background:#F8FAFC;border:1px solid var(--fp-rule);border-left:3px solid #023E8A;border-radius:6px;padding:10px 14px;font-size:10.5px;color:var(--fp-ink);line-height:1.65;page-break-inside:avoid;">
+      <div style="font-size:10px;font-weight:800;color:#023E8A;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:5px;">How to read this map</div>
+      <div>
+        Each item identified in this assessment is plotted by <strong>Impact</strong> (how serious the consequence is if the issue triggers) and <strong>Likelihood</strong> (how probable it is given the current deployment). The four cells are remediation zones rather than risk scores:
+      </div>
+      <ul style="margin:6px 0 0;padding-left:18px;">
+        <li><strong style="color:#A30080;">Critical zone</strong> (top-right) — high impact &amp; high likelihood. Address first; these items justify immediate change-control bookings.</li>
+        <li><strong style="color:#B58800;">Watch zones</strong> (top-left, bottom-right) — one dimension is elevated. Plan into the next maintenance window; trend the metric in the meantime.</li>
+        <li><strong style="color:#16A34A;">Safe zone</strong> (bottom-left) — low impact &amp; low likelihood. No action required beyond the standard monitoring cadence.</li>
+      </ul>
+    </div>`;
+  })()}
+</div>
+
+<!-- Top Critical Risks section removed — the CISO Dashboard widgets in
+     Part 0 · Risk Posture and the technical evidence in Parts I–III now
+     cover the same ground without the prose duplication. -->
+
+
+<!-- ══════════════════════════════════════
+     PART 0 · 03 COMPLIANCE EXPOSURE
+══════════════════════════════════════ -->
+<div class="section">
+  <div class="section-eyebrow">Part 0 · Compliance Lens</div>
+  <div class="section-title">Compliance Exposure</div>
+  <p class="section-lead">
+    The compliance frameworks below are relevant to this customer based on jurisdiction and industry. The findings in this report — particularly End-of-Support components, expired certificates, and DLP enforcement gaps — create direct audit and reporting exposure under each framework listed.
+  </p>
+  <div class="comp-grid">
+    ${complianceFrameworks.map(fw => {
+      const statusCfg: Record<string, { label: string; bg: string; color: string; border: string; icon: string }> = {
+        compliant:     { label: 'Compliant',     bg: 'var(--fp-green-soft)',    color: 'var(--fp-green)',    border: '#D4EBA8', icon: '✓' },
+        partial:       { label: 'Partial',       bg: 'var(--fp-yellow-soft)',   color: 'var(--fp-warn)',     border: '#FDE68A', icon: '◐' },
+        non_compliant: { label: 'Non-Compliant', bg: 'var(--fp-red-soft)',      color: 'var(--fp-red)',      border: '#FECACA', icon: '✗' },
+        unassessed:    { label: 'Not Assessed',  bg: 'var(--fp-rule-soft)',     color: 'var(--fp-ink-faint)', border: 'var(--fp-rule)', icon: '?' },
+      };
+      const s = statusCfg[fw.complianceStatus ?? 'unassessed'] ?? statusCfg.unassessed;
+      return `
+      <div class="comp-card">
+        <div class="comp-card-head">
+          <span class="comp-code">${esc(fw.code)}</span>
+          <span class="comp-pillar">${esc(fw.pillar)}</span>
+        </div>
+        <div class="comp-name">${esc(fw.name)}</div>
+        <div class="comp-relevance">${esc(fw.relevance)}</div>
+        <div style="margin-top:8px;padding-top:8px;border-top:1px dashed ${s.border};display:flex;align-items:center;gap:6px;">
+          <span style="display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:3px;background:${s.bg};color:${s.color};border:1px solid ${s.border};font-size:9.5px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;">
+            <span style="font-size:11px;line-height:1;">${s.icon}</span>${s.label}
+          </span>
+          <span style="font-size:9.5px;color:var(--fp-ink-faint);letter-spacing:0.04em;">via Forcepoint DLP</span>
+        </div>
+      </div>
+    `;
+    }).join('')}
+  </div>
+  <p style="font-size:10.5px;color:var(--fp-ink-muted);margin-top:14px;line-height:1.65;font-style:italic;">
+    Compliance frameworks above were inferred from customer country, region, and industry as captured in Step 1. They are a starting point for the legal/compliance discussion — not an exhaustive obligation register. The customer's own compliance team should validate the applicable framework list.
+  </p>
+</div>
+
+</div><!-- /content (Part 0 closes here) -->
+
+<!-- ══════════════════════════════════════
      PART I — EXECUTIVE OVERVIEW
 ══════════════════════════════════════ -->
 <div class="chapter">
@@ -977,7 +1953,7 @@ tr:last-child td{border-bottom:none;}
      INTRODUCTION
 ══════════════════════════════════════ -->
 <div class="section">
-  <div class="section-eyebrow">Section 01 · Background</div>
+  <div class="section-eyebrow">Section 01 · Part I · Background</div>
   <div class="section-title">Introduction</div>
   <p class="section-lead">
     The Forcepoint Health Check &amp; Maturity Assessment evaluates the current state of the deployed Forcepoint
@@ -1047,7 +2023,7 @@ ${(() => {
 
   return `
 <div class="section">
-  <div class="section-eyebrow">Section 02 · Customer Profile</div>
+  <div class="section-eyebrow">Section 02 · Part I · Customer Profile</div>
   <div class="section-title">Customer Account &amp; Licensing</div>
 
   ${upgradeNeeded ? `
@@ -1262,8 +2238,8 @@ ${(() => {
      EXECUTIVE SUMMARY — verdict + KPIs + key findings + recs
 ══════════════════════════════════════ -->
 <div class="section">
-  <div class="section-eyebrow">${hasAccountSection ? 'Section 03' : 'Section 02'} · Board Briefing</div>
-  <div class="section-title">Executive Summary</div>
+  <div class="section-eyebrow">${hasAccountSection ? 'Section 03' : 'Section 02'} · Part I · Board Briefing</div>
+  <div class="section-title">Executive Details</div>
 
   ${(() => {
     const cust = esc(p.sessionData.customerName || 'The customer');
@@ -1315,9 +2291,10 @@ ${(() => {
       ? `conic-gradient(${trackColor} 0deg 360deg)`
       : `conic-gradient(${typeof gaugeColor === 'string' && gaugeColor.startsWith('var(') ? gaugeColor : gaugeColor} 0deg ${fillPct * 3.6}deg, ${trackColor} ${fillPct * 3.6}deg 360deg)`;
 
-    const mediumCount = p.allFindings.filter(f => f.severity === 'MEDIUM').length;
-    const lowCount    = p.allFindings.filter(f => f.severity === 'LOW').length;
-    const maxSev = Math.max(criticalCount, highCount, mediumCount, lowCount, 1);
+    /* This severity bar chart shows CHECKLIST-only counts ("${p.allFindings.length} total"
+       text matches `p.allFindings.length`). For aggregate cross-category counts (Critical
+       Findings on the cover and Part 0 breakdown), see `criticalCount` / `highCount`. */
+    const maxSev = Math.max(checklistCritical, checklistHigh, checklistMedium, checklistLow, 1);
     const sevRow = (label: string, count: number, color: string) => `
       <div class="exec-sev-row">
         <div class="exec-sev-label" style="color:${color};">${label}</div>
@@ -1338,11 +2315,11 @@ ${(() => {
         <div class="exec-gauge-band" style="background:${gaugeBand.bg};color:${gaugeBand.color};">${gaugeBand.label}</div>
       </div>
       <div class="exec-sev-card">
-        <div class="exec-sev-title">Findings by Severity (${p.allFindings.length} total)</div>
-        ${sevRow('CRITICAL', criticalCount, 'var(--fp-violette)')}
-        ${sevRow('HIGH',     highCount,     'var(--fp-red)')}
-        ${sevRow('MEDIUM',   mediumCount,   'var(--fp-yellow)')}
-        ${sevRow('LOW',      lowCount,      'var(--fp-green)')}
+        <div class="exec-sev-title">Findings &amp; Recommendations by Severity (${aggregateTotal} total)</div>
+        ${sevRow('CRITICAL', aggregateSev.CRITICAL, 'var(--fp-violette)')}
+        ${sevRow('HIGH',     aggregateSev.HIGH,     'var(--fp-red)')}
+        ${sevRow('MEDIUM',   aggregateSev.MEDIUM,   'var(--fp-yellow)')}
+        ${sevRow('LOW',      aggregateSev.LOW,      'var(--fp-green)')}
       </div>
     </div>
 
@@ -1402,37 +2379,264 @@ ${(() => {
 
   <p class="section-lead">
     ${hasAccountSection
-      ? `Building on the account &amp; licensing context established in the preceding section, this Executive Summary consolidates the headline metrics, the highest-priority findings, and the strategic recommendations into a single decision-ready view.`
-      : `This Executive Summary consolidates the headline metrics, the highest-priority findings, and the strategic recommendations into a single decision-ready view.`}
+      ? `Building on the account &amp; licensing context established in the preceding section, these Executive Details consolidate the headline metrics, the highest-priority findings, and the strategic recommendations into a single decision-ready view.`
+      : `These Executive Details consolidate the headline metrics, the highest-priority findings, and the strategic recommendations into a single decision-ready view.`}
     Detailed evidence is presented in <em>Part II — Technical Assessment</em>, and the implementation plan in <em>Part III — Roadmap &amp; Strategy</em>.
   </p>
 
-  ${keyObs.length > 0 ? `
-  <div class="subsection-title">Key Observations</div>
-  <div class="obs-group">
-    ${keyObs.map(o => `<div class="obs obs-${esc(o.level)}">
-      <span class="obs-label" style="color:${obsColor[o.level] ?? '#64748b'};">${esc(o.level)}</span>
-      <span class="obs-text">${esc(o.text)}</span>
-    </div>`).join('')}
-  </div>` : ''}
+  ${(() => {
+    /* ─── Executive Quick-Look Checklist ────────────────────────────
+       Six yes/no questions an executive can scan in 5 seconds.
+       Replaces the old long Key Observations card grid — detail lives
+       in Parts II and III; this widget answers the "should I be
+       worried?" question per dimension. */
+    const today = Date.now();
+    const day = 24 * 60 * 60 * 1000;
+
+    // Q4: licenses with expiry within 6 months
+    const licenseExpiringSoon = (p.sessionData.licenses ?? []).filter((l) => {
+      if (!l.expiry || l.expiry === '—') return false;
+      const d = new Date(l.expiry).getTime();
+      return !Number.isNaN(d) && d > today && d - today < 180 * day;
+    }).length;
+    const licenseExpired = (p.sessionData.licenses ?? []).filter((l) => {
+      if (!l.expiry || l.expiry === '—') return false;
+      const d = new Date(l.expiry).getTime();
+      return !Number.isNaN(d) && d <= today;
+    }).length;
+
+    // Q5: hardware warranty — expired or expiring (status != active OR
+    //     last-warranty date in past / approaching)
+    const hardwareIssues = (p.sessionData.hardware ?? []).filter((h) => {
+      const ws = (h.warrantyStatus || '').toLowerCase();
+      return ws && ws !== 'active';
+    }).length;
+
+    // Q3: critical-priority version upgrade proposals
+    const criticalUpgrades = p.versionUpgrades.filter((v) => v.priority === 'critical').length;
+
+    type CheckItem = {
+      icon: string;
+      question: string;
+      count: number;
+      severity: 'critical' | 'warn' | 'ok' | 'neutral';
+      evidence: string;
+      /* When a card asks a status question rather than a problem question,
+         override the default YES/WATCH/NO verdict text (e.g. HEALTHY, AT RISK). */
+      verdictOverride?: string;
+    };
+    const items: CheckItem[] = [
+      {
+        icon: '🖥',
+        question: 'Server resource issues?',
+        count: infraCritCount + infraHighCount,
+        severity: infraCritCount > 0 ? 'critical' : infraHighCount > 0 ? 'warn' : 'ok',
+        evidence: infraCritCount + infraHighCount === 0
+          ? 'All monitored servers below 70% CPU / RAM / disk thresholds.'
+          : `${infraCritCount} metric${infraCritCount === 1 ? '' : 's'} ≥ 85% · ${infraHighCount} between 70–85%.`,
+      },
+      {
+        icon: '📦',
+        question: 'End-of-Support products in production?',
+        count: eosEntries.length,
+        severity: eosEntries.length > 0 ? 'critical' : 'ok',
+        evidence: eosEntries.length === 0
+          ? 'All components on supported, vendor-maintained releases.'
+          : `${eosEntries.length} component${eosEntries.length === 1 ? '' : 's'} past EoS — no patches, no vendor accountability.`,
+      },
+      {
+        icon: '⬆',
+        question: 'Critical upgrades required?',
+        count: criticalUpgrades,
+        severity: criticalUpgrades > 0 ? 'critical' : warnEntries.length > 0 ? 'warn' : 'ok',
+        evidence: criticalUpgrades > 0
+          ? `${criticalUpgrades} upgrade${criticalUpgrades === 1 ? '' : 's'} flagged CRITICAL by analyst.`
+          : warnEntries.length > 0
+            ? `${warnEntries.length} component${warnEntries.length === 1 ? '' : 's'} have updates available — none flagged critical.`
+            : 'Estate is on current GA releases.',
+      },
+      {
+        icon: '⏳',
+        question: 'License expiry approaching?',
+        count: licenseExpiringSoon + licenseExpired,
+        severity: licenseExpired > 0 ? 'critical' : licenseExpiringSoon > 0 ? 'warn' : 'ok',
+        evidence: licenseExpired > 0
+          ? `${licenseExpired} license${licenseExpired === 1 ? '' : 's'} already expired · ${licenseExpiringSoon} expiring within 6 months.`
+          : licenseExpiringSoon > 0
+            ? `${licenseExpiringSoon} license${licenseExpiringSoon === 1 ? '' : 's'} expiring within 6 months — renewal cycle ahead.`
+            : 'All licenses active beyond the 6-month renewal horizon.',
+      },
+      {
+        icon: '🛠',
+        question: 'Hardware warranty expired or expiring?',
+        count: hardwareIssues,
+        severity: hardwareIssues > 0 ? 'warn' : 'ok',
+        evidence: hardwareIssues > 0
+          ? `${hardwareIssues} appliance${hardwareIssues === 1 ? '' : 's'} with warranty status other than ACTIVE — extension or refresh required.`
+          : 'All Forcepoint appliances under active warranty.',
+      },
+      {
+        icon: '📜',
+        question: 'License extension / gap recommendation?',
+        count: p.licenseGaps?.length ?? 0,
+        severity: (p.licenseGaps?.length ?? 0) > 0 ? 'warn' : 'ok',
+        evidence: (p.licenseGaps?.length ?? 0) > 0
+          ? `${p.licenseGaps!.length} license-gap item${p.licenseGaps!.length === 1 ? '' : 's'} identified — see Recommended License Extension.`
+          : 'No gap between current entitlement and observed deployment scope.',
+      },
+    ];
+
+    /* Status-style cards — what we're proposing to the customer. */
+    items.push({
+      icon: '💡',
+      question: 'Recommendations defined?',
+      count: p.recommendations.length,
+      severity: p.recommendations.length > 0 ? 'ok' : 'warn',
+      evidence: p.recommendations.length > 0
+        ? `${p.recommendations.length} recommendation${p.recommendations.length === 1 ? '' : 's'} captured · prioritized in Part III.`
+        : 'No recommendations captured — Part III roadmap will be empty.',
+      verdictOverride: p.recommendations.length > 0 ? `${p.recommendations.length} REC` : 'NONE',
+    });
+
+    const doneActions = p.actionItems.filter((a) => a.status === 'done').length;
+    items.push({
+      icon: '🎯',
+      question: 'Action plan items?',
+      count: p.actionItems.length,
+      severity: p.actionItems.length > 0 ? 'ok' : 'warn',
+      evidence: p.actionItems.length > 0
+        ? `${openActions} open · ${doneActions} done · execution plan in Part III.`
+        : 'No action items defined — no execution plan captured.',
+      verdictOverride: p.actionItems.length > 0 ? `${p.actionItems.length} ACTIONS` : 'NONE',
+    });
+
+    /* Agent health — only meaningful when DLP is in scope and the analyst
+       generated an assessment in Step 7. Skipped otherwise. */
+    if (p.selectedProducts.data && p.endpointCompatAssessment) {
+      const cs = p.endpointCompatAssessment.compatibilityStatus;
+      items.push({
+        icon: '💻',
+        question: 'F1E agent fleet healthy?',
+        count: cs === 'SUPPORTED' ? 0 : 1,
+        severity: cs === 'SUPPORTED' ? 'ok' : cs === 'AT_RISK' ? 'warn' : 'critical',
+        evidence: cs === 'SUPPORTED'
+          ? `Fleet aligned with supported baseline (v${p.endpointCompatAssessment.minimumRequiredAgent}+).`
+          : cs === 'AT_RISK'
+            ? `Some endpoints below v${p.endpointCompatAssessment.minimumRequiredAgent} — see Agent Compatibility.`
+            : 'Compatibility gap detected — DLP coverage at risk on browser channel.',
+        verdictOverride: cs === 'SUPPORTED' ? 'HEALTHY' : cs === 'AT_RISK' ? 'AT RISK' : 'CRITICAL',
+      });
+    }
+
+    /* Recommended Enhancements — pulls short names from the catalogue. */
+    const enhSummary = p.selectedEnhancements.slice(0, 3).map((id) => {
+      const e = ENHANCEMENTS.find((x) => x.id === id);
+      return e?.shortName ?? id;
+    }).join(', ');
+    items.push({
+      icon: '✨',
+      question: 'Recommended enhancements?',
+      count: p.selectedEnhancements.length,
+      severity: p.selectedEnhancements.length > 0 ? 'ok' : 'neutral',
+      evidence: p.selectedEnhancements.length > 0
+        ? `${enhSummary}${p.selectedEnhancements.length > 3 ? ` +${p.selectedEnhancements.length - 3} more` : ''}.`
+        : 'No specific enhancements proposed in this assessment.',
+      verdictOverride: p.selectedEnhancements.length > 0 ? `${p.selectedEnhancements.length} ITEMS` : 'NONE',
+    });
+
+    const hasProSupport = p.selectedEnhancements.includes('professional-support');
+    items.push({
+      icon: '🤝',
+      question: 'Forcepoint Professional Services suggested?',
+      count: hasProSupport ? 1 : 0,
+      severity: hasProSupport ? 'ok' : 'neutral',
+      evidence: hasProSupport
+        ? 'Forcepoint Professional Services recommended for upgrade / implementation execution.'
+        : 'Not recommended in this assessment.',
+      verdictOverride: hasProSupport ? 'YES' : 'NO',
+    });
+
+    const hasEnterpriseSup = p.selectedEnhancements.includes('enhanced-enterprise-support');
+    items.push({
+      icon: '🎖',
+      question: 'Enhanced / Enterprise Support suggested?',
+      count: hasEnterpriseSup || supportUpgradeNeeded ? 1 : 0,
+      severity: hasEnterpriseSup || supportUpgradeNeeded ? 'ok' : 'neutral',
+      evidence: supportUpgradeNeeded
+        ? `Support tier upgrade flagged: ${esc(p.sessionData.supportLevel || '—')} → ${esc(p.sessionData.recommendedSupportLevel || '—')}.`
+        : hasEnterpriseSup
+          ? 'Enhanced / Enterprise Support tier recommended for this deployment.'
+          : `Current tier (${p.sessionData.supportLevel || 'Standard'}) aligned with deployment scope.`,
+      verdictOverride: hasEnterpriseSup || supportUpgradeNeeded ? 'YES' : 'NO',
+    });
+
+    const tone = (sev: 'critical' | 'warn' | 'ok' | 'neutral') => sev === 'critical'
+      ? { color: '#A30080', bg: '#FDF2F8', border: '#FBCFE8', pillBg: '#A30080', pillTxt: '#fff', verdict: 'YES' }
+      : sev === 'warn'
+        ? { color: '#B58800', bg: '#FFFBEB', border: '#FDE68A', pillBg: '#FBBF24', pillTxt: '#7C2D12', verdict: 'WATCH' }
+        : sev === 'ok'
+          ? { color: '#16A34A', bg: '#F0FDF4', border: '#BBF7D0', pillBg: '#16A34A', pillTxt: '#fff', verdict: 'NO' }
+          : { color: '#64748B', bg: '#F8FAFC', border: '#E2E8F0', pillBg: '#CBD5E1', pillTxt: '#334155', verdict: 'NO' };
+
+    return `
+  <div class="subsection-title">Key Observations · Executive Quick-Look</div>
+  <p style="font-size:10.5px;color:var(--fp-ink-faint);margin:-4px 0 10px;font-style:italic;line-height:1.55;">
+    Six yes/no questions answered in one glance. Detail lives in Parts II–III.
+  </p>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;page-break-inside:avoid;">
+    ${items.map((it) => {
+      const t = tone(it.severity);
+      /* Default verdict text follows the t.verdict + count pattern; cards
+         that ask status questions (Healthy / At Risk / NONE / 5 RECS …)
+         override the label via verdictOverride. */
+      const pillText = it.verdictOverride ?? `${t.verdict}${it.count > 0 ? ` · ${it.count}` : ''}`;
+      return `<div style="background:${t.bg};border:1px solid ${t.border};border-left:3px solid ${t.color};border-radius:6px;padding:10px 13px;display:flex;align-items:flex-start;gap:10px;">
+        <span style="font-size:18px;line-height:1;flex-shrink:0;margin-top:1px;">${it.icon}</span>
+        <div style="flex:1;min-width:0;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">
+            <span style="font-size:11.5px;font-weight:700;color:var(--fp-ink);line-height:1.3;flex:1;">${esc(it.question)}</span>
+            <span style="font-size:9px;font-weight:800;letter-spacing:0.08em;color:${t.pillTxt};background:${t.pillBg};border-radius:3px;padding:2px 7px;flex-shrink:0;white-space:nowrap;">${esc(pillText)}</span>
+          </div>
+          <div style="font-size:10.5px;color:#475569;line-height:1.55;">${esc(it.evidence)}</div>
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
+  })()}
 
   ${(() => {
     if (p.recommendations.length === 0) return '';
     /* If the analyst flagged any recommendations as ★ featured, use that selection.
-       Otherwise fall back to the first 12 — preserving legacy behaviour for old sessions. */
+       Otherwise fall back to the first 6 (was 12) for a scannable executive view. */
     const featured = p.recommendations.filter((r) => r.featured);
     const PRIO: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
-    const list = featured.length > 0
-      ? [...featured].sort((a, b) => (PRIO[a.priority] ?? 9) - (PRIO[b.priority] ?? 9))
-      : p.recommendations.slice(0, 12);
+    const list = (featured.length > 0
+      ? [...featured]
+      : [...p.recommendations]
+    ).sort((a, b) => (PRIO[a.priority] ?? 9) - (PRIO[b.priority] ?? 9)).slice(0, 6);
     const curatedNote = featured.length > 0
       ? '<span style="font-size:10px;color:var(--fp-cyan-deep);font-weight:600;margin-left:8px;letter-spacing:0.04em;">★ ANALYST-CURATED</span>'
       : '';
     return `
   <div class="subsection-title" style="margin-top:22px;">High-Level Recommendations${curatedNote}</div>
-  <ul style="padding-left:20px;color:#334155;line-height:1.9;margin-bottom:16px;">
-    ${list.map(r => `<li style="margin-bottom:3px;"><span style="${sevStyle(r.priority.toUpperCase())};padding:1px 6px;border-radius:3px;font-size:8.5px;font-weight:700;margin-right:7px;">${esc(r.priority.toUpperCase())}</span><span style="font-weight:500;">${esc(r.title)}</span>${r.detail ? `<span style="color:#94a3b8;font-size:10.5px;"> — ${esc(r.detail)}</span>` : ''}</li>`).join('')}
-  </ul>`;
+  <div class="rec-card-grid">
+    ${list.map(r => `
+      <div class="rec-mini-card rec-mini-card-${r.priority}">
+        <div class="rec-mini-head">
+          <span class="badge badge-${r.priority === 'critical' ? 'critical' : r.priority === 'high' ? 'high' : r.priority === 'medium' ? 'medium' : 'low'}">${esc(r.priority.toUpperCase())}</span>
+          <span class="rec-mini-title">${esc(r.title)}</span>
+        </div>
+        ${r.detail ? `<div class="rec-mini-detail">${esc(r.detail)}</div>` : ''}
+        <div class="rec-mini-foot">
+          ${r.product ? `<span style="color:var(--fp-navy);font-weight:700;">${esc(r.product)}</span>` : ''}
+          ${r.effort ? `<span>· effort ${esc(r.effort)}</span>` : ''}
+          <span style="margin-left:auto;color:var(--fp-cyan-deep);font-weight:700;">${esc(r.category.replace(/_/g, ' '))}</span>
+        </div>
+      </div>`).join('')}
+  </div>
+  <p style="font-size:10px;color:var(--fp-ink-faint);font-style:italic;margin:-2px 0 14px;">
+    Full detail with descriptions, target versions, and release notes is in <em>Part III · Findings, Observations &amp; Recommendations</em>.
+  </p>`;
   })()}
 
   ${(() => {
@@ -1652,7 +2856,7 @@ ${(() => {
 ══════════════════════════════════════ -->
 ${versionGroups.length > 0 ? `
 <div class="section">
-  <div class="section-eyebrow">Section 04 · Version Lifecycle</div>
+  <div class="section-eyebrow">Section 04 · Part II · Version Lifecycle</div>
   <div class="section-title">Infrastructure &amp; Version Review</div>
   <div class="subsection-title" style="margin-top:0;margin-bottom:14px;">Software Version &amp; End-of-Life Analysis</div>
 
@@ -1758,7 +2962,7 @@ ${versionGroups.length > 0 ? `
 ══════════════════════════════════════ -->
 ${activeServers.length > 0 ? `
 <div class="section">
-  <div class="section-eyebrow">Section 05 · Server Health</div>
+  <div class="section-eyebrow">Section 05 · Part II · Server Health</div>
   <div class="section-title">Server Infrastructure</div>
   ${activeServers.map(s => {
     const name = s.hostname || SRV_LABELS[s.type] || s.type;
@@ -1802,11 +3006,8 @@ ${activeServers.length > 0 ? `
 ══════════════════════════════════════ -->
 ${p.dlpBundles.length > 0 ? `
 <div class="section">
-  <div class="section-eyebrow">Section 06 · DLP Telemetry</div>
-  <div class="section-title">DLP Server Bundle Analysis</div>
-  <p style="margin-bottom:14px;color:#475569;line-height:1.65;font-size:11px;">
-    The following analysis was generated from <span style="font-family:monospace;background:#f1f5f9;padding:1px 5px;border-radius:3px;">DLPServerInfo_*</span> diagnostic bundles collected from each Forcepoint Security Manager / DLP server. Each bundle contains the output of <span style="font-family:monospace;">systeminfo</span>, WMIC hardware queries, Windows service status, Forcepoint product detection, SQL Server health queries, and active policy data.
-  </p>
+  <div class="section-eyebrow">Section 06 · Part II · DLP Telemetry</div>
+  <div class="section-title">DLP Telemetry File Analysis</div>
 
   ${p.dlpBundles.map(b => {
     const sys = b.systemInfo;
@@ -1826,26 +3027,11 @@ ${p.dlpBundles.length > 0 ? `
     const headerHost = sys?.hostName || b.bundleName;
     const headerSub = [sys?.osName, fp?.dlpVersion && `DLP ${fp.dlpVersion}`].filter(Boolean).join(' · ');
 
-    // ── System properties table ──
-    // NOTE: Domain (AD), Logon Server, and service Run-As accounts are
-    // intentionally redacted from the customer-facing report — they leak
-    // internal AD topology and service-account names.
-    const sysFields: Array<[string, string]> = sys ? [
-      ['Host Name', sys.hostName],
-      ['OS Name', sys.osName],
-      ['OS Version', sys.osVersion],
-      ['OS Build Type', sys.osBuildType],
-      ['System Model', `${sys.systemManufacturer} ${sys.systemModel}`.trim()],
-      ['System Type', sys.systemType],
-      ['BIOS Version', sys.biosVersion],
-      ['Hypervisor', sys.hypervisorDetected ? 'Detected' : '—'],
-      ['Time Zone', sys.timeZone],
-      ['Install Date', sys.installDate],
-      ['Last Boot', sys.bootTime],
-    ] : [];
-
-    const sysRows = sysFields.filter(([, v]) => v).map(([k, v]) => `
-      <tr><td style="font-weight:700;color:#475569;width:35%;font-size:10px;">${esc(k)}</td><td style="font-family:monospace;font-size:10px;color:#1D252C;">${esc(v)}</td></tr>`).join('');
+    /* System Properties table dropped from the report — non-executive
+       detail that bloats the page. Domain / Logon Server / Run-As were
+       already redacted; the rest (Host / OS / BIOS / Boot time) is
+       available in the wizard's DLP Server Info bundle card for analysts
+       who need it. */
 
     // ── Network adapters ──
     const netRows = sys?.networkAdapters.map(n => `
@@ -1859,7 +3045,7 @@ ${p.dlpBundles.length > 0 ? `
 
       <!-- Bundle header -->
       <div style="background:linear-gradient(135deg,#023E8A,#023E8A);padding:12px 16px;color:#fff;display:flex;align-items:center;gap:10px;">
-        <div style="background:rgba(255,255,255,0.15);padding:5px 10px;border-radius:6px;font-size:9px;font-weight:700;letter-spacing:0.08em;">DLP BUNDLE</div>
+        <div style="background:rgba(255,255,255,0.15);padding:5px 10px;border-radius:6px;font-size:9px;font-weight:700;letter-spacing:0.08em;">DLP TELEMETRY FILE</div>
         <div style="flex:1;">
           <div style="font-size:13.5px;font-weight:700;">${esc(headerHost)}</div>
           <div style="font-size:10px;opacity:0.7;margin-top:1px;">${esc(headerSub)}</div>
@@ -1923,12 +3109,9 @@ ${p.dlpBundles.length > 0 ? `
         </div>` : ''}
       </div>` : ''}
 
-      <!-- System properties -->
-      ${sysRows ? `
-      <div style="padding:12px 16px;border-bottom:1px solid #e2e8f0;">
-        <div style="font-size:10px;font-weight:700;color:#94a3b8;letter-spacing:0.08em;margin-bottom:6px;">SYSTEM PROPERTIES</div>
-        <table style="width:100%;border-collapse:collapse;">${sysRows}</table>
-      </div>` : ''}
+      <!-- System Properties panel removed — Host / OS / BIOS / Install Date
+           are not executive-relevant; the KPI tiles + KPI grid above already
+           carry the meaningful infrastructure metrics. -->
 
       <!-- Network adapters -->
       ${netRows ? `
@@ -2008,19 +3191,174 @@ ${p.dlpBundles.length > 0 ? `
         </table>
       </div>` : ''}
 
-      <!-- Active policies -->
+      <!-- Active policies — policy NAMES are redacted from the customer-facing
+           report (they can carry sensitive rule labels). Only counts are shown. -->
       ${pol ? `
-      <div style="padding:12px 16px;${b.installedProducts.length > 0 || b.depEnabled != null ? 'border-bottom:1px solid #e2e8f0;' : ''}">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+      <div style="padding:12px 16px;border-bottom:1px solid #e2e8f0;">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <div style="font-size:10px;font-weight:700;color:#94a3b8;letter-spacing:0.08em;">ACTIVE POLICIES &amp; RULES</div>
           <span style="font-size:8.5px;font-weight:700;padding:1px 6px;border-radius:3px;background:#dbeafe;color:#023E8A;border:1px solid #93c5fd;">${pol.policyNames.length} POLICIES · ${pol.totalRules} RULES</span>
-          ${pol.rulesWithExceptions.length > 0 ? `<span style="font-size:8.5px;font-weight:700;padding:1px 6px;border-radius:3px;background:#fff7ed;color:#B58800;border:1px solid #fdba74;">${pol.rulesWithExceptions.length} WITH EXCEPTIONS</span>` : ''}
-        </div>
-        <div style="font-size:10.5px;color:#475569;column-count:2;column-gap:16px;">
-          ${pol.policyNames.slice(0, 40).map(n => `<div style="margin-bottom:2px;">• ${esc(n)}</div>`).join('')}
-          ${pol.policyNames.length > 40 ? `<div style="color:#94a3b8;font-style:italic;">… and ${pol.policyNames.length - 40} more</div>` : ''}
+          ${pol.rulesWithExceptions.length > 0 ? `<span style="font-size:8.5px;font-weight:700;padding:1px 6px;border-radius:3px;background:#fff7ed;color:#B58800;border:1px solid #fdba74;">${pol.rulesWithExceptions.length} RULES WITH EXCEPTIONS</span>` : ''}
         </div>
       </div>` : ''}
+
+      <!-- Event Partitions (PA_EVENT_PARTITION_CATALOG.csv) — partition split,
+           event tallies, and the active partition window. Same data the wizard
+           displays in Step 3; surfaced here so the report stands alone. -->
+      ${b.eventPartitions?.summary ? (() => {
+        const epx = b.eventPartitions!.summary!;
+        const fmtN = (n: number) => n.toLocaleString();
+        const cell = (label: string, value: string, accent = '#023E8A') => `
+          <td style="padding:6px 10px;border:1px solid #e2e8f0;background:#fff;">
+            <div style="font-size:8.5px;font-weight:700;color:#94a3b8;letter-spacing:0.06em;text-transform:uppercase;">${esc(label)}</div>
+            <div style="font-size:13px;font-weight:700;color:${accent};font-family:'JetBrains Mono',monospace;margin-top:2px;">${esc(value)}</div>
+          </td>`;
+        return `
+      <div style="padding:12px 16px;border-bottom:1px solid #e2e8f0;background:#fafcff;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+          <div style="font-size:10px;font-weight:700;color:#94a3b8;letter-spacing:0.08em;">EVENT PARTITIONS</div>
+          <span style="font-size:8.5px;font-weight:700;padding:1px 6px;border-radius:3px;background:#dbeafe;color:#023E8A;border:1px solid #93c5fd;">${epx.archivedPartitionCount + epx.onlinePartitionCount} PARTITIONS</span>
+        </div>
+        <table style="border-collapse:collapse;width:100%;table-layout:fixed;">
+          <tr>
+            ${cell('Archived', `${epx.archivedPartitionCount}`)}
+            ${cell('Online', `${epx.onlinePartitionCount}`, epx.onlinePartitionCount > 5 ? '#A30080' : '#023E8A')}
+            ${cell('Archived events', fmtN(epx.archivedEvents), '#64748b')}
+            ${cell('Online events', fmtN(epx.onlineEvents), '#0284C7')}
+            ${cell('Total events', fmtN(epx.totalEvents), '#0F2952')}
+          </tr>
+          <tr>
+            ${cell('Active partition from', epx.activePartitionFrom || '—')}
+            ${cell('Active partition to', epx.activePartitionTo || '—')}
+            <td colspan="3" style="padding:6px 10px;border:1px solid #e2e8f0;background:#fff;">
+              <div style="font-size:8.5px;font-weight:700;color:#94a3b8;letter-spacing:0.06em;text-transform:uppercase;">Data history</div>
+              <div style="font-size:11.5px;font-weight:700;color:#023E8A;font-family:'JetBrains Mono',monospace;margin-top:2px;">${esc(epx.dataHistoryStart || '—')} → ${esc(epx.dataHistoryEnd || '—')}</div>
+            </td>
+          </tr>
+        </table>
+        ${epx.warnings.length > 0 ? `<div style="margin-top:8px;display:flex;flex-direction:column;gap:4px;">${epx.warnings.map(w => `<div style="font-size:10px;color:#92400E;background:#FFFBEB;border:1px solid #FDE68A;border-left:3px solid #F59E0B;border-radius:4px;padding:4px 8px;">${esc(w)}</div>`).join('')}</div>` : ''}
+      </div>`;
+      })() : ''}
+
+      <!-- DLP Config Properties (PA_CONFIG_PROPERTIES.csv) — feature flags,
+           policy deploy statuses, traffic totals, backup + LDAP repo health. -->
+      ${b.configProperties ? (() => {
+        const c = b.configProperties!;
+        const yn = (v: boolean) => v ? 'On' : 'Off';
+        const ynColor = (v: boolean) => v ? '#16A34A' : '#94a3b8';
+        const statusColor = (s: string) => s === 'UNSYNCHRONIZED_EDIT' ? '#A30080' : s ? '#16A34A' : '#94a3b8';
+        const pill = (label: string, value: string, color: string) => `
+          <span style="display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:4px;background:${color}14;color:${color};border:1px solid ${color}33;font-size:10px;font-weight:600;font-family:'JetBrains Mono',monospace;">
+            <span style="color:#475569;font-weight:500;">${esc(label)}</span>
+            <strong>${esc(value)}</strong>
+          </span>`;
+        const fmtSection = (label: string, body: string) => `
+          <div style="margin-top:8px;">
+            <div style="font-size:9px;font-weight:700;color:#64748b;letter-spacing:0.07em;text-transform:uppercase;margin-bottom:5px;">${esc(label)}</div>
+            <div style="display:flex;flex-wrap:wrap;gap:5px;">${body}</div>
+          </div>`;
+        return `
+      <div style="padding:12px 16px;border-bottom:1px solid #e2e8f0;">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
+          <div style="font-size:10px;font-weight:700;color:#94a3b8;letter-spacing:0.08em;">DLP CONFIG PROPERTIES</div>
+          <span style="font-size:8.5px;font-weight:700;padding:1px 6px;border-radius:3px;background:${c.warnings.length > 0 ? '#FEF2F2' : '#F0FDF4'};color:${c.warnings.length > 0 ? '#A30080' : '#16A34A'};border:1px solid ${c.warnings.length > 0 ? '#FECACA' : '#BBF7D0'};">${c.warnings.length} WARN${c.warnings.length === 1 ? '' : 'S'}</span>
+        </div>
+        ${fmtSection('Event traffic totals', [
+          c.webTransactionsTotal && pill('Web tx', c.webTransactionsTotal, '#0EA5E9'),
+          c.emailTransactionsTotal && pill('Email tx', c.emailTransactionsTotal, '#7C3AED'),
+          c.discoveryTransactionsTotal && pill('Discovery tx', c.discoveryTransactionsTotal, '#16A34A'),
+          c.mobileTransactionsTotal && pill('Mobile tx', c.mobileTransactionsTotal, '#B58800'),
+        ].filter(Boolean).join(''))}
+        ${fmtSection('Policy deploy status', [
+          pill('Policy Engine', c.policyEngineConfigStatus || '—', statusColor(c.policyEngineConfigStatus)),
+          pill('Data-in-Motion', c.dimPolicyStatus || '—', statusColor(c.dimPolicyStatus)),
+          pill('Data-at-Rest', c.darPolicyStatus || '—', statusColor(c.darPolicyStatus)),
+        ].join(''))}
+        ${fmtSection('Feature flags', [
+          pill('Behavior Analytics', yn(c.behaviorAnalyticsEnabled), ynColor(c.behaviorAnalyticsEnabled)),
+          pill('RAP', yn(c.rapEnabled), ynColor(c.rapEnabled)),
+          pill('MIP', yn(c.mipEnabled), ynColor(c.mipEnabled)),
+          pill('Linking Service', yn(c.linkingServiceEnabled), ynColor(c.linkingServiceEnabled)),
+          pill('Backup forensics', yn(c.backupIncludesForensics), ynColor(c.backupIncludesForensics)),
+        ].join(''))}
+        ${c.ldapRepos.length > 0 ? fmtSection(`LDAP repositories (${c.ldapRepos.length})`, c.ldapRepos.map(r => {
+          const okColor = r.lastSyncOk ? '#16A34A' : '#A30080';
+          return `<span style="display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border-radius:4px;background:${okColor}14;color:${okColor};border:1px solid ${okColor}33;font-size:10px;font-weight:600;">
+            <strong style="color:#0F2952;font-family:'JetBrains Mono',monospace;">${esc(r.name)}</strong>
+            <span style="color:${r.enabled ? '#16A34A' : '#94a3b8'};">${r.enabled ? 'enabled' : 'disabled'}</span>
+            <span>·</span>
+            <span>sync ${r.lastSyncOk ? 'OK' : 'FAIL'}</span>
+          </span>`;
+        }).join('')) : ''}
+        ${fmtSection('Misc', [
+          c.auditRetentionDays && pill('Audit retention', `${c.auditRetentionDays}d`, c.auditRetentionDays === '0' ? '#A30080' : '#475569'),
+          c.partitionDurationDays && pill('Partition duration', `${c.partitionDurationDays}d`, '#475569'),
+          c.siemSyslogHost && pill('SIEM host', c.siemSyslogHost, '#475569'),
+          c.backupCopies && pill('Backup copies', c.backupCopies, '#475569'),
+          c.policyConcurrencyLevel && pill('Policy concurrency', c.policyConcurrencyLevel, '#475569'),
+          c.superAdminPasswordResetPending ? pill('Super-admin pwd reset', 'PENDING', '#A30080') : '',
+        ].filter(Boolean).join(''))}
+        ${c.warnings.length > 0 ? `<div style="margin-top:8px;display:flex;flex-direction:column;gap:4px;">${c.warnings.map(w => `<div style="font-size:10px;color:#92400E;background:#FFFBEB;border:1px solid #FDE68A;border-left:3px solid #F59E0B;border-radius:4px;padding:4px 8px;">${esc(w)}</div>`).join('')}</div>` : ''}
+      </div>`;
+      })() : ''}
+
+      <!-- Site Elements (WS_SM_SITE_ELEMENTS.csv) — component inventory,
+           sync health, version mix, disabled components, failed deployments
+           and the DLP application server hostname list. -->
+      ${b.siteElements ? (() => {
+        const se = b.siteElements!;
+        const ss = se.syncStatus;
+        const syncColor = ss.syncPercentage < 70 ? '#A30080' : ss.syncPercentage < 95 ? '#B58800' : '#16A34A';
+        const versionCount = Object.keys(se.versionInventory).length;
+        /* Component inventory tiles — each component type renders as its own
+           card so long labels ("DLP Application Servers", "Web Content
+           Gateway (WCG) Servers") have room to wrap without overlapping the
+           count. Tiles are arranged in a fixed 3-column grid. */
+        const compTiles = Object.entries(se.componentCounts).map(([name, n]) => `
+          <div style="background:#fff;border:1px solid #e2e8f0;border-radius:5px;padding:8px 10px;display:flex;align-items:center;gap:10px;">
+            <div style="font-size:18px;font-weight:800;color:#023E8A;font-family:'Inter',sans-serif;line-height:1;letter-spacing:-0.02em;min-width:28px;text-align:right;">${n}</div>
+            <div style="flex:1;min-width:0;font-size:10px;font-weight:600;color:var(--fp-ink);line-height:1.35;">${esc(name)}</div>
+          </div>`).join('');
+        return `
+      <div style="padding:12px 16px;border-bottom:1px solid #e2e8f0;background:#fafcff;">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+          <div style="font-size:10px;font-weight:700;color:#94a3b8;letter-spacing:0.08em;">SITE ELEMENTS</div>
+          <span style="font-size:8.5px;font-weight:700;padding:1px 6px;border-radius:3px;background:#dbeafe;color:#023E8A;border:1px solid #93c5fd;">${ss.total} COMPONENTS</span>
+          <span style="font-size:8.5px;font-weight:700;padding:1px 6px;border-radius:3px;background:${syncColor}14;color:${syncColor};border:1px solid ${syncColor}33;">${ss.syncPercentage}% SYNCED</span>
+        </div>
+        ${Object.keys(se.componentCounts).length > 0 ? `
+        <div style="font-size:9px;font-weight:700;color:#64748b;letter-spacing:0.07em;text-transform:uppercase;margin-bottom:6px;">Component inventory</div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:10px;">
+          ${compTiles}
+        </div>` : ''}
+        <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px;">
+          <div style="font-size:10px;color:#16A34A;font-weight:600;">✓ Synchronized: <span style="font-family:'JetBrains Mono',monospace;">${ss.synchronized}</span></div>
+          <div style="font-size:10px;color:${ss.unsynchronizedEdit > 0 ? '#A30080' : '#94a3b8'};font-weight:600;">⚠ Unsync edit: <span style="font-family:'JetBrains Mono',monospace;">${ss.unsynchronizedEdit}</span></div>
+          <div style="font-size:10px;color:${ss.markedUnsynchronizedEdit > 0 ? '#A30080' : '#94a3b8'};font-weight:600;">◆ Marked unsync: <span style="font-family:'JetBrains Mono',monospace;">${ss.markedUnsynchronizedEdit}</span></div>
+        </div>
+        ${versionCount > 0 ? `
+        <div style="font-size:9px;font-weight:700;color:#64748b;letter-spacing:0.07em;text-transform:uppercase;margin-bottom:5px;">Version mix (${versionCount})</div>
+        <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px;">
+          ${Object.entries(se.versionInventory).map(([v, n]) => `<span style="font-size:9.5px;font-weight:700;padding:2px 7px;border-radius:3px;background:#EFF6FF;color:#023E8A;border:1px solid #93c5fd;font-family:'JetBrains Mono',monospace;">${esc(v)}: ${n}</span>`).join('')}
+        </div>` : ''}
+        ${se.dlpServerHostnames.length > 0 ? `
+        <div style="font-size:9px;font-weight:700;color:#64748b;letter-spacing:0.07em;text-transform:uppercase;margin-bottom:5px;">DLP application servers (${se.dlpServerHostnames.length})</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">
+          ${se.dlpServerHostnames.map(h => `<span style="font-size:9.5px;font-weight:600;padding:2px 7px;border-radius:3px;background:#F1F5F9;color:#0F2952;border:1px solid #E2E8F0;font-family:'JetBrains Mono',monospace;">${esc(h)}</span>`).join('')}
+        </div>` : ''}
+        ${se.disabledComponents.length > 0 ? `
+        <div style="font-size:9px;font-weight:700;color:#A30080;letter-spacing:0.07em;text-transform:uppercase;margin-bottom:5px;">Disabled components (${se.disabledComponents.length})</div>
+        <div style="display:flex;flex-direction:column;gap:3px;margin-bottom:8px;">
+          ${se.disabledComponents.map(d => `<div style="font-size:10px;color:#A30080;background:#FDF2F8;border:1px solid #FBCFE8;border-radius:4px;padding:3px 8px;"><strong>${esc(d.name)}</strong> · <span style="font-family:'JetBrains Mono',monospace;color:#64748b;">${esc(d.type)}</span></div>`).join('')}
+        </div>` : ''}
+        ${se.failedDeployments.length > 0 ? `
+        <div style="font-size:9px;font-weight:700;color:#A30080;letter-spacing:0.07em;text-transform:uppercase;margin-bottom:5px;">Failed deployments (${se.failedDeployments.length})</div>
+        <div style="display:flex;flex-direction:column;gap:3px;margin-bottom:8px;">
+          ${se.failedDeployments.map(f => `<div style="font-size:10px;color:#A30080;background:#FEF2F2;border:1px solid #FECACA;border-radius:4px;padding:4px 8px;"><strong>${esc(f.name)}</strong> · <span style="font-family:'JetBrains Mono',monospace;color:#64748b;">${esc(f.type)}</span>${f.reason ? `<div style="font-size:9.5px;color:#64748b;margin-top:2px;">${esc(f.reason)}</div>` : ''}</div>`).join('')}
+        </div>` : ''}
+        ${se.warnings.length > 0 ? `<div style="display:flex;flex-direction:column;gap:4px;">${se.warnings.map(w => `<div style="font-size:10px;color:#92400E;background:#FFFBEB;border:1px solid #FDE68A;border-left:3px solid #F59E0B;border-radius:4px;padding:4px 8px;">${esc(w)}</div>`).join('')}</div>` : ''}
+      </div>`;
+      })() : ''}
 
       <!-- Third-party installed products + DEP footer -->
       ${(b.installedProducts.length > 0 || b.depEnabled != null) ? `
@@ -2096,7 +3434,7 @@ ${p.endpointAgentSummary && p.endpointAgentSummary.totalRecords > 0 ? (() => {
 
   return `
 <div class="section">
-  <div class="section-eyebrow">Section · Endpoint Agents</div>
+  <div class="section-eyebrow">Section 07 · Part II · Endpoint Agents</div>
   <div class="section-title">Endpoint Agent Analysis</div>
   <div style="font-size:11.5px;color:var(--fp-ink-muted);margin:-4px 0 18px;">
     Source: <span class="mono" style="color:var(--fp-navy);font-weight:600;">${esc(ea.fileName)}</span>
@@ -2277,7 +3615,7 @@ ${p.endpointAgentSummary && p.endpointAgentSummary.totalRecords > 0 ? (() => {
 ══════════════════════════════════════ -->
 ${p.selectedTemplates.length > 0 ? `
 <div class="section">
-  <div class="section-eyebrow">Section 08 · Product Scorecard</div>
+  <div class="section-eyebrow">Section 09 · Part II · Product Scorecard</div>
   <div class="section-title">Per-Product Security Assessment</div>
   <table>
     <thead>
@@ -2299,7 +3637,7 @@ ${p.selectedTemplates.length > 0 ? `
      CHECKLIST FINDINGS
 ══════════════════════════════════════ -->
 <div class="section">
-  <div class="section-eyebrow">Section 08b · Findings Detail</div>
+  <div class="section-eyebrow">Section 10 · Part II · Findings Detail</div>
   <div class="section-title">Checklist Findings (${p.allFindings.length})</div>
   ${p.allFindings.length === 0
     ? '<p style="color:#69BC00;font-weight:600;padding:10px 0;">✓ No findings — all checklist items passed.</p>'
@@ -2325,21 +3663,12 @@ ${hasWeb ? `
 <div class="section">
   <div class="section-title">Web Security Usage</div>
   <p style="margin-bottom:20px;color:#334155;line-height:1.75;">
-    The following reports provide behavioural intelligence derived from Forcepoint Web Security telemetry.
-    Data will be populated automatically via SQL integration and will reflect live customer data once the integration is configured.
+    Behavioural intelligence derived from Forcepoint Web Security telemetry. Each card below
+    is populated from the live SQL query executed in Step 3; cards marked PENDING were selected
+    by the analyst but not yet run.
   </p>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-  ${webUsageReports.map((r, i) => `
-  <div style="border:1.5px solid #bae6fd;border-radius:8px;overflow:hidden;">
-    <div style="background:#f0f9ff;padding:8px 12px;border-bottom:1px solid #bae6fd;display:flex;align-items:center;gap:8px;">
-      <span style="font-family:monospace;font-size:9px;font-weight:700;color:#36B0C9;background:#fff;border:1px solid #bae6fd;padding:1px 6px;border-radius:3px;flex-shrink:0;">${String(i + 1).padStart(2, '0')}</span>
-      <span style="font-size:11px;font-weight:700;color:#023E8A;flex:1;">${esc(r)}</span>
-      <span style="font-size:8.5px;font-weight:700;padding:1px 7px;border-radius:3px;background:#fef9c3;color:#a16207;border:1px solid #fde68a;flex-shrink:0;">PENDING</span>
-    </div>
-    <div style="padding:10px 12px;color:#94a3b8;font-size:10.5px;font-style:italic;">
-      Data pending — SQL integration required.
-    </div>
-  </div>`).join('')}
+  <div style="display:flex;flex-direction:column;gap:12px;">
+  ${webUsageReports.map((r, i) => renderUsageReportCard(r, i, { accent: '#36B0C9', border: '#bae6fd', bg: '#f0f9ff' })).join('')}
   </div>
 </div>` : ''}
 
@@ -2350,21 +3679,12 @@ ${hasDLP ? `
 <div class="section">
   <div class="section-title">Data Security Usage</div>
   <p style="margin-bottom:20px;color:#334155;line-height:1.75;">
-    The following reports provide data loss prevention intelligence derived from Forcepoint DLP telemetry.
-    Data will be populated automatically via SQL integration and will reflect live customer data once the integration is configured.
+    Data loss prevention intelligence derived from Forcepoint DLP telemetry. Each card below
+    is populated from the live SQL query executed in Step 3; cards marked PENDING were selected
+    by the analyst but not yet run.
   </p>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-  ${dataUsageReports.map((r, i) => `
-  <div style="border:1.5px solid #d9f99d;border-radius:8px;overflow:hidden;">
-    <div style="background:#f7fee7;padding:8px 12px;border-bottom:1px solid #d9f99d;display:flex;align-items:center;gap:8px;">
-      <span style="font-family:monospace;font-size:9px;font-weight:700;color:#69BC00;background:#fff;border:1px solid #bbf7d0;padding:1px 6px;border-radius:3px;flex-shrink:0;">${String(i + 1).padStart(2, '0')}</span>
-      <span style="font-size:11px;font-weight:700;color:#023E8A;flex:1;">${esc(r)}</span>
-      <span style="font-size:8.5px;font-weight:700;padding:1px 7px;border-radius:3px;background:#fef9c3;color:#a16207;border:1px solid #fde68a;flex-shrink:0;">PENDING</span>
-    </div>
-    <div style="padding:10px 12px;color:#94a3b8;font-size:10.5px;font-style:italic;">
-      Data pending — SQL integration required.
-    </div>
-  </div>`).join('')}
+  <div style="display:flex;flex-direction:column;gap:12px;">
+  ${dataUsageReports.map((r, i) => renderUsageReportCard(r, i, { accent: '#69BC00', border: '#d9f99d', bg: '#f7fee7' })).join('')}
   </div>
 </div>` : ''}
 
@@ -2375,21 +3695,12 @@ ${hasEmail ? `
 <div class="section">
   <div class="section-title">Email Security Usage</div>
   <p style="margin-bottom:20px;color:#334155;line-height:1.75;">
-    The following reports provide threat intelligence derived from Forcepoint Email Security telemetry.
-    Data will be populated automatically via SQL integration and will reflect live customer data once the integration is configured.
+    Threat intelligence derived from Forcepoint Email Security telemetry. Each card below
+    is populated from the live SQL query executed in Step 3; cards marked PENDING were selected
+    by the analyst but not yet run.
   </p>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-  ${emailUsageReports.map((r, i) => `
-  <div style="border:1.5px solid #fecdd3;border-radius:8px;overflow:hidden;">
-    <div style="background:#fff1f2;padding:8px 12px;border-bottom:1px solid #fecdd3;display:flex;align-items:center;gap:8px;">
-      <span style="font-family:monospace;font-size:9px;font-weight:700;color:#e11d48;background:#fff;border:1px solid #fecdd3;padding:1px 6px;border-radius:3px;flex-shrink:0;">${String(i + 1).padStart(2, '0')}</span>
-      <span style="font-size:11px;font-weight:700;color:#023E8A;flex:1;">${esc(r)}</span>
-      <span style="font-size:8.5px;font-weight:700;padding:1px 7px;border-radius:3px;background:#fef9c3;color:#a16207;border:1px solid #fde68a;flex-shrink:0;">PENDING</span>
-    </div>
-    <div style="padding:10px 12px;color:#94a3b8;font-size:10.5px;font-style:italic;">
-      Data pending — SQL integration required.
-    </div>
-  </div>`).join('')}
+  <div style="display:flex;flex-direction:column;gap:12px;">
+  ${emailUsageReports.map((r, i) => renderUsageReportCard(r, i, { accent: '#e11d48', border: '#fecdd3', bg: '#fff1f2' })).join('')}
   </div>
 </div>` : ''}
 
@@ -2398,7 +3709,7 @@ ${hasEmail ? `
 ══════════════════════════════════════ -->
 ${p.certificates.length > 0 ? `
 <div class="section">
-  <div class="section-eyebrow">Section 07 · Certificate Trust</div>
+  <div class="section-eyebrow">Section 08 · Part II · Certificate Trust</div>
   <div class="section-title">Certificate Analysis</div>
   <p style="margin-bottom:14px;color:#475569;line-height:1.65;font-size:11px;">
     The following X.509 certificates were imported from the customer's environment (typically <span style="font-family:monospace;background:#f1f5f9;padding:1px 5px;border-radius:3px;">allcerts.cer</span> and <span style="font-family:monospace;background:#f1f5f9;padding:1px 5px;border-radius:3px;">ca.cer</span> from the DLP Server Info bundle). Subject, issuer, validity dates, key length, signature algorithm, and CA constraint were parsed directly from the DER-encoded certificate bodies.
@@ -2498,7 +3809,7 @@ ${p.certificates.length > 0 ? `
 ══════════════════════════════════════ -->
 ${p.recommendations.length > 0 ? `
 <div class="section">
-  <div class="section-eyebrow">Section 09 · Prioritized Remediation</div>
+  <div class="section-eyebrow">Section 12 · Part III · Prioritized Remediation</div>
   <div class="section-title">Findings, Observations &amp; Recommendations</div>
   <table class="rec-table">
     <thead>
@@ -2548,35 +3859,404 @@ ${p.recommendations.length > 0 ? `
 </div>` : ''}
 
 <!-- ══════════════════════════════════════
+     VERSION UPGRADE PROPOSALS
+══════════════════════════════════════ -->
+${p.versionUpgrades.length > 0 ? `
+<div class="section">
+  <div class="section-eyebrow">Section 13 · Part III · Version Upgrade Path</div>
+  <div class="section-title">Version Upgrade Proposals (${p.versionUpgrades.length})</div>
+  <p class="section-lead">
+    Target version recommendations with the release context the customer needs to plan a deployment: what's new, what's fixed, what's still open, and what to prepare before cut-over.
+  </p>
+  ${(() => {
+    const PRIO: Record<string, { label: string; color: string; bg: string; border: string }> = {
+      critical: { label: 'CRITICAL', color: '#A30080', bg: '#F9F0F6', border: '#E9CCDF' },
+      high:     { label: 'HIGH',     color: '#DA1B2E', bg: '#FEF2F2', border: '#FECACA' },
+      medium:   { label: 'MEDIUM',   color: '#B58800', bg: '#FFFBEB', border: '#FDE68A' },
+      low:      { label: 'LOW',      color: '#228BA0', bg: '#E5F4F8', border: '#BFE3EC' },
+    };
+    return p.versionUpgrades.map(v => {
+      const pCfg = PRIO[v.priority] ?? PRIO.medium;
+      const safeUrl = (v.releaseNotesUrl ?? '').trim();
+      const isHttp = /^https?:\/\//i.test(safeUrl);
+      const block = (accent: string, label: string, text: string) => text.trim() ? `
+        <div style="background:#fff;border:1px solid var(--fp-rule);border-left:3px solid ${accent};border-radius:5px;padding:11px 13px;">
+          <div style="font-size:9.5px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:${accent};margin-bottom:5px;">${esc(label)}</div>
+          <div style="font-size:11px;color:#1D252C;line-height:1.6;white-space:pre-wrap;">${esc(text)}</div>
+        </div>` : '';
+      return `
+      <div style="background:#fff;border:1px solid var(--fp-rule);border-left:4px solid ${pCfg.color};border-radius:6px;margin-bottom:14px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.05);page-break-inside:avoid;">
+        <!-- Header -->
+        <div style="background:var(--fp-navy-soft);padding:13px 18px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-bottom:1px solid var(--fp-rule);">
+          <div style="width:30px;height:30px;border-radius:6px;background:var(--fp-navy);color:#fff;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-weight:700;font-size:14px;">↑</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13px;font-weight:700;color:var(--fp-navy);">${esc(v.product)}</div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:3px;font-size:10.5px;">
+              ${v.fromVersion ? `<span class="mono" style="background:#F1F5F9;color:#475569;padding:1px 6px;border-radius:3px;font-weight:600;">${esc(v.fromVersion)}</span><span style="color:#94A3B8;">→</span>` : ''}
+              <span class="mono" style="background:var(--fp-navy);color:#fff;padding:2px 8px;border-radius:3px;font-weight:700;letter-spacing:0.03em;">v${esc(v.toVersion)}</span>
+              ${v.releaseDate ? `<span class="mono" style="color:var(--fp-ink-muted);">📅 ${esc(v.releaseDate)}</span>` : ''}
+              ${isHttp ? `<a href="${esc(safeUrl)}" target="_blank" rel="noopener" class="mono" style="color:var(--fp-cyan-deep);text-decoration:underline;word-break:break-all;">↗ Release notes</a>` : ''}
+            </div>
+          </div>
+          <span class="badge" style="background:${pCfg.bg};color:${pCfg.color};border:1px solid ${pCfg.border};flex-shrink:0;">${pCfg.label}</span>
+        </div>
+
+        <!-- 4-quadrant body: What's New / Bug Fixes / Known Issues / Pre-Deployment -->
+        <div style="padding:14px 18px;display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          ${block('var(--fp-cyan)',     `What's New`, v.whatsNew)}
+          ${block('var(--fp-green)',    'Bug Fixes',  v.bugFixes)}
+          ${block('var(--fp-red)',      'Known Issues', v.knownIssues)}
+          ${block('var(--fp-navy)',     'Pre-Deployment Considerations', v.deploymentNotes)}
+        </div>
+      </div>`;
+    }).join('');
+  })()}
+</div>` : ''}
+
+<!-- ══════════════════════════════════════
+     F1E ENDPOINT COMPATIBILITY ASSESSMENT
+     Customer-specific assessment produced by Step 7 against the imported
+     OS / Browser Support Matrix. Renders only what the operator generated —
+     status banner, findings, OS/browser compatibility, opted-in critical
+     notes, and the upgrade recommendation. Falls back silently when no
+     assessment has been generated, so reports never ship with empty cards.
+══════════════════════════════════════ -->
+${p.selectedProducts.data && p.endpointCompatAssessment ? (() => {
+  const a = p.endpointCompatAssessment!;
+  const STATUS_CFG: Record<string, { color: string; bg: string; border: string; label: string }> = {
+    SUPPORTED: { color: '#16A34A', bg: '#F0FDF4', border: '#BBF7D0', label: 'Supported' },
+    AT_RISK:   { color: '#B58800', bg: '#FFFBEB', border: '#FDE68A', label: 'At Risk' },
+    CRITICAL:  { color: '#A30080', bg: '#FDF2F8', border: '#FBCFE8', label: 'Critical' },
+  };
+  const SEV_CFG: Record<string, { color: string; bg: string; border: string }> = {
+    CRITICAL: { color: '#A30080', bg: '#FDF2F8', border: '#FBCFE8' },
+    HIGH:     { color: '#DC2626', bg: '#FEF2F2', border: '#FECACA' },
+    MEDIUM:   { color: '#B58800', bg: '#FFFBEB', border: '#FDE68A' },
+    LOW:      { color: '#0284C7', bg: '#F0F9FF', border: '#BAE6FD' },
+  };
+  const URG_CFG: Record<string, { color: string; bg: string; label: string }> = {
+    IMMEDIATE:  { color: '#A30080', bg: '#FDF2F8', label: 'Immediate' },
+    SHORT_TERM: { color: '#DC2626', bg: '#FEF2F2', label: 'Short Term' },
+    PLANNED:    { color: '#0284C7', bg: '#F0F9FF', label: 'Planned' },
+  };
+  const sc = STATUS_CFG[a.compatibilityStatus] ?? STATUS_CFG.SUPPORTED;
+  const includedNotes = a.criticalNotes.filter((n) => n.includeInReport);
+  return `
+<div class="section">
+  <div class="section-eyebrow">Section 14 · Part III · Agent Compatibility</div>
+  <div class="section-title">Agent Compatibility</div>
+  <p class="section-lead">
+    Customer fleet measured against the imported Forcepoint endpoint support matrix. Identifies operating-system, browser, and agent-version gaps that affect DLP coverage on the endpoint.
+  </p>
+
+  <!-- Status banner -->
+  <div style="background:${sc.bg};border:1px solid ${sc.border};border-left:4px solid ${sc.color};border-radius:8px;padding:14px 18px;margin-bottom:14px;page-break-inside:avoid;">
+    <div style="display:flex;align-items:center;gap:14px;">
+      <div style="font-size:22px;font-weight:800;color:${sc.color};letter-spacing:-0.01em;">${esc(sc.label)}</div>
+      <span style="font-size:9.5px;font-weight:700;color:${sc.color};background:#fff;border:1px solid ${sc.border};padding:2px 8px;border-radius:5px;letter-spacing:0.06em;">COMPATIBILITY · ${esc(a.compatibilityStatus)}</span>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:12px;">
+      <div>
+        <div style="font-size:9px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:0.08em;">Customer Agent</div>
+        <div style="font-size:13px;font-weight:700;color:#0F2952;font-family:'JetBrains Mono',monospace;margin-top:2px;">${esc(a.customerAgentVersion || '—')}</div>
+      </div>
+      <div>
+        <div style="font-size:9px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:0.08em;">Minimum Required</div>
+        <div style="font-size:13px;font-weight:700;color:#0F2952;font-family:'JetBrains Mono',monospace;margin-top:2px;">v${esc(a.minimumRequiredAgent)}</div>
+      </div>
+      <div>
+        <div style="font-size:9px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:0.08em;">Findings</div>
+        <div style="font-size:13px;font-weight:700;color:#0F2952;font-family:'JetBrains Mono',monospace;margin-top:2px;">${a.findings.length}</div>
+      </div>
+      <div>
+        <div style="font-size:9px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:0.08em;">Upgrade Required</div>
+        <div style="font-size:13px;font-weight:700;color:${a.upgradeRequired ? '#B58800' : '#16A34A'};font-family:'JetBrains Mono',monospace;margin-top:2px;">${a.upgradeRequired ? 'Yes' : 'No'}</div>
+      </div>
+    </div>
+  </div>
+
+  ${a.findings.length > 0 ? `
+  <div style="background:#FFFFFF;border:1px solid var(--fp-rule);border-radius:8px;padding:14px 18px;margin-bottom:14px;">
+    <div style="font-size:11.5px;font-weight:800;color:#0F2952;letter-spacing:0.02em;margin-bottom:10px;text-transform:uppercase;">Findings (${a.findings.length})</div>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      ${a.findings.map((f) => {
+        const fc = SEV_CFG[f.severity] ?? SEV_CFG.MEDIUM;
+        return `<div style="background:${fc.bg};border:1px solid ${fc.border};border-left:3px solid ${fc.color};border-radius:6px;padding:10px 12px;page-break-inside:avoid;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+            <span style="font-size:8.5px;font-weight:800;color:${fc.color};background:#fff;border:1px solid ${fc.border};padding:1px 6px;border-radius:4px;letter-spacing:0.06em;">${esc(f.severity)}</span>
+            <span style="font-size:11.5px;font-weight:700;color:#1D252C;">${esc(f.title)}</span>
+          </div>
+          <div style="font-size:10.5px;color:#475569;line-height:1.6;">${esc(f.description)}</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:5px;flex-wrap:wrap;">
+            ${f.affectedComponents.map((c) => `<span style="font-size:9px;font-weight:600;color:#475569;background:#fff;border:1px solid #E2E8F0;padding:1px 6px;border-radius:3px;font-family:monospace;">${esc(c)}</span>`).join('')}
+            <span style="font-size:9.5px;color:#64748B;font-family:monospace;">${f.affectedEndpoints.toLocaleString()} endpoints (${esc(f.affectedPct)})</span>
+          </div>
+          <div style="font-size:10.5px;color:${fc.color};margin-top:5px;line-height:1.55;"><strong>Recommended action:</strong> ${esc(f.recommendation)}</div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>` : ''}
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;page-break-inside:avoid;">
+    ${a.osCompatibility.length > 0 ? `
+    <div style="background:#FFFFFF;border:1px solid var(--fp-rule);border-radius:8px;padding:12px 14px;">
+      <div style="font-size:10.5px;font-weight:800;color:#0F2952;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">OS Compatibility</div>
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        ${a.osCompatibility.map((r) => {
+          const bad = !r.customerAgentCompatible;
+          const bg = bad ? '#FEF2F2' : '#F0FDF4';
+          const bd = bad ? '#FECACA' : '#BBF7D0';
+          const co = bad ? '#A30080' : '#16A34A';
+          return `<div style="background:${bg};border:1px solid ${bd};border-radius:5px;padding:6px 9px;">
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span style="font-size:11px;font-weight:700;color:${co};flex-shrink:0;">${bad ? '⨯' : '✓'}</span>
+              <span style="font-size:10.5px;font-weight:600;color:#1D252C;flex:1;">${esc(r.os)}</span>
+              <span style="font-size:8.5px;font-weight:700;color:${co};letter-spacing:0.05em;">${esc(r.status)}</span>
+            </div>
+            <div style="font-size:9.5px;color:#64748B;font-family:monospace;margin-left:17px;">min: ${esc(r.minAgentRequired)}</div>
+            ${r.note ? `<div style="font-size:9.5px;color:#64748B;margin-left:17px;margin-top:2px;line-height:1.45;">${esc(r.note)}</div>` : ''}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>` : ''}
+
+    ${a.browserCompatibility.length > 0 ? `
+    <div style="background:#FFFFFF;border:1px solid var(--fp-rule);border-radius:8px;padding:12px 14px;">
+      <div style="font-size:10.5px;font-weight:800;color:#0F2952;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">Browser Compatibility</div>
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        ${a.browserCompatibility.map((r) => {
+          const bad = !r.customerAgentCompatible;
+          const bg = bad ? '#FEF2F2' : '#F0FDF4';
+          const bd = bad ? '#FECACA' : '#BBF7D0';
+          const co = bad ? '#A30080' : '#16A34A';
+          return `<div style="background:${bg};border:1px solid ${bd};border-radius:5px;padding:6px 9px;">
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span style="font-size:11px;font-weight:700;color:${co};flex-shrink:0;">${bad ? '⨯' : '✓'}</span>
+              <span style="font-size:10.5px;font-weight:600;color:#1D252C;flex:1;">${esc(r.browser)} · ${esc(r.platform)}</span>
+              ${r.mv3Required ? '<span style="font-size:8px;font-weight:700;color:#7C3AED;background:#F5F3FF;border:1px solid #DDD6FE;padding:1px 5px;border-radius:3px;letter-spacing:0.04em;">MV3</span>' : ''}
+              <span style="font-size:8.5px;font-weight:700;color:${co};letter-spacing:0.05em;">${esc(r.status)}</span>
+            </div>
+            <div style="font-size:9.5px;color:#64748B;font-family:monospace;margin-left:17px;">min: ${esc(r.minAgentRequired)}</div>
+            ${r.note ? `<div style="font-size:9.5px;color:#64748B;margin-left:17px;margin-top:2px;line-height:1.45;">${esc(r.note)}</div>` : ''}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>` : ''}
+  </div>
+
+  ${includedNotes.length > 0 ? `
+  <div style="margin-top:14px;page-break-inside:avoid;">
+    <div style="font-size:10.5px;font-weight:800;color:#0F2952;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">Critical Compatibility Notes</div>
+    <div style="display:flex;flex-direction:column;gap:6px;">
+      ${includedNotes.map((n) => {
+        const nc = SEV_CFG[n.severity] ?? SEV_CFG.MEDIUM;
+        return `<div style="background:${nc.bg};border:1px solid ${nc.border};border-left:3px solid ${nc.color};border-radius:5px;padding:8px 11px;">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
+            <span style="font-size:8.5px;font-weight:800;color:${nc.color};background:#fff;border:1px solid ${nc.border};padding:1px 5px;border-radius:3px;letter-spacing:0.05em;">${esc(n.severity)}</span>
+            <span style="font-size:11px;font-weight:700;color:#1D252C;">⚠ ${esc(n.title)}</span>
+          </div>
+          <div style="font-size:10.5px;color:#475569;line-height:1.55;">${esc(n.description)}</div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>` : ''}
+
+  ${a.upgradeRecommendation ? (() => {
+    const u = URG_CFG[a.upgradeRecommendation.urgency] ?? URG_CFG.PLANNED;
+    return `
+    <div style="margin-top:14px;background:#FFFFFF;border:1px solid var(--fp-rule);border-top:3px solid ${u.color};border-radius:8px;padding:14px 16px;page-break-inside:avoid;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+        <span style="font-size:13px;font-weight:800;color:#0F2952;">Upgrade Recommendation</span>
+        <span style="font-size:9px;font-weight:700;color:${u.color};background:${u.bg};border:1px solid ${u.color}33;padding:2px 8px;border-radius:4px;letter-spacing:0.06em;">${esc(u.label.toUpperCase())}</span>
+        <span style="font-size:10.5px;color:#475569;font-family:monospace;">Target: <strong>v${esc(a.upgradeRecommendation.targetVersion)}</strong></span>
+      </div>
+      <div style="font-size:11px;color:#475569;line-height:1.65;margin-bottom:8px;">${esc(a.upgradeRecommendation.rationale)}</div>
+      <div style="font-size:10.5px;color:#475569;line-height:1.55;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:5px;padding:7px 9px;">
+        <strong style="color:#0F2952;">Deployment note:</strong> ${esc(a.upgradeRecommendation.deploymentNote)}
+      </div>
+    </div>`;
+  })() : ''}
+</div>`;
+})() : ''}
+
+<!-- Legacy raw-matrix dump retained as a hidden fallback only when an
+     assessment hasn't been produced yet but the operator did import the
+     matrix. This stops the report from being empty during a partial fill,
+     while the customer-specific section above is the primary surface. -->
+${p.selectedProducts.data && !p.endpointCompatAssessment && !isMatrixEmpty(p.endpointMatrix) ? `
+<div class="section">
+  <div class="section-eyebrow">Section 14 · Part III · Endpoint Compatibility</div>
+  <div class="section-title">F1E DLP Endpoint — OS &amp; Browser Support Matrix</div>
+  <p class="section-lead">
+    Reference: minimum agent versions for current Windows, macOS, virtual desktop, and browser platforms — used to confirm endpoint compatibility ahead of any upgrade or new-deployment decision.
+    ${p.endpointMatrix.lastUpdated ? `<span style="color:var(--fp-ink-faint);font-family:'JetBrains Mono',monospace;font-size:10.5px;">Last updated: ${esc(p.endpointMatrix.lastUpdated)}.</span>` : ''}
+  </p>
+
+  ${(p.endpointMatrix.windows.length > 0 || p.endpointMatrix.macos.length > 0) ? `
+  <div style="display:grid;grid-template-columns:${(p.endpointMatrix.windows.length > 0 && p.endpointMatrix.macos.length > 0) ? '1fr 1fr' : '1fr'};gap:14px;page-break-inside:avoid;">
+    ${p.endpointMatrix.windows.length > 0 ? `
+    <div style="background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-navy);border-radius:6px;padding:12px 14px;box-shadow:0 2px 8px rgba(0,0,0,0.05);">
+      <div style="font-size:9.5px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-navy);margin-bottom:8px;">Windows Support</div>
+      <table style="margin-bottom:6px;box-shadow:none;border:1px solid var(--fp-rule);">
+        <thead>
+          <tr>
+            <th style="padding:5px 8px;font-size:9px;">Platform</th>
+            <th style="padding:5px 8px;font-size:9px;">Min Agent</th>
+            <th style="padding:5px 8px;font-size:9px;width:80px;text-align:center;">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${p.endpointMatrix.windows.map(r => `<tr>
+            <td style="padding:5px 8px;font-size:10.5px;color:var(--fp-ink);font-weight:500;">${esc(r.platform)}</td>
+            <td style="padding:5px 8px;font-size:10px;font-family:'JetBrains Mono',monospace;color:var(--fp-ink-muted);">${esc(r.supportedFrom)}</td>
+            <td style="padding:5px 8px;text-align:center;"><span class="badge ${r.status === 'eos' ? 'badge-critical' : 'badge-low'}">${r.status === 'eos' ? 'EOS' : 'CURRENT'}</span></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+      ${p.endpointMatrix.windowsNotes.length > 0 ? `<ul style="margin:6px 0 0;padding-left:18px;">${p.endpointMatrix.windowsNotes.map(n => `<li style="font-size:10px;color:var(--fp-ink-muted);line-height:1.55;">${esc(n)}</li>`).join('')}</ul>` : ''}
+    </div>` : ''}
+
+    ${p.endpointMatrix.macos.length > 0 ? `
+    <div style="background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-cyan);border-radius:6px;padding:12px 14px;box-shadow:0 2px 8px rgba(0,0,0,0.05);">
+      <div style="font-size:9.5px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-cyan-deep);margin-bottom:8px;">macOS Support</div>
+      <table style="margin-bottom:6px;box-shadow:none;border:1px solid var(--fp-rule);">
+        <thead>
+          <tr>
+            <th style="padding:5px 8px;font-size:9px;">Platform</th>
+            <th style="padding:5px 8px;font-size:9px;">Min Agent</th>
+            <th style="padding:5px 8px;font-size:9px;width:80px;text-align:center;">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${p.endpointMatrix.macos.map(r => `<tr>
+            <td style="padding:5px 8px;font-size:10.5px;color:var(--fp-ink);font-weight:500;">${esc(r.platform)}</td>
+            <td style="padding:5px 8px;font-size:10px;font-family:'JetBrains Mono',monospace;color:var(--fp-ink-muted);">${esc(r.supportedFrom)}</td>
+            <td style="padding:5px 8px;text-align:center;"><span class="badge ${r.status === 'eos' ? 'badge-critical' : 'badge-low'}">${r.status === 'eos' ? 'EOS' : 'CURRENT'}</span></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+      ${p.endpointMatrix.macosNotes.length > 0 ? `<ul style="margin:6px 0 0;padding-left:18px;">${p.endpointMatrix.macosNotes.map(n => `<li style="font-size:10px;color:var(--fp-ink-muted);line-height:1.55;">${esc(n)}</li>`).join('')}</ul>` : ''}
+    </div>` : ''}
+  </div>` : ''}
+
+  ${p.endpointMatrix.vdi.length > 0 ? `
+  <div style="background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-yellow);border-radius:6px;padding:12px 14px;margin-top:12px;box-shadow:0 2px 8px rgba(0,0,0,0.05);page-break-inside:avoid;">
+    <div style="font-size:9.5px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-warn);margin-bottom:8px;">Virtual Desktop Infrastructure</div>
+    <table style="margin-bottom:0;box-shadow:none;border:1px solid var(--fp-rule);">
+      <thead>
+        <tr>
+          <th style="padding:5px 8px;font-size:9px;">Platform</th>
+          <th style="padding:5px 8px;font-size:9px;">Min Agent</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${p.endpointMatrix.vdi.map(r => `<tr>
+          <td style="padding:5px 8px;font-size:10.5px;color:var(--fp-ink);font-weight:500;">${esc(r.platform)}</td>
+          <td style="padding:5px 8px;font-size:10px;font-family:'JetBrains Mono',monospace;color:var(--fp-ink-muted);">${esc(r.supportedFrom)}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+  </div>` : ''}
+
+  ${p.endpointMatrix.browsers.length > 0 ? `
+  <div style="background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-violette);border-radius:6px;padding:12px 14px;margin-top:12px;box-shadow:0 2px 8px rgba(0,0,0,0.05);page-break-inside:avoid;">
+    <div style="font-size:9.5px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-violette);margin-bottom:8px;">Browser Support</div>
+    <table style="margin-bottom:0;box-shadow:none;border:1px solid var(--fp-rule);">
+      <thead>
+        <tr>
+          <th style="padding:5px 8px;font-size:9px;">Browser</th>
+          <th style="padding:5px 8px;font-size:9px;width:90px;">Platform</th>
+          <th style="padding:5px 8px;font-size:9px;">Versions</th>
+          <th style="padding:5px 8px;font-size:9px;width:120px;">Min Agent</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${p.endpointMatrix.browsers.map(r => `<tr>
+          <td style="padding:5px 8px;font-size:10.5px;color:var(--fp-ink);font-weight:500;">${esc(r.browser)}</td>
+          <td style="padding:5px 8px;font-size:10px;color:var(--fp-ink-muted);">${esc(r.platform)}</td>
+          <td style="padding:5px 8px;font-size:10px;font-family:'JetBrains Mono',monospace;color:var(--fp-ink);">${esc(r.versions)}</td>
+          <td style="padding:5px 8px;font-size:10px;font-family:'JetBrains Mono',monospace;color:var(--fp-cyan-deep);font-weight:600;">${esc(r.minAgent)}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+  </div>` : ''}
+
+  ${p.endpointMatrix.criticalNotes.length > 0 ? `
+  <div style="margin-top:14px;page-break-inside:avoid;">
+    <div style="font-size:9.5px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-red);margin-bottom:8px;">Critical Compatibility Notes</div>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      ${p.endpointMatrix.criticalNotes.map(n => {
+        const accentMap: Record<string, { bar: string; bg: string; border: string }> = {
+          critical: { bar: 'var(--fp-violette)', bg: 'var(--fp-violette-soft)', border: '#E9CCDF' },
+          high:     { bar: 'var(--fp-red)',      bg: 'var(--fp-red-soft)',      border: '#FECACA' },
+          medium:   { bar: 'var(--fp-yellow)',   bg: 'var(--fp-yellow-soft)',   border: '#FDE68A' },
+        };
+        const a = accentMap[n.severity] ?? accentMap.medium;
+        return `<div style="background:${a.bg};border:1px solid ${a.border};border-left:3px solid ${a.bar};border-radius:5px;padding:9px 12px;">
+          <div style="font-size:11px;font-weight:700;color:var(--fp-ink);margin-bottom:3px;">⚠ ${esc(n.title)}</div>
+          <div style="font-size:10.5px;color:var(--fp-ink-muted);line-height:1.6;">${esc(n.body)}</div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>` : ''}
+
+  ${p.endpointAgentSummary && p.endpointAgentSummary.latestVersion ? (() => {
+    /* If we have endpoint-agent telemetry, surface a customer-specific compatibility
+       check: which deployed agent versions sit BELOW the minimum required for the
+       browsers in this matrix. */
+    const fleetLatest = p.endpointAgentSummary.latestVersion;
+    const outdatedCount = p.endpointAgentSummary.outdatedCount;
+    const outdatedPct = p.endpointAgentSummary.outdatedPct;
+    if (outdatedCount === 0) return '';
+    return `
+    <div style="margin-top:14px;background:var(--fp-violette-soft);border:1px solid #E9CCDF;border-left:4px solid var(--fp-violette);border-radius:6px;padding:12px 16px;page-break-inside:avoid;">
+      <div style="font-size:10px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;color:var(--fp-violette);margin-bottom:6px;">Fleet Compatibility Alert</div>
+      <div style="font-size:11.5px;color:var(--fp-ink);line-height:1.65;">
+        Customer fleet snapshot shows <strong style="color:var(--fp-violette);">${outdatedCount.toLocaleString()} endpoints (${outdatedPct}%)</strong> running agent versions below 25.x — these sit beneath the minimum required by the browser support matrix above. Chrome 138+ in particular drops Manifest V2 extension support, so agents older than v26.02 cannot deliver full browser-channel DLP coverage on those endpoints. Deployed latest version observed: <span class="mono" style="color:var(--fp-navy);font-weight:700;">${esc(fleetLatest)}</span>.
+      </div>
+    </div>`;
+  })() : ''}
+</div>` : ''}
+
+<!-- ══════════════════════════════════════
      ACTION ITEMS & NEXT STEPS
 ══════════════════════════════════════ -->
 ${p.actionItems.length > 0 ? `
 <div class="section">
-  <div class="section-eyebrow">Section 10 · Execution Plan</div>
+  <div class="section-eyebrow">Section 15 · Part III · Execution Plan</div>
   <div class="section-title">Action Items &amp; Next Steps (${p.actionItems.length})</div>
-  <table>
+  <table class="rec-table">
     <thead>
       <tr>
-        <th style="width:34px;">#</th>
+        <th style="width:34px;text-align:center;">#</th>
         <th>Task</th>
-        <th style="width:110px;">Owner</th>
+        <th style="width:120px;">Owner</th>
         <th style="width:110px;">Due Date</th>
         <th style="width:90px;">Product</th>
-        <th style="width:80px;">Priority</th>
-        <th style="width:100px;">Status</th>
+        <th style="width:85px;text-align:center;">Priority</th>
+        <th style="width:110px;text-align:center;">Status</th>
       </tr>
     </thead>
-    <tbody>
-      ${p.actionItems.map((a, i) => `<tr>
-        <td style="font-family:monospace;font-weight:700;color:#36B0C9;text-align:center;">${i + 1}</td>
-        <td style="font-weight:500;color:#023E8A;">${esc(a.task)}</td>
-        <td style="font-size:10.5px;">${esc(a.owner || '—')}</td>
-        <td style="font-family:monospace;font-size:10.5px;">${esc(a.dueDate || '—')}</td>
-        <td style="font-family:monospace;font-size:10.5px;">${esc(a.product || '—')}</td>
-        <td><span class="badge" style="${sevStyle(a.priority.toUpperCase())}">${esc(a.priority.toUpperCase())}</span></td>
-        <td><span class="badge" style="${stStyle(a.status)}">${esc(a.status.replace(/_/g,' ').toUpperCase())}</span></td>
-      </tr>`).join('')}
-    </tbody>
+    ${p.actionItems.map((a, i) => `<tbody class="rec-pair">
+      <tr class="rec-summary">
+        <td style="font-family:'JetBrains Mono',monospace;font-weight:700;color:#36B0C9;text-align:center;">${i + 1}</td>
+        <td><div style="font-weight:600;color:#023E8A;font-size:12px;line-height:1.45;">${esc(a.task)}</div></td>
+        <td style="font-size:10.5px;color:#475569;">${esc(a.owner || '—')}</td>
+        <td class="mono" style="font-size:10.5px;color:#1D252C;">${esc(a.dueDate || '—')}</td>
+        <td class="mono" style="font-size:10.5px;color:#1D252C;">${esc(a.product || '—')}</td>
+        <td style="text-align:center;"><span class="badge" style="${sevStyle(a.priority.toUpperCase())}">${esc(a.priority.toUpperCase())}</span></td>
+        <td style="text-align:center;"><span class="badge" style="${stStyle(a.status)}">${esc(a.status.replace(/_/g,' ').toUpperCase())}</span></td>
+      </tr>
+      ${a.details ? `
+      <tr class="rec-detail">
+        <td colspan="7">
+          <div class="rec-detail-inner">
+            <span class="rec-detail-tag">Details</span>
+            <div class="rec-detail-text">${esc(a.details)}</div>
+          </div>
+        </td>
+      </tr>` : ''}
+    </tbody>`).join('')}
   </table>
 </div>` : ''}
 
@@ -2585,6 +4265,7 @@ ${p.actionItems.length > 0 ? `
 ══════════════════════════════════════ -->
 ${p.featureRequests.length > 0 ? `
 <div class="section">
+  <div class="section-eyebrow">Section 16 · Part III · Customer Voice</div>
   <div class="section-title">Customer Feature Requests (${p.featureRequests.length})</div>
   <table class="rec-table">
     <thead>
@@ -2635,7 +4316,7 @@ ${(() => {
   const sorted = [...gaps].sort((a, b) => (PRIO[a.priority ?? 'medium'] ?? 9) - (PRIO[b.priority ?? 'medium'] ?? 9));
   return `
 <div class="section">
-  <div class="section-eyebrow">Section 11 · Licensing Roadmap</div>
+  <div class="section-eyebrow">Section 17 · Part III · Licensing Roadmap</div>
   <div class="section-title">Recommended License Extension <span style="font-weight:400;color:var(--fp-ink-faint);font-size:14px;letter-spacing:0;">(${gaps.length})</span></div>
   <p class="section-lead">
     Products where Forcepoint recommends the customer expand their entitlement count, based on the deployment scope, headcount growth, and operational coverage observed in this assessment. Each line below proposes the additional licenses needed per product — quantities are not aggregated, as each product carries its own licensing unit.
@@ -2678,13 +4359,13 @@ ${(() => {
 ══════════════════════════════════════ -->
 ${p.selectedEnhancements.length > 0 ? `
 <div class="section">
-  <div class="section-eyebrow">Section 12 · Strategic Initiatives</div>
+  <div class="section-eyebrow">Section 18 · Part III · Strategic Initiatives</div>
   <div class="section-title">Recommended Enhancements</div>
   <p style="margin-bottom:18px;color:#475569;line-height:1.7;font-size:11px;">
     The following Forcepoint product enhancements are proposed as next-step initiatives to strengthen the customer's overall security posture. Each recommendation is selected based on the health check findings, current scope, and identified gaps. The business value commentary below should be reviewed jointly with the customer's security and compliance stakeholders.
   </p>
 
-  ${ENHANCEMENTS.filter(e => p.selectedEnhancements.includes(e.id)).map((e, idx) => `
+  ${ENHANCEMENTS.filter(eBase => p.selectedEnhancements.includes(eBase.id)).map((eBase, idx) => { const e = mergeEnhancement(eBase, p.enhancementOverrides?.[eBase.id]); return `
   <div style="border:1.5px solid ${e.accent}55;border-radius:6px;margin-bottom:16px;overflow:hidden;page-break-inside:avoid;box-shadow:0 2px 8px rgba(0,0,0,0.06);">
     <!-- Header band -->
     <div style="background:linear-gradient(135deg,${e.accent},${e.accent}DD);padding:14px 18px;color:#fff;display:flex;align-items:center;gap:12px;">
@@ -2730,7 +4411,7 @@ ${p.selectedEnhancements.length > 0 ? `
       </table>
       ${e.extraTable.note ? `<div style="margin-top:8px;padding:8px 12px;background:${e.accent}10;border-left:3px solid ${e.accent};border-radius:3px;font-size:10.5px;color:#475569;line-height:1.55;">${esc(e.extraTable.note)}</div>` : ''}
     </div>` : ''}
-  </div>`).join('')}
+  </div>`; }).join('')}
 </div>` : ''}
 
 </div><!-- /content (Part III closes here) -->
@@ -2750,7 +4431,7 @@ ${p.selectedEnhancements.length > 0 ? `
      APPENDIX — EFFORT SCORE CARD
 ══════════════════════════════════════ -->
 <div class="section">
-  <div class="section-eyebrow">Section A · Scoring Rubric</div>
+  <div class="section-eyebrow">Section 19 · Part IV · Scoring Rubric</div>
   <div class="section-title">Appendix — Effort Score Card</div>
   <table>
     <thead>
@@ -2790,6 +4471,34 @@ ${p.selectedEnhancements.length > 0 ? `
   </table>
 </div>
 
+<!-- ══════════════════════════════════════
+     CLOSING NOTE — Forcepoint's Commitment
+     Final page before the footer. Mirrors the opening "Purpose" page
+     in tone — brief, customer-named, no metrics. Wraps the report on
+     a forward-looking note.
+══════════════════════════════════════ -->
+<div class="content">
+<div class="section" style="page-break-before:always;border-top:3px solid var(--fp-navy);padding-top:18px;">
+  <div class="section-eyebrow">Closing · Forcepoint Customer Success</div>
+  <div class="section-title">Forcepoint's Commitment</div>
+  <p style="font-size:12.5px;line-height:1.7;color:var(--fp-ink);margin:14px 0 12px;">
+    Forcepoint is committed to the ongoing success of <strong>${esc(p.sessionData.customerName || 'the customer')}</strong>'s data and network security program. This Health Check is part of Forcepoint's proactive Customer Success engagement model, and the findings contained herein represent our team's expert assessment based on industry best practices, product knowledge, and direct analysis of your environment.
+  </p>
+  <p style="font-size:12.5px;line-height:1.7;color:var(--fp-ink);margin:0 0 14px;">
+    We welcome the opportunity to discuss these findings in detail and to work collaboratively with <strong>${esc(p.sessionData.customerName || 'the customer')}</strong>'s technical and leadership teams to address identified gaps and plan a roadmap for continued improvement.
+  </p>
+  ${(p.sessionData.csm || p.sessionData.salesEngineer) ? `
+  <div style="margin-top:18px;padding:14px 16px;background:var(--fp-surface-alt);border:1px solid var(--fp-rule);border-left:3px solid var(--fp-navy);border-radius:6px;">
+    <div style="font-size:9.5px;font-weight:800;color:var(--fp-navy);letter-spacing:0.1em;text-transform:uppercase;margin-bottom:6px;">Your Forcepoint Team</div>
+    ${p.sessionData.csm ? `<div style="font-size:11.5px;color:var(--fp-ink);"><strong>Customer Success Manager:</strong> ${esc(p.sessionData.csm)}</div>` : ''}
+    ${p.sessionData.salesEngineer ? `<div style="font-size:11.5px;color:var(--fp-ink);margin-top:3px;"><strong>Sales Engineer:</strong> ${esc(p.sessionData.salesEngineer)}</div>` : ''}
+  </div>` : ''}
+  <p style="font-size:10.5px;line-height:1.65;color:var(--fp-ink-faint);font-style:italic;margin:20px 0 0;">
+    This document is confidential and intended solely for ${esc(p.sessionData.customerName || 'the customer')}. Findings reflect the state of the deployment at the time of the assessment (${esc(p.date)}); follow-up engagements may revise these conclusions as the environment evolves.
+  </p>
+</div>
+</div>
+
 <!-- FOOTER -->
 <div class="rpt-footer">
   <div class="rpt-footer-brand">Forcepoint</div>
@@ -2805,7 +4514,7 @@ ${p.selectedEnhancements.length > 0 ? `
 </html>`;
 }
 
-export function Step11Summary({ sessionData, templates, selectedProducts, checklistAnswers, versionEntries, versionData, recommendations, actionItems, featureRequests, serverDetails, selectedReports, dlpBundles, certificates, selectedEnhancements, licenseGaps, endpointAgentSummary, dlpDashboardSummary, customerLogo, setCustomerLogo }: Step11Props) {
+export function Step11Summary({ sessionData, templates, selectedProducts, checklistAnswers, versionEntries, versionData, recommendations, actionItems, featureRequests, serverDetails, selectedReports, dlpBundles, certificates, selectedEnhancements, licenseGaps, endpointAgentSummary, dlpDashboardSummary, customerLogo, setCustomerLogo, complianceFrameworks, enhancementOverrides, versionUpgrades, endpointMatrix, endpointCompatAssessment, reportRuns, onComplete, isComplete }: Step11Props) {
   const [isExporting, setIsExporting] = useState(false);
   const [exportDone,  setExportDone]  = useState(false);
   const [logoError,   setLogoError]   = useState<string | null>(null);
@@ -2858,6 +4567,7 @@ export function Step11Summary({ sessionData, templates, selectedProducts, checkl
     enhancementsCount: selectedEnhancements.length,
     licenseGapCount:  licenseGaps.length,
     dlpBundleCount:   dlpBundles.length,
+    versionUpgradeCount: versionUpgrades.length,
   };
 
   const completedSteps = COMPLETION_STEPS.filter(s => s.check(checkData)).length;
@@ -2870,21 +4580,34 @@ export function Step11Summary({ sessionData, templates, selectedProducts, checkl
     setIsExporting(true);
     setExportDone(false);
     setTimeout(() => {
-      const html = buildReportHTML({
-        sessionData, selectedTemplates, checklistAnswers, allFindings,
-        versionEntries, versionData, serverDetails, recommendations, actionItems, featureRequests,
-        totalAnswered, totalQuestions, healthScore, date, selectedReports, dlpBundles, certificates, selectedEnhancements,
-        licenseGaps, endpointAgentSummary, dlpDashboardSummary, customerLogo, healthBreakdown,
-      });
-      const win = window.open('', '_blank', 'width=1100,height=900');
-      if (win) {
-        win.document.write(html);
-        win.document.close();
-        win.focus();
-        setTimeout(() => { setIsExporting(false); setExportDone(true); }, 400);
-      } else {
+      /* Wrap the build + write in try/catch so any synchronous throw doesn't
+         leave the button stuck on "Generating" forever — surface the error
+         to the user and the console instead. */
+      try {
+        const html = buildReportHTML({
+          sessionData, selectedTemplates, selectedProducts, checklistAnswers, allFindings,
+          versionEntries, versionData, serverDetails, recommendations, actionItems, featureRequests,
+          totalAnswered, totalQuestions, healthScore, date, selectedReports, dlpBundles, certificates, selectedEnhancements,
+          licenseGaps, endpointAgentSummary, dlpDashboardSummary, customerLogo,
+          complianceFrameworks, enhancementOverrides, versionUpgrades, endpointMatrix, endpointCompatAssessment,
+          reportRuns: reportRuns ?? {},
+          healthBreakdown,
+        });
+        const win = window.open('', '_blank', 'width=1100,height=900');
+        if (win) {
+          win.document.write(html);
+          win.document.close();
+          win.focus();
+          setTimeout(() => { setIsExporting(false); setExportDone(true); }, 400);
+        } else {
+          setIsExporting(false);
+          alert('Pop-up blocked. Please allow pop-ups for this page and try again.');
+        }
+      } catch (err) {
         setIsExporting(false);
-        alert('Pop-up blocked. Please allow pop-ups for this page and try again.');
+        setExportDone(false);
+        console.error('[Step11Summary] buildReportHTML failed:', err);
+        alert(`Report generation failed:\n\n${(err as Error).message}\n\nCheck the browser console for the full stack trace.`);
       }
     }, 600);
   };
@@ -2901,6 +4624,7 @@ export function Step11Summary({ sessionData, templates, selectedProducts, checkl
     { icon: '🔍', label: 'Checklist Findings',    detail: `${allFindings.length} findings from ${totalAnswered} checks`, ok: totalAnswered > 0 },
     { icon: '🔐', label: 'Certificate Analysis',  detail: `${certificates.length} certificate${certificates.length !== 1 ? 's' : ''}${certificates.filter(c => c.status !== 'VALID').length > 0 ? ` (${certificates.filter(c => c.status !== 'VALID').length} need attention)` : ''}`, ok: certificates.length > 0 },
     { icon: '💡', label: 'Recommendations',       detail: `${recommendations.length} defined`, ok: recommendations.length > 0 },
+    { icon: '⬆️', label: 'Version Upgrade Proposals', detail: `${versionUpgrades.length} proposal${versionUpgrades.length === 1 ? '' : 's'}`, ok: versionUpgrades.length > 0 },
     { icon: '📋', label: 'Action Items',          detail: `${actionItems.length} items (${actionItems.filter(a => a.status === 'done').length} done)`, ok: actionItems.length > 0 },
     { icon: '🚀', label: 'Customer Feature Requests', detail: `${featureRequests.length} submitted`, ok: featureRequests.length > 0 },
     { icon: '✨', label: 'Recommended Enhancements', detail: `${selectedEnhancements.length} selected`, ok: selectedEnhancements.length > 0 },
@@ -2916,80 +4640,9 @@ export function Step11Summary({ sessionData, templates, selectedProducts, checkl
   return (
     <div className="space-y-[13px]">
 
-      {/* ── EXECUTIVE BRIEF HEADER ── */}
-      <div className="rounded-xl overflow-hidden text-white"
-        style={{ background: 'linear-gradient(145deg,#012566 0%,#023E8A 40%,#023E8A 100%)', boxShadow: '0 6px 24px rgba(15,41,82,0.22)' }}>
-        <div className="p-[24px_28px]">
-
-          {/* Top row */}
-          <div className="flex items-start justify-between mb-5">
-            <div className="flex-1 min-w-0 pr-6">
-              <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.14em', opacity: 0.5, marginBottom: '8px' }}>
-                FORCEPOINT INTELLIGENCE PLATFORM — EXECUTIVE HEALTH CHECK REPORT
-              </div>
-              <div style={{ fontSize: '22px', fontWeight: 700, letterSpacing: '-0.02em', lineHeight: 1.2, marginBottom: '6px' }}>
-                {sessionData.customerName ? `${sessionData.customerName}` : 'Customer Not Set'}
-              </div>
-              <div style={{ fontSize: '12px', opacity: 0.6 }}>
-                {[
-                  sessionData.forcepointId && `ID: ${sessionData.forcepointId}`,
-                  sessionData.industry, sessionData.country,
-                ].filter(Boolean).join(' · ')}
-              </div>
-              {(sessionData.csm || sessionData.salesEngineer) && (
-                <div style={{ fontSize: '11px', opacity: 0.45, marginTop: '3px' }}>
-                  {[sessionData.csm && `CSM: ${sessionData.csm}`, sessionData.salesEngineer && `SE: ${sessionData.salesEngineer}`].filter(Boolean).join(' · ')}
-                </div>
-              )}
-            </div>
-
-            {/* Score badge */}
-            <div className="rounded-2xl p-[14px_20px] text-center flex-shrink-0"
-              style={{ background: 'rgba(0,0,0,0.22)', border: '1px solid rgba(255,255,255,0.12)', minWidth: '90px' }}>
-              <div style={{
-                fontSize: '32px', fontWeight: 800, lineHeight: 1,
-                color: healthScore === null ? 'rgba(255,255,255,0.35)'
-                  : healthScore >= 80 ? '#6EE7B7'
-                  : healthScore >= 60 ? '#FCD34D' : '#FCA5A5',
-              }}>
-                {healthScore === null ? '—' : `${healthScore}%`}
-              </div>
-              <div style={{ fontSize: '8.5px', fontWeight: 700, letterSpacing: '0.1em', opacity: 0.5, marginTop: '5px' }}>HEALTH</div>
-            </div>
-          </div>
-
-          {/* KPI tiles */}
-          <div className="grid grid-cols-5 gap-2">
-            {[
-              { val: allFindings.length,    label: 'Total Findings',   color: allFindings.length > 0 ? '#FCA5A5' : '#6EE7B7' },
-              { val: criticalCount + highCount, label: 'Critical + High', color: criticalCount + highCount > 0 ? '#FCA5A5' : '#6EE7B7' },
-              { val: totalAnswered,          label: 'Checks Done',     color: '#93C5FD' },
-              { val: recommendations.length, label: 'Recommendations', color: '#FCD34D' },
-              { val: actionItems.length,     label: 'Action Items',    color: '#C4B5FD' },
-            ].map((kpi) => (
-              <div key={kpi.label} className="rounded-xl p-[10px_14px]"
-                style={{ background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)' }}>
-                <div style={{ fontSize: '22px', fontWeight: 700, lineHeight: 1, color: kpi.color }}>{kpi.val}</div>
-                <div style={{ fontSize: '9.5px', opacity: 0.55, marginTop: '4px' }}>{kpi.label}</div>
-              </div>
-            ))}
-          </div>
-
-          {/* Products + date */}
-          <div className="flex items-center gap-2 flex-wrap mt-4">
-            {selectedTemplates.map((t) => (
-              <div key={t.id} className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg"
-                style={{ background: 'rgba(255,255,255,0.09)', border: '1px solid rgba(255,255,255,0.15)', fontSize: '11px', fontWeight: 600 }}>
-                <span>{t.icon}</span><span>{t.name.replace(' HC', '')}</span>
-              </div>
-            ))}
-            {selectedTemplates.length === 0 && (
-              <span style={{ fontSize: '11px', opacity: 0.4 }}>No products selected</span>
-            )}
-            <div className="ml-auto" style={{ fontSize: '10px', opacity: 0.4 }}>{date}</div>
-          </div>
-        </div>
-      </div>
+      {/* Executive Brief blue header removed — the customer-facing PDF on the
+          next page covers identity, KPIs, score and product chips already.
+          The wizard step now opens straight to Assessment Completion. */}
 
       {/* ── TWO COLUMNS: COMPLETION + REPORT CONTENTS ── */}
       <div className="grid grid-cols-2 gap-[13px]">
@@ -3180,6 +4833,54 @@ export function Step11Summary({ sessionData, templates, selectedProducts, checkl
               </button>
             </div>
           )}
+        </div>
+      </div>
+
+      {/* ── COMPLETE SESSION CTA ──
+          Final action of the wizard. Marks the session as completed (sets
+          completedAt on the persisted HCSession) and navigates back to the
+          Sessions list, where the new COMPLETED badge is visible. Stays
+          available even after the session was already completed — the
+          operator can re-mark it (e.g. after edits) without harm. */}
+      <div className="rounded-xl overflow-hidden"
+        style={{ border: isComplete ? '1.5px solid rgba(22,163,74,0.3)' : '1.5px solid rgba(217,119,6,0.25)', boxShadow: '0 2px 12px rgba(15,41,82,0.06)' }}>
+        <div className="p-[22px_26px]"
+          style={{ background: isComplete ? 'rgba(22,163,74,0.03)' : 'linear-gradient(135deg,#FFFBEB 0%,#FEF3C7 100%)' }}>
+          <div className="flex items-center gap-5">
+            <div className="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0"
+              style={{
+                background: isComplete ? 'rgba(22,163,74,0.12)' : 'rgba(217,119,6,0.12)',
+                border: `1.5px solid ${isComplete ? 'rgba(22,163,74,0.3)' : 'rgba(217,119,6,0.3)'}`,
+              }}>
+              {isComplete
+                ? <CheckCircle2 size={22} style={{ color: '#16A34A' }} />
+                : <Flag size={22} style={{ color: '#B58800' }} />
+              }
+            </div>
+            <div className="flex-1">
+              <div style={{ fontSize: '14px', fontWeight: 700, color: isComplete ? '#15803D' : '#92400E', marginBottom: '3px' }}>
+                {isComplete ? 'Session is marked complete' : 'Wrap up this session'}
+              </div>
+              <div style={{ fontSize: '12px', color: '#64748B' }}>
+                {isComplete
+                  ? 'You can still re-open this session to make edits — clicking Done again will refresh the completion timestamp.'
+                  : 'When you\'re finished with this assessment, click Done to save current state, stamp a completion date, and return to the Sessions list.'}
+              </div>
+            </div>
+            <button
+              onClick={onComplete}
+              className="flex items-center gap-2.5 px-7 py-3.5 rounded-xl font-bold text-white transition-all flex-shrink-0"
+              style={{
+                fontSize: '14px',
+                background: 'linear-gradient(135deg,#16A34A,#15803D)',
+                cursor: 'pointer',
+                boxShadow: '0 4px 18px rgba(22,163,74,0.35)',
+                letterSpacing: '-0.01em',
+              }}
+            >
+              <CheckCircle2 size={16} /> {isComplete ? 'Mark Complete Again' : 'Done'}
+            </button>
+          </div>
         </div>
       </div>
 

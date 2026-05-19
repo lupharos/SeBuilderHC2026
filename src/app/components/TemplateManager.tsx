@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { Plus, Trash2, Edit2, Save, FolderPlus, Shield, CheckCircle2, ArrowLeft, Layers, Download, Upload, Check, AlertCircle, X, FolderOpen, RefreshCw } from 'lucide-react';
+import { Plus, Trash2, Edit2, Save, FolderPlus, Shield, CheckCircle2, ArrowLeft, Layers, Download, Upload, Check, AlertCircle, X, FolderOpen, RefreshCw, FileJson } from 'lucide-react';
 import type { Template, Question, QuestionSeverity } from './types/templates';
 import {
   saveTemplates, autoLoad, requestAndLoad, clearStoredHandle, isSupported,
@@ -50,6 +50,42 @@ export function TemplateManager({ onClose, templates, setTemplates, selectedProd
   const [linkedFilename, setLinkedFilename] = useState<string | null>(null);
   const [pendingHandle, setPendingHandle] = useState<import('../utils/templateFileSystem').FSFileHandle | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const jsonInputRef = useRef<HTMLInputElement>(null);
+  /* Saved-flash state — fires after edits or explicit Save. Templates are
+     auto-persisted by Dashboard's useLocalStorage('hc_templates', …); this
+     is a visual confirmation so the operator knows the change took. */
+  const [savedFlash, setSavedFlash] = useState(false);
+  const firstRender = useRef(true);
+  useEffect(() => {
+    if (firstRender.current) { firstRender.current = false; return; }
+    setSavedFlash(true);
+    const t = setTimeout(() => setSavedFlash(false), 1500);
+    return () => clearTimeout(t);
+  }, [templates]);
+
+  function manualSave() {
+    setSavedFlash(true);
+    setTimeout(() => setSavedFlash(false), 1500);
+  }
+
+  function exportJSON() {
+    const payload = {
+      _format: 'forcepoint-hc-templates',
+      _version: 1,
+      _exportedAt: new Date().toISOString(),
+      templates,
+    };
+    const stamp = new Date().toISOString().slice(0, 10);
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `hc-rule-engine-templates-${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
 
   const productIdMap: Record<string, string> = {
     web: 'web', email: 'email', data: 'dlp', ngfw: 'ngfw',
@@ -705,7 +741,7 @@ export function TemplateManager({ onClose, templates, setTemplates, selectedProd
           </span>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
           {importState === 'error' && importError && (
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg"
               style={{ background: '#FEF2F2', border: '1px solid #FECACA', maxWidth: '260px' }}>
@@ -715,66 +751,45 @@ export function TemplateManager({ onClose, templates, setTemplates, selectedProd
           )}
 
           <input ref={fileInputRef} type="file" accept=".json,application/json" style={{ display: 'none' }} onChange={handleImportJSON} />
+          <input ref={jsonInputRef} type="file" accept=".json,application/json" style={{ display: 'none' }} onChange={handleImportJSON} />
 
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={importState === 'importing'}
-            className="flex items-center gap-2 px-5 py-2 rounded-xl font-semibold transition-all"
-            style={{
-              fontSize: '13px',
-              background: importState === 'success' ? '#DCFCE7' : importState === 'error' ? '#FEF2F2' : importState === 'importing' ? '#F8FAFC' : '#F1F5F9',
-              color: importState === 'success' ? '#16A34A' : importState === 'error' ? '#DC2626' : importState === 'importing' ? '#94A3B8' : '#475569',
-              border: importState === 'success' ? '1.5px solid #BBF7D0' : importState === 'error' ? '1.5px solid #FECACA' : '1.5px solid #E2E8F0',
-              minWidth: '150px', justifyContent: 'center',
-              cursor: importState === 'importing' ? 'not-allowed' : 'pointer',
-            }}
-          >
-            {importState === 'importing' ? (
-              <><div className="w-3.5 h-3.5 rounded-full border-2 animate-spin" style={{ borderColor: '#CBD5E1', borderTopColor: '#64748B' }} />Reading…</>
-            ) : importState === 'success' ? (
-              <><Check size={14} />Imported!</>
-            ) : importState === 'error' ? (
-              <><AlertCircle size={14} />Try Again</>
-            ) : (
-              <><Upload size={14} />Import Config</>
-            )}
+          {savedFlash && (
+            <span className="flex items-center gap-1.5" style={{ fontSize: '11px', fontWeight: 600, color: '#16A34A', background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: '5px', padding: '4px 9px' }}>
+              <Check size={11} /> Saved
+            </span>
+          )}
+
+          {importState === 'importing' && (
+            <span className="flex items-center gap-1.5" style={{ fontSize: '11px', fontWeight: 600, color: '#64748B', background: '#F1F5F9', border: '1px solid #E2E8F0', borderRadius: '5px', padding: '4px 9px' }}>
+              <RefreshCw size={11} className="animate-spin" /> Reading…
+            </span>
+          )}
+          {importState === 'success' && (
+            <span className="flex items-center gap-1.5" style={{ fontSize: '11px', fontWeight: 600, color: '#16A34A', background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: '5px', padding: '4px 9px' }}>
+              <Check size={11} /> Imported
+            </span>
+          )}
+
+          <button onClick={manualSave}
+            className="flex items-center gap-1.5 rounded-lg font-semibold transition-all"
+            style={{ fontSize: '12px', padding: '7px 13px', background: '#FFFFFF', color: '#0F2952', border: '1px solid #CBD5E1', cursor: 'pointer' }}
+            title="Confirm save — templates are auto-persisted to localStorage on every edit">
+            <Save size={12} /> Save
           </button>
 
-          <div style={{ width: '1px', height: '28px', background: '#E2E8F0' }} />
+          <button onClick={exportJSON}
+            className="flex items-center gap-1.5 rounded-lg font-semibold transition-all"
+            style={{ fontSize: '12px', padding: '7px 13px', background: '#FFFFFF', color: '#0F2952', border: '1px solid #CBD5E1', cursor: 'pointer' }}
+            title="Download all templates as a JSON file">
+            <Download size={12} /> Export JSON
+          </button>
 
-          <button
-            onClick={handleSaveJSON}
-            disabled={saveState === 'saving'}
-            className="flex items-center gap-2 px-5 py-2 rounded-xl font-semibold transition-all"
-            style={{
-              fontSize: '13px',
-              background: saveState === 'saved'  ? '#DCFCE7'
-                        : saveState === 'error'  ? '#FEF2F2'
-                        : saveState === 'saving' ? '#F8FAFC'
-                        : 'linear-gradient(135deg, #2563EB, #7C3AED)',
-              color: saveState === 'saved'  ? '#16A34A'
-                   : saveState === 'error'  ? '#DC2626'
-                   : saveState === 'saving' ? '#94A3B8'
-                   : '#FFFFFF',
-              border: saveState === 'saved'  ? '1.5px solid #BBF7D0'
-                    : saveState === 'error'  ? '1.5px solid #FECACA'
-                    : saveState === 'saving' ? '1.5px solid #E2E8F0'
-                    : 'none',
-              boxShadow: saveState === 'idle' ? '0 4px 14px rgba(37,99,235,0.3)' : 'none',
-              minWidth: '150px', justifyContent: 'center',
-              cursor: saveState === 'saving' ? 'not-allowed' : 'pointer',
-            }}
-            title={saveError ?? undefined}
-          >
-            {saveState === 'saving' ? (
-              <><div className="w-3.5 h-3.5 rounded-full border-2 animate-spin" style={{ borderColor: '#CBD5E1', borderTopColor: '#64748B' }} />Saving…</>
-            ) : saveState === 'saved' ? (
-              <><Check size={14} />{linkedFilename ? 'Saved!' : 'Saved!'}</>
-            ) : saveState === 'error' ? (
-              <><AlertCircle size={14} />Save Failed</>
-            ) : (
-              <><Download size={14} />{fileState === 'linked' ? 'Save Config' : 'Save Config…'}</>
-            )}
+          <button onClick={() => jsonInputRef.current?.click()}
+            disabled={importState === 'importing'}
+            className="flex items-center gap-1.5 rounded-lg font-semibold transition-all"
+            style={{ fontSize: '12px', padding: '7px 13px', background: '#FFFFFF', color: '#0F2952', border: '1px solid #CBD5E1', cursor: importState === 'importing' ? 'not-allowed' : 'pointer', opacity: importState === 'importing' ? 0.6 : 1 }}
+            title="Load templates from a previously-exported JSON">
+            <FileJson size={12} /> Import JSON
           </button>
         </div>
       </div>
