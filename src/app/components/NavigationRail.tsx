@@ -1,6 +1,6 @@
-import { FolderOpen, Braces, Layers, ClipboardCheck, MonitorSmartphone } from 'lucide-react';
+import { FolderOpen, Braces, Layers, ClipboardCheck, MonitorSmartphone, Sparkles } from 'lucide-react';
 
-export type ActiveView = 'wizard' | 'templates' | 'sessions' | 'versions' | 'endpoint_matrix';
+export type ActiveView = 'wizard' | 'templates' | 'sessions' | 'versions' | 'endpoint_matrix' | 'destination_patterns';
 
 interface NavigationRailProps {
   activeView: ActiveView;
@@ -77,6 +77,12 @@ export function NavigationRail({ activeView, onChangeView, onOpenProfile, onStar
         label="OS / Browser Support Matrix"
         active={activeView === 'endpoint_matrix'}
         onClick={() => onChangeView('endpoint_matrix')}
+      />
+      <NavButton
+        icon={<Sparkles size={16} />}
+        label="GenAI Apps & Destination Patterns"
+        active={activeView === 'destination_patterns'}
+        onClick={() => onChangeView('destination_patterns')}
       />
       <NavButton
         icon={<ClipboardCheck size={16} />}

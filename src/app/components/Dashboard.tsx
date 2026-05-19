@@ -8,6 +8,7 @@ import { SessionsPage } from './SessionsPage';
 import { BottomPanel } from './BottomPanel';
 import { VersionDataPage } from './VersionDataPage';
 import { EndpointMatrixPage } from './EndpointMatrixPage';
+import { DestinationPatternsPage } from './DestinationPatternsPage';
 import { CancelSessionModal } from './CancelSessionModal';
 import type { Template } from './types/templates';
 import type { QuestionAnswer, TemplateAnswers } from './rules/ruleEngine';
@@ -25,6 +26,8 @@ import type { DlpServerBundle } from './steps/dlpServerInfoParser';
 import type { ParsedCertificate } from './steps/certificateParser';
 import type { EndpointAgentSummary } from './steps/endpointAgentParser';
 import type { DlpDashboardSummary } from './steps/dlpDashboardParser';
+import { type DlpPostureSummary, type DlpPostureBlockId, type DestinationPatterns, DEFAULT_POSTURE_SECTIONS, DEFAULT_DESTINATION_PATTERNS } from './steps/dlpPosture';
+import { type CustomerConnectorConfig, DEFAULT_CUSTOMER_CONNECTOR } from './steps/customerConnector';
 import type { VersionUpgradeProposal } from './steps/StepVersionUpgrades';
 import { EMPTY_COMPAT_INPUT, type EndpointCompatibilityInput, type EndpointCompatibilityAssessment } from '../utils/endpointCompatibilityEngine';
 import type { ReportRunResult } from '../constants/reportDefinitions';
@@ -175,6 +178,12 @@ export interface HCSession {
   licenseGaps: LicenseGapItem[];
   endpointAgentSummary: EndpointAgentSummary | null;
   dlpDashboardSummary: DlpDashboardSummary | null;
+  dlpPostureSummary: DlpPostureSummary | null;
+  /* Per-block visibility map driving which posture cards make it into
+     the report. Replaces the old `includeDlpPostureInReport` master
+     switch — at least one block must be true for the section to render. */
+  dlpPostureSections: Record<DlpPostureBlockId, boolean>;
+  customerConnector: CustomerConnectorConfig;
   customerLogo: string | null;
   complianceFrameworks: ComplianceFrameworkItem[];
   enhancementOverrides: Record<string, EnhancementOverride>;
@@ -220,6 +229,16 @@ function deserializeSessions(raw: unknown[]): HCSession[] {
       licenseGaps: session.licenseGaps ?? [],
       endpointAgentSummary: session.endpointAgentSummary ?? null,
       dlpDashboardSummary: session.dlpDashboardSummary ?? null,
+      dlpPostureSummary: session.dlpPostureSummary ?? null,
+      /* Merge with defaults so old sessions get the full block set; if the
+         legacy `includeDlpPostureInReport` flag was false, leave the
+         section map all-false so the report stays hidden until the user
+         re-opts-in. */
+      dlpPostureSections: session.dlpPostureSections
+        ?? ((session as { includeDlpPostureInReport?: boolean }).includeDlpPostureInReport === false
+            ? Object.fromEntries(Object.keys(DEFAULT_POSTURE_SECTIONS).map((k) => [k, false])) as Record<DlpPostureBlockId, boolean>
+            : { ...DEFAULT_POSTURE_SECTIONS }),
+      customerConnector: session.customerConnector ?? { ...DEFAULT_CUSTOMER_CONNECTOR },
       customerLogo: session.customerLogo ?? null,
       complianceFrameworks: session.complianceFrameworks ?? [],
       enhancementOverrides: session.enhancementOverrides ?? {},
@@ -268,6 +287,17 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
   const [licenseGaps, setLicenseGaps] = useLocalStorage<LicenseGapItem[]>('hc_license_gaps', []);
   const [endpointAgentSummary, setEndpointAgentSummary] = useLocalStorage<EndpointAgentSummary | null>('hc_endpoint_agents', null);
   const [dlpDashboardSummary, setDlpDashboardSummary] = useLocalStorage<DlpDashboardSummary | null>('hc_dlp_dashboard', null);
+  const [dlpPostureSummary, setDlpPostureSummary] = useLocalStorage<DlpPostureSummary | null>('hc_dlp_posture', null);
+  const [dlpPostureSections, setDlpPostureSections] = useLocalStorage<Record<DlpPostureBlockId, boolean>>('hc_dlp_posture_sections', { ...DEFAULT_POSTURE_SECTIONS });
+  /* Destination patterns are GLOBAL (catalogue-style): the operator
+     manages the GenAI / SaaS / Webmail substring lists from the
+     "GenAI Apps" navigation rail entry, shared across every session. */
+  const [destinationPatterns, setDestinationPatterns] = useLocalStorage<DestinationPatterns>('hc_destination_patterns', { ...DEFAULT_DESTINATION_PATTERNS });
+  /* Customer Connector — outbound-only agent the customer installs at
+     their site. Session-scoped: the token / encryption key are tied to a
+     specific HC engagement so a single SE can run two customers in
+     parallel without cross-talk. */
+  const [customerConnector, setCustomerConnector] = useLocalStorage<CustomerConnectorConfig>('hc_customer_connector', { ...DEFAULT_CUSTOMER_CONNECTOR });
   const [customerLogo, setCustomerLogo] = useLocalStorage<string | null>('hc_customer_logo', null);
   const [complianceFrameworks, setComplianceFrameworks] = useLocalStorage<ComplianceFrameworkItem[]>('hc_compliance_frameworks', []);
   const [enhancementOverrides, setEnhancementOverrides] = useLocalStorage<Record<string, EnhancementOverride>>('hc_enhancement_overrides', {});
@@ -383,6 +413,9 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
         licenseGaps: [...licenseGaps],
         endpointAgentSummary: endpointAgentSummary ? { ...endpointAgentSummary } : null,
         dlpDashboardSummary: dlpDashboardSummary ? { ...dlpDashboardSummary } : null,
+        dlpPostureSummary: dlpPostureSummary ? { ...dlpPostureSummary } : null,
+        dlpPostureSections: { ...dlpPostureSections },
+        customerConnector: { ...customerConnector },
         customerLogo: customerLogo ?? null,
         complianceFrameworks: complianceFrameworks.map((f) => ({ ...f })),
         enhancementOverrides: { ...enhancementOverrides },
@@ -438,6 +471,9 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
     setLicenseGaps(session.licenseGaps ?? []);
     setEndpointAgentSummary(session.endpointAgentSummary ?? null);
     setDlpDashboardSummary(session.dlpDashboardSummary ?? null);
+    setDlpPostureSummary(session.dlpPostureSummary ?? null);
+    setDlpPostureSections(session.dlpPostureSections ?? { ...DEFAULT_POSTURE_SECTIONS });
+    setCustomerConnector(session.customerConnector ?? { ...DEFAULT_CUSTOMER_CONNECTOR });
     setCustomerLogo(session.customerLogo ?? null);
     setComplianceFrameworks(session.complianceFrameworks ?? []);
     setEnhancementOverrides(session.enhancementOverrides ?? {});
@@ -467,6 +503,9 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
     setLicenseGaps([]);
     setEndpointAgentSummary(null);
     setDlpDashboardSummary(null);
+    setDlpPostureSummary(null);
+    setDlpPostureSections({ ...DEFAULT_POSTURE_SECTIONS });
+    setCustomerConnector({ ...DEFAULT_CUSTOMER_CONNECTOR });
     setCustomerLogo(null);
     setComplianceFrameworks([]);
     setEnhancementOverrides({});
@@ -499,6 +538,9 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
     setLicenseGaps([]);
     setEndpointAgentSummary(null);
     setDlpDashboardSummary(null);
+    setDlpPostureSummary(null);
+    setDlpPostureSections({ ...DEFAULT_POSTURE_SECTIONS });
+    setCustomerConnector({ ...DEFAULT_CUSTOMER_CONNECTOR });
     setCustomerLogo(null);
     setComplianceFrameworks([]);
     setEnhancementOverrides({});
@@ -608,6 +650,13 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
               setEndpointAgentSummary={setEndpointAgentSummary}
               dlpDashboardSummary={dlpDashboardSummary}
               setDlpDashboardSummary={setDlpDashboardSummary}
+              dlpPostureSummary={dlpPostureSummary}
+              setDlpPostureSummary={setDlpPostureSummary}
+              dlpPostureSections={dlpPostureSections}
+              setDlpPostureSections={setDlpPostureSections}
+              destinationPatterns={destinationPatterns}
+              customerConnector={customerConnector}
+              setCustomerConnector={setCustomerConnector}
               customerLogo={customerLogo}
               setCustomerLogo={setCustomerLogo}
               complianceFrameworks={complianceFrameworks}
@@ -641,16 +690,27 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
         </>
       )}
 
-      {activeView === 'templates' && (
-        <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-          <TemplateManager
-            onClose={() => setActiveView('wizard')}
-            templates={templates}
-            setTemplates={setTemplates}
-            selectedProducts={selectedProducts}
-          />
-        </div>
-      )}
+      {activeView === 'templates' && (() => {
+        /* "Active session" = a not-yet-completed session is currently
+           loaded. selectedProducts persists in localStorage past completion,
+           so without this gate the Rule Engine would still flag templates
+           as "ACTIVE IN STEP 5" after every session is done. */
+        const activeSession = activeSessionId
+          ? sessions.find((s) => s.id === activeSessionId)
+          : undefined;
+        const hasActiveSession = !!activeSession && !activeSession.completedAt;
+        return (
+          <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+            <TemplateManager
+              onClose={() => setActiveView(hasActiveSession ? 'wizard' : 'sessions')}
+              templates={templates}
+              setTemplates={setTemplates}
+              selectedProducts={selectedProducts}
+              hasActiveSession={hasActiveSession}
+            />
+          </div>
+        );
+      })()}
 
       {activeView === 'sessions' && (
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
@@ -673,6 +733,12 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
       {activeView === 'endpoint_matrix' && (
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
           <EndpointMatrixPage matrix={endpointMatrix} onChange={setEndpointMatrix} />
+        </div>
+      )}
+
+      {activeView === 'destination_patterns' && (
+        <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+          <DestinationPatternsPage patterns={destinationPatterns} onChange={setDestinationPatterns} />
         </div>
       )}
 

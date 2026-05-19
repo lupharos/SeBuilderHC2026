@@ -1,0 +1,154 @@
+# Forcepoint HC — Customer Connector
+
+A small Python program packaged as a single Windows `.exe`. The customer
+runs it on their **FSM server** (or any host with reachable SQL / FSM on
+the LAN) so the Forcepoint SE can collect data through the HC application
+without opening any inbound firewall ports.
+
+The connector opens **outbound HTTPS only**. Nothing listens at the
+customer side; nothing initiates a connection toward the customer
+network.
+
+It is **not a Windows Service** — it runs interactively in a console
+window. The customer admin starts it when the SE asks, watches the
+heartbeat log, and presses **Ctrl+C** to stop when the engagement is
+done.
+
+---
+
+## What the SE ships to the customer
+
+Two files in the same folder:
+
+```
+fsm-host/forcepoint-hc/
+├── forcepoint-hc-connector.exe   ← the program (built from this folder)
+└── connector.json                ← per-engagement config bundle from the HC wizard
+```
+
+The `connector.json` is produced by the HC wizard's **Step 3 → Customer
+Connector → Download connector.json** button. It contains:
+
+- `hcEndpoint` — where the connector phones home
+- `token` — unique 256-bit random identifier
+- `encryptionKeyHex` — AES-256-GCM key (used by later iterations for job payloads)
+- `allowedSourceIp` — optional IP/CIDR the HC companion validates against
+- `heartbeatIntervalSeconds` — usually 30
+
+The customer admin does **not** need Python, pip, or anything else
+installed.
+
+---
+
+## Build (run on a Windows host with Python 3.10+)
+
+```cmd
+cd connector
+python -m pip install -r requirements.txt pyinstaller
+build.bat
+```
+
+Output: `dist\forcepoint-hc-connector.exe` (single file, ~15 MB).
+
+> Cross-compilation note: PyInstaller doesn't cross-compile. Build the
+> Windows `.exe` on a Windows host.
+
+---
+
+## Customer-side run
+
+1. Place `forcepoint-hc-connector.exe` and `connector.json` in the same
+   folder on the FSM server.
+2. Double-click the `.exe` (or `cd` into the folder and run it).
+3. Watch the console. After a couple of seconds you should see:
+
+   ```
+   [start] Phoning home to https://hc.forcepoint-se.com/api/connector/heartbeat
+           Heartbeat every 30s. Press Ctrl+C to stop.
+
+   [10:42:13] OK    heartbeat #1  (88ms)
+   [10:42:43] OK    heartbeat #2  (74ms)
+   ```
+
+4. The Forcepoint SE confirms the connector is **ONLINE** in the HC
+   wizard.
+5. When the SE is done, press **Ctrl+C** to stop. The window pauses on
+   a "Press Enter to close" prompt so accidental closes don't lose any
+   diagnostic output.
+
+---
+
+## Common errors
+
+| Console message | Meaning | Fix |
+|---|---|---|
+| `connector.json not found next to the executable` | The bundle file isn't in the same folder as the `.exe` | Move both files into the same folder |
+| `connector.json _format mismatch` | Wrong JSON file — not from the HC wizard | Re-download the bundle from the wizard |
+| `connector.json missing required field(s): token` | Bundle was edited or partial | Re-download a fresh bundle |
+| `FAIL cannot reach HC endpoint` | Outbound HTTPS blocked or wrong URL | Confirm the URL; ask network team to allowlist outbound to `<hcEndpoint>` |
+| `FAIL TLS error` | Self-signed cert on HC endpoint | Run with `--insecure` for dev only: `forcepoint-hc-connector.exe --insecure` |
+| `WARNING: allowedSourceIp doesn't match local IP` | The IP recorded in the HC wizard doesn't match this FSM's outbound IP | Update the IP in the HC wizard or use a CIDR (`10.10.0.0/16`) |
+
+---
+
+## CLI flags
+
+```
+forcepoint-hc-connector.exe [--insecure] [--no-pause]
+```
+
+- `--insecure` — skip TLS certificate validation (dev / self-signed servers only).
+- `--no-pause` — don't pause on exit. Useful when scripted from a batch file.
+
+---
+
+## Security model — current iteration
+
+- **Outbound-only**: no inbound ports, no listening sockets.
+- **Token-based identity**: the HC companion stores the token and
+  validates every heartbeat against it. Token rotation = re-download
+  the bundle from the wizard.
+- **IP allowlist** (optional but recommended): companion rejects
+  heartbeats whose source IP doesn't match the wizard-declared value.
+- **AES-256-GCM key** is held in the bundle for **future use**: job
+  payload encryption isn't wired yet (heartbeat is plain JSON over
+  HTTPS). The key ships now so iteration 2 (job dispatch + result
+  return) can adopt it without changing the bundle format.
+
+The connector does **not** perform TLS pinning — that field was removed
+from the wizard for operational simplicity. Standard TLS transport
+between connector and HC companion is the only protection at the
+HTTPS layer.
+
+---
+
+## What this connector does NOT yet do
+
+These are roadmap items for iteration 2:
+
+- **Long-poll for jobs**: the connector currently only sends
+  heartbeats. SQL queries and DLP REST API calls still run from the SE
+  laptop in direct mode. To route them through the connector, the
+  connector needs:
+  - `GET /api/connector/job/next?token=…&wait=25` long-poll loop.
+  - Local `pymssql` / `requests` execution against customer SQL / FSM.
+  - `POST /api/connector/job/result` with AES-256-GCM-encrypted output.
+
+- **No Windows Service registration**. Each engagement is an
+  interactive console session.
+
+- **No payload encryption**: heartbeat body is JSON-over-HTTPS only;
+  AES-256-GCM kicks in once job dispatch lands.
+
+---
+
+## File layout
+
+```
+connector/
+├── main.py             ← the connector (single file)
+├── requirements.txt    ← pinned Python deps (requests, urllib3, certifi)
+├── build.bat           ← one-line PyInstaller build
+├── README.md           ← this file
+└── .gitignore          ← excludes build/ dist/ *.spec
+```

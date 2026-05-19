@@ -1,0 +1,10 @@
+build/
+dist/
+*.spec
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Connector engagement bundle — never check in, contains a per-customer token.
+connector.json

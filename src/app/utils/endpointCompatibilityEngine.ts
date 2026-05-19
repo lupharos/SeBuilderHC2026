@@ -294,31 +294,35 @@ export function runCompatibilityAssessment(
   }
 
   /* ── Browser compatibility ──────────────────────────────────────
-     With multi-select browsers + solution filtering, we keep any matrix
-     row whose coverage matches a customer solution AND whose browser
-     name matches one of the user-selected browsers (case-insensitive
-     contains). If no browsers were selected we fall through to every
-     row visible under the solution filter — useful for completeness
-     reports where the analyst hasn't picked specific browsers yet. */
+     Only the browsers the analyst actually selected on the left panel
+     are checked. With nothing selected, the Browser Compatibility card
+     stays empty — no findings, no rows. Each selected browser is matched
+     against the matrix by case-insensitive contains in either direction. */
   const browserKeywords = browsers.map((b) => b.toLowerCase()).filter(Boolean);
-  const matchesBrowserSelection = (b: EndpointMatrixBrowserRow): boolean => {
-    if (browserKeywords.length === 0) return true;
-    const bn = b.browser.toLowerCase();
-    return browserKeywords.some((kw) => bn.includes(kw) || kw.includes(bn));
-  };
-  const browsersToAssess: EndpointMatrixBrowserRow[] = matrix.browsers
-    .filter((b) => rowMatchesSolutions(b.coverage, solutions))
-    .filter(matchesBrowserSelection);
+  const browsersToAssess: EndpointMatrixBrowserRow[] = browserKeywords.length === 0
+    ? []
+    : matrix.browsers
+        .filter((b) => rowMatchesSolutions(b.coverage, solutions))
+        .filter((b) => {
+          const bn = b.browser.toLowerCase();
+          return browserKeywords.some((kw) => bn.includes(kw) || kw.includes(bn));
+        });
 
   /* Track whether we already surfaced the "latest recommended" advisory for
      Chromium-family browsers — emit it once, not per-row, to keep the
      findings list tight. */
   let mv3AdvisoryEmitted = false;
 
+  /* MV3 is a DLP-endpoint concern only — the F1E browser extension that
+     mediates clipboard / upload inspection is DLP-side. Web Security Hybrid
+     mode does not surface MV3 as a gap, so we suppress both the row badge
+     and the soft advisory finding when DLP isn't in scope. */
+  const dlpInScope = solutions.includes('dlp');
+
   for (const b of browsersToAssess) {
     const min = minVersionFromRow(b.minAgent);
     const meets = customerMeetsMin(customer, min);
-    const needsMV3 = browserNeedsMV3Coverage(b.browser);
+    const needsMV3 = dlpInScope && browserNeedsMV3Coverage(b.browser);
     /* MV3 is shipped in the agent streams already cited as compatible by
        the support matrix (25.02+, 25.03+, 24.06+ all carry MV3-capable
        browser extensions). The "current floor" check below produces only

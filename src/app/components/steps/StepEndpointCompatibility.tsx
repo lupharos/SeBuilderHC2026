@@ -25,6 +25,15 @@ import {
   EMPTY_COMPAT_INPUT,
 } from '../../utils/endpointCompatibilityEngine';
 import type { EndpointAgentSummary } from './endpointAgentParser';
+import type { VersionEntry } from './Step4VersionCheck';
+
+/* Where the displayed agent version originated. step4Mode tracks which
+   F1E module the Step 4 fallback is representing — drives the label
+   ("DLP", "Hybrid Web", or the combined "DLP + Hybrid Web"). */
+type AgentSource =
+  | { kind: 'step6' }
+  | { kind: 'step4'; mode: 'dlp' | 'web' | 'both' }
+  | null;
 
 interface Props {
   input: EndpointCompatibilityInput;
@@ -33,6 +42,14 @@ interface Props {
   setAssessment: React.Dispatch<React.SetStateAction<EndpointCompatibilityAssessment | null>>;
   matrix: EndpointSupportMatrix;
   endpointAgentSummary: EndpointAgentSummary | null;
+  /* Step 6 CSV is preferred; when it's absent, we fall back to Step 4's
+     Endpoint Agent installed version. With both DLP + Web in scope the
+     DLP entry is dominant — the F1E agent is the same binary on the box
+     regardless of which Forcepoint modules use it. */
+  versionEntries?: Record<string, VersionEntry>;
+  /* Product scope from Step 2 — selects which Step 4 entry is used and
+     how the AgentContextCard labels the agent (DLP / Hybrid Web / both). */
+  selectedProducts?: Record<string, boolean>;
 }
 
 const STATUS_CFG: Record<CompatibilityStatus, { label: string; color: string; bg: string; border: string; icon: React.ReactNode; subtitle: string }> = {
@@ -61,7 +78,7 @@ const SOLUTION_META: Record<EndpointCoverage, { icon: React.ReactNode; subtitle:
 };
 
 export function StepEndpointCompatibility({
-  input, setInput, assessment, setAssessment, matrix, endpointAgentSummary,
+  input, setInput, assessment, setAssessment, matrix, endpointAgentSummary, versionEntries, selectedProducts,
 }: Props) {
   const matrixEmpty = isMatrixEmpty(matrix);
   /* When edit mode is on the engine stops overwriting the assessment so the
@@ -69,18 +86,63 @@ export function StepEndpointCompatibility({
      Toggle off (or click Re-run) to recompute from scratch. */
   const [editMode, setEditMode] = useState(false);
 
-  /* ── Read-only agent context — pulled from Step 6 telemetry on every
-       render. The form no longer offers a manual override; if Step 6
-       isn't filled, the page surfaces a banner pointing back there. ── */
+  /* ── Agent version source resolution ──────────────────────────────
+       Priority order:
+         1. Step 6 CSV summary (dominant — the operator imported real
+            endpoint telemetry, that always wins).
+         2. Step 4 "Endpoint Agent (DLP)" installedVersion (dominant over
+            Web when DLP is in scope — same agent binary on the box).
+         3. Step 4 "Endpoint Agent (Hybrid Web)" installedVersion (used
+            in Web-only scope or when the DLP entry is empty).
+       The label on the AgentContextCard reflects which scope the fallback
+       is representing — DLP, Hybrid Web, or both combined. ── */
+  const dlpInScope = !!selectedProducts?.data;
+  const webInScope = !!selectedProducts?.web;
+  const dlpEntryVersion = (() => {
+    const e = versionEntries?.dlp_endpoint;
+    if (!e || e.removed) return '';
+    return (e.installedVersion ?? '').trim();
+  })();
+  const webEntryVersion = (() => {
+    const e = versionEntries?.web_endpoint;
+    if (!e || e.removed) return '';
+    return (e.installedVersion ?? '').trim();
+  })();
+
+  /* Pick the fallback version + label mode. With DLP in scope the DLP
+     entry wins; the label switches to "both" when Web is also in scope
+     even if the displayed number came from DLP, because the agent on
+     the box is servicing both modules. */
+  const step4Fallback: { version: string; mode: 'dlp' | 'web' | 'both' } | null = (() => {
+    if (dlpInScope && dlpEntryVersion) {
+      return { version: dlpEntryVersion, mode: webInScope ? 'both' : 'dlp' };
+    }
+    if (webInScope && webEntryVersion) {
+      return { version: webEntryVersion, mode: 'web' };
+    }
+    if (dlpInScope && webEntryVersion) {
+      /* DLP scope but DLP entry empty — fall back to Web's value rather
+         than nothing. Label as 'web' so the user knows it isn't the DLP
+         module they expected. */
+      return { version: webEntryVersion, mode: 'web' };
+    }
+    return null;
+  })();
+
+  const agentSource: AgentSource =
+    endpointAgentSummary?.latestVersion ? { kind: 'step6' }
+    : step4Fallback                     ? { kind: 'step4', mode: step4Fallback.mode }
+    : null;
+
   useEffect(() => {
     setInput((prev) => {
       const next = { ...prev };
-      next.agentVersion   = endpointAgentSummary?.latestVersion ?? '';
+      next.agentVersion   = endpointAgentSummary?.latestVersion ?? step4Fallback?.version ?? '';
       next.totalEndpoints = endpointAgentSummary?.totalRecords ?? 0;
       return next;
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [endpointAgentSummary]);
+  }, [endpointAgentSummary, step4Fallback?.version]);
 
   /* ── Live assessment ── */
   const liveAssessment = useMemo(
@@ -247,13 +309,14 @@ export function StepEndpointCompatibility({
       <Header editMode={editMode} onToggleEdit={() => setEditMode((v) => !v)} onReset={clearAll} onRerun={rerunFromEnvironment} hasAssessment={!!assessment} />
 
       {matrixEmpty && <MatrixMissingBanner />}
-      {!endpointAgentSummary && <AgentMissingBanner />}
+      {agentSource === null && <AgentMissingBanner />}
 
       <div className="grid gap-5" style={{ gridTemplateColumns: 'minmax(0, 420px) 1fr' }}>
         {/* ─────────────  LEFT: Customer Environment  ───────────── */}
         <div className="flex flex-col gap-4">
-          {/* Agent context (read-only from Step 6) */}
-          <AgentContextCard summary={endpointAgentSummary} agentVersion={input.agentVersion} totalEndpoints={input.totalEndpoints} />
+          {/* Agent context — Step 6 CSV when present, otherwise Step 4's
+              "Endpoint Agent (Hybrid Web)" installed version. */}
+          <AgentContextCard summary={endpointAgentSummary} agentVersion={input.agentVersion} totalEndpoints={input.totalEndpoints} source={agentSource} />
 
           {/* Forcepoint solutions in use */}
           <FieldCard title="Forcepoint Solutions in Use" subtitle="Which F1E products the customer's agent is deployed for. Filters the matrix accordingly.">
@@ -438,27 +501,46 @@ function AgentMissingBanner() {
       style={{ background: '#F0F9FF', border: '1px solid #BAE6FD', borderLeft: '3px solid #0EA5E9' }}>
       <Info size={16} style={{ color: '#0284C7', flexShrink: 0, marginTop: 2 }} />
       <div style={{ fontSize: '12.5px', color: '#0C4A6E', lineHeight: 1.55 }}>
-        <strong>No endpoint-agent telemetry detected.</strong> The customer's deployed agent version comes from
-        Step 6 — Endpoint Agent Analysis. Upload the agent CSV there and this page will pick it up automatically.
+        <strong>No endpoint-agent version detected.</strong> Upload the agent CSV in
+        Step 6 — Endpoint Agent Analysis (DLP scope), or record the "Endpoint Agent (Hybrid Web)"
+        installed version in Step 4 — Version &amp; EoS Analysis (Web scope). This page will pick it up automatically.
       </div>
     </div>
   );
 }
 
-function AgentContextCard({ summary, agentVersion, totalEndpoints }: { summary: EndpointAgentSummary | null; agentVersion: string; totalEndpoints: number }) {
-  const hasData = !!summary && totalEndpoints > 0;
+function AgentContextCard({ summary, agentVersion, totalEndpoints, source }: { summary: EndpointAgentSummary | null; agentVersion: string; totalEndpoints: number; source: AgentSource }) {
+  const fromCsv  = source?.kind === 'step6';
+  const fromV4   = source?.kind === 'step4';
+  const hasData  = source !== null && !!agentVersion;
+  const v4Mode   = source?.kind === 'step4' ? source.mode : null;
+  const sourceLabel = (() => {
+    if (fromCsv) return 'AGENT CONTEXT — STEP 6';
+    if (v4Mode === 'both') return 'AGENT CONTEXT — STEP 4 · DLP + HYBRID WEB';
+    if (v4Mode === 'dlp')  return 'AGENT CONTEXT — STEP 4 · DLP ENDPOINT';
+    if (v4Mode === 'web')  return 'AGENT CONTEXT — STEP 4 · HYBRID WEB';
+    return 'AGENT CONTEXT';
+  })();
+  const installedSubtitle = (() => {
+    if (!hasData)          return 'no version detected';
+    if (fromCsv)           return 'latest deployed';
+    if (v4Mode === 'both') return 'installed (DLP + Hybrid Web)';
+    if (v4Mode === 'dlp')  return 'installed (DLP)';
+    if (v4Mode === 'web')  return 'installed (Hybrid Web)';
+    return 'installed';
+  })();
   return (
     <div className="rounded-xl text-white overflow-hidden"
       style={{ background: 'linear-gradient(135deg,#023E8A 0%,#0F2952 70%)', boxShadow: '0 4px 16px rgba(15,41,82,0.18)' }}>
       <div className="px-5 py-4">
         <div className="flex items-center justify-between mb-3">
           <div style={{ fontSize: '9.5px', fontWeight: 700, letterSpacing: '0.14em', opacity: 0.55 }}>
-            AGENT CONTEXT — STEP 6
+            {sourceLabel}
           </div>
           {hasData && (
             <span className="flex items-center gap-1.5"
               style={{ fontSize: '9px', fontWeight: 700, color: '#A7F3D0', background: 'rgba(167,243,208,0.12)', border: '1px solid rgba(167,243,208,0.3)', borderRadius: 4, padding: '2px 7px', letterSpacing: '0.06em' }}>
-              <Cpu size={9} /> AUTO-DETECTED
+              <Cpu size={9} /> {fromCsv ? 'AUTO-DETECTED' : 'FROM VERSION CHECK'}
             </span>
           )}
         </div>
@@ -467,14 +549,17 @@ function AgentContextCard({ summary, agentVersion, totalEndpoints }: { summary: 
             {hasData ? agentVersion : '—'}
           </div>
           <div style={{ fontSize: '11px', opacity: 0.55 }}>
-            {hasData ? 'latest deployed' : 'no version detected'}
+            {installedSubtitle}
           </div>
         </div>
         <div className="flex items-center gap-4 mt-3">
-          <Mini label="Endpoints" value={hasData ? totalEndpoints.toLocaleString() : '—'} />
-          {hasData && summary && summary.outdatedCount > 0 && (
+          {fromCsv && totalEndpoints > 0 && (
+            <Mini label="Endpoints" value={totalEndpoints.toLocaleString()} />
+          )}
+          {fromCsv && summary && summary.outdatedCount > 0 && (
             <Mini label="Outdated" value={`${summary.outdatedPct}%`} tone="warn" />
           )}
+          {fromV4 && <span style={{ visibility: 'hidden' }}>·</span>}
         </div>
       </div>
     </div>

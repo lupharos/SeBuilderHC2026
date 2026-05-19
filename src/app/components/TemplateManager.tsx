@@ -30,9 +30,15 @@ interface TemplateManagerProps {
   templates: Template[];
   setTemplates: (templates: Template[]) => void;
   selectedProducts: Record<string, boolean>;
+  /* True only while an in-progress (not completed) HC session is loaded.
+     selectedProducts lingers in localStorage after completion, so the Rule
+     Engine uses this flag rather than selectedProducts to decide whether a
+     template is genuinely "ACTIVE IN STEP 5" or just an echo of a finished
+     session. */
+  hasActiveSession?: boolean;
 }
 
-export function TemplateManager({ onClose, templates, setTemplates, selectedProducts }: TemplateManagerProps) {
+export function TemplateManager({ onClose, templates, setTemplates, selectedProducts, hasActiveSession = false }: TemplateManagerProps) {
   const [selectedTemplate, setSelectedTemplate] = useState<Template>(templates[0]);
   const [editingQuestion, setEditingQuestion] = useState<string | null>(null);
   const [editingQuestionData, setEditingQuestionData] = useState<Partial<Question>>({});
@@ -94,6 +100,9 @@ export function TemplateManager({ onClose, templates, setTemplates, selectedProd
 
   const activeTemplateIds = useMemo(() => {
     const ids = new Set<string>();
+    /* Without an in-progress session, selectedProducts is the residue of a
+       completed session — don't surface it as "active". */
+    if (!hasActiveSession) return ids;
     Object.entries(selectedProducts).forEach(([productId, isSelected]) => {
       if (isSelected) {
         const templateId = productIdMap[productId];
@@ -101,7 +110,7 @@ export function TemplateManager({ onClose, templates, setTemplates, selectedProd
       }
     });
     return ids;
-  }, [selectedProducts]);
+  }, [selectedProducts, hasActiveSession]);
 
   const totalQuestions = templates.reduce((sum, t) => sum + t.questions.length, 0);
   const activeQuestions = templates
@@ -363,7 +372,58 @@ export function TemplateManager({ onClose, templates, setTemplates, selectedProd
           ) : (
             <StatPill label="No products selected" value="—" color="#F59E0B" />
           )}
+
           <div style={{ width: '1px', height: '28px', background: '#E2E8F0', margin: '0 4px' }} />
+
+          {/* Mirrors the catalogue-page header pattern (Product Lifecycle,
+              GenAI Apps): saved-flash + Save / Export JSON / Import JSON. */}
+          {savedFlash && (
+            <span className="flex items-center gap-1.5" style={{ fontSize: '11px', fontWeight: 600, color: '#16A34A', background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: '6px', padding: '4px 9px' }}>
+              <Check size={11} /> Saved
+            </span>
+          )}
+          {importState === 'importing' && (
+            <span className="flex items-center gap-1.5" style={{ fontSize: '11px', fontWeight: 600, color: '#64748B', background: '#F1F5F9', border: '1px solid #E2E8F0', borderRadius: '6px', padding: '4px 9px' }}>
+              <RefreshCw size={11} className="animate-spin" /> Reading…
+            </span>
+          )}
+          {importState === 'success' && (
+            <span className="flex items-center gap-1.5" style={{ fontSize: '11px', fontWeight: 600, color: '#16A34A', background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: '6px', padding: '4px 9px' }}>
+              <Check size={11} /> Imported
+            </span>
+          )}
+          {importState === 'error' && importError && (
+            <span className="flex items-center gap-1.5" title={importError}
+              style={{ fontSize: '11px', fontWeight: 600, color: '#DC2626', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: '6px', padding: '4px 9px', maxWidth: '200px' }}>
+              <AlertCircle size={11} className="flex-shrink-0" />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{importError}</span>
+            </span>
+          )}
+
+          <button onClick={manualSave}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold transition-all"
+            style={{ fontSize: '12px', background: '#F8FAFC', color: '#475569', border: '1.5px solid #E2E8F0' }}
+            title="Confirm save — templates are auto-persisted to localStorage on every edit">
+            <Save size={12} /> Save
+          </button>
+          <button onClick={exportJSON}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold transition-all"
+            style={{ fontSize: '12px', background: '#F8FAFC', color: '#475569', border: '1.5px solid #E2E8F0' }}
+            title="Download all templates as a JSON file">
+            <Download size={12} /> Export JSON
+          </button>
+          <button onClick={() => jsonInputRef.current?.click()}
+            disabled={importState === 'importing'}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold transition-all"
+            style={{ fontSize: '12px', background: '#F8FAFC', color: '#475569', border: '1.5px solid #E2E8F0', cursor: importState === 'importing' ? 'not-allowed' : 'pointer', opacity: importState === 'importing' ? 0.6 : 1 }}
+            title="Load templates from a previously-exported JSON">
+            <FileJson size={12} /> Import JSON
+          </button>
+          <input ref={fileInputRef} type="file" accept=".json,application/json" style={{ display: 'none' }} onChange={handleImportJSON} />
+          <input ref={jsonInputRef} type="file" accept=".json,application/json" style={{ display: 'none' }} onChange={handleImportJSON} />
+
+          <div style={{ width: '1px', height: '28px', background: '#E2E8F0', margin: '0 4px' }} />
+
           <button
             onClick={onClose}
             className="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold transition-all"
@@ -372,7 +432,7 @@ export function TemplateManager({ onClose, templates, setTemplates, selectedProd
             onMouseLeave={(e) => { e.currentTarget.style.background = '#F1F5F9'; e.currentTarget.style.color = '#475569'; e.currentTarget.style.borderColor = '#E2E8F0'; }}
           >
             <ArrowLeft size={14} />
-            Back to Wizard
+            {hasActiveSession ? 'Back to Wizard' : 'Back to Sessions'}
           </button>
         </div>
       </div>
@@ -723,76 +783,6 @@ export function TemplateManager({ onClose, templates, setTemplates, selectedProd
         </div>
       </div>
 
-      {/* Bottom Save Bar */}
-      <div
-        className="flex-shrink-0 flex items-center justify-between px-8 py-3"
-        style={{ background: '#FFFFFF', borderTop: '1.5px solid #EEF0F5', boxShadow: '0 -4px 16px rgba(15,41,82,0.06)' }}
-      >
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center text-sm" style={{ background: `${selectedTemplate.color}18` }}>
-              {selectedTemplate.icon}
-            </div>
-            <span style={{ fontSize: '13px', fontWeight: 600, color: '#0F172A' }}>{selectedTemplate.name}</span>
-          </div>
-          <div style={{ width: '1px', height: '18px', background: '#E2E8F0' }} />
-          <span style={{ fontSize: '11.5px', color: '#64748B' }}>
-            {templates.reduce((s, t) => s + t.questions.length, 0)} total questions &nbsp;·&nbsp; {templates.length} templates
-          </span>
-        </div>
-
-        <div className="flex items-center gap-2 flex-wrap justify-end">
-          {importState === 'error' && importError && (
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg"
-              style={{ background: '#FEF2F2', border: '1px solid #FECACA', maxWidth: '260px' }}>
-              <AlertCircle size={13} color="#DC2626" className="flex-shrink-0" />
-              <span style={{ fontSize: '11px', color: '#DC2626', lineHeight: 1.4 }}>{importError}</span>
-            </div>
-          )}
-
-          <input ref={fileInputRef} type="file" accept=".json,application/json" style={{ display: 'none' }} onChange={handleImportJSON} />
-          <input ref={jsonInputRef} type="file" accept=".json,application/json" style={{ display: 'none' }} onChange={handleImportJSON} />
-
-          {savedFlash && (
-            <span className="flex items-center gap-1.5" style={{ fontSize: '11px', fontWeight: 600, color: '#16A34A', background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: '5px', padding: '4px 9px' }}>
-              <Check size={11} /> Saved
-            </span>
-          )}
-
-          {importState === 'importing' && (
-            <span className="flex items-center gap-1.5" style={{ fontSize: '11px', fontWeight: 600, color: '#64748B', background: '#F1F5F9', border: '1px solid #E2E8F0', borderRadius: '5px', padding: '4px 9px' }}>
-              <RefreshCw size={11} className="animate-spin" /> Reading…
-            </span>
-          )}
-          {importState === 'success' && (
-            <span className="flex items-center gap-1.5" style={{ fontSize: '11px', fontWeight: 600, color: '#16A34A', background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: '5px', padding: '4px 9px' }}>
-              <Check size={11} /> Imported
-            </span>
-          )}
-
-          <button onClick={manualSave}
-            className="flex items-center gap-1.5 rounded-lg font-semibold transition-all"
-            style={{ fontSize: '12px', padding: '7px 13px', background: '#FFFFFF', color: '#0F2952', border: '1px solid #CBD5E1', cursor: 'pointer' }}
-            title="Confirm save — templates are auto-persisted to localStorage on every edit">
-            <Save size={12} /> Save
-          </button>
-
-          <button onClick={exportJSON}
-            className="flex items-center gap-1.5 rounded-lg font-semibold transition-all"
-            style={{ fontSize: '12px', padding: '7px 13px', background: '#FFFFFF', color: '#0F2952', border: '1px solid #CBD5E1', cursor: 'pointer' }}
-            title="Download all templates as a JSON file">
-            <Download size={12} /> Export JSON
-          </button>
-
-          <button onClick={() => jsonInputRef.current?.click()}
-            disabled={importState === 'importing'}
-            className="flex items-center gap-1.5 rounded-lg font-semibold transition-all"
-            style={{ fontSize: '12px', padding: '7px 13px', background: '#FFFFFF', color: '#0F2952', border: '1px solid #CBD5E1', cursor: importState === 'importing' ? 'not-allowed' : 'pointer', opacity: importState === 'importing' ? 0.6 : 1 }}
-            title="Load templates from a previously-exported JSON">
-            <FileJson size={12} /> Import JSON
-          </button>
-        </div>
-      </div>
     </div>
   );
 }

@@ -1,8 +1,11 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Database, CheckCircle2, XCircle, Loader, ChevronDown, ChevronRight, Check, Shield, Globe, Network, FolderOpen, Upload, Trash2, Server, FileText, Play, X as XIcon, Clock } from 'lucide-react';
-import { REPORT_GROUPS, ALL_REPORT_IDS, type ReportRunResult, type ReportDef } from '../../constants/reportDefinitions';
+import { REPORT_GROUPS, type ReportRunResult, type ReportDef } from '../../constants/reportDefinitions';
 import { parseDlpBundle, formatMemoryGB, memoryUsagePct, statusColor, type DlpServerBundle, type UploadedFile } from './dlpServerInfoParser';
 import { parseDlpDashboardPdf, type DlpDashboardSummary } from './dlpDashboardParser';
+import { fetchDlpPosture, type DlpPostureSummary, type DlpPostureBlockId, type DestinationPatterns, DLP_POSTURE_BLOCKS, ALL_POSTURE_BLOCK_IDS, formatBytes } from './dlpPosture';
+import { type CustomerConnectorConfig, type CustomerConnectorStatus, randomHex256, fetchConnectorStatus, buildConnectorBundle } from './customerConnector';
+import { Key, Plug, RefreshCw, Activity, Globe2 } from 'lucide-react';
 
 // ── SQL Server config ────────────────────────────────────────────────────────
 export interface SqlConfig {
@@ -80,6 +83,22 @@ interface Props {
   setDlpBundles: React.Dispatch<React.SetStateAction<DlpServerBundle[]>>;
   dlpDashboardSummary: DlpDashboardSummary | null;
   setDlpDashboardSummary: React.Dispatch<React.SetStateAction<DlpDashboardSummary | null>>;
+  /* Pulled from /api/dlp/posture once the operator clicks "Fetch posture data". */
+  dlpPostureSummary: DlpPostureSummary | null;
+  setDlpPostureSummary: React.Dispatch<React.SetStateAction<DlpPostureSummary | null>>;
+  /* Per-block visibility map driving which posture cards make it into the
+     final HTML report. The whole section is emitted iff at least one
+     block is ticked. */
+  dlpPostureSections: Record<DlpPostureBlockId, boolean>;
+  setDlpPostureSections: React.Dispatch<React.SetStateAction<Record<DlpPostureBlockId, boolean>>>;
+  /* Global destination-pattern catalogue (GenAI / SaaS / Webmail).
+     Read-only from Step 3 — edited via the "GenAI Apps" rail page. */
+  destinationPatterns: DestinationPatterns;
+  /* Customer Connector — outbound-only agent the customer installs at
+     their site. Holds the token, AES-256 key, IP allowlist, and cert
+     fingerprint used by the connector binary. */
+  customerConnector: CustomerConnectorConfig;
+  setCustomerConnector: React.Dispatch<React.SetStateAction<CustomerConnectorConfig>>;
 }
 
 const IS: React.CSSProperties = {
@@ -128,7 +147,7 @@ const API_DEFS = [
     icon:     <Shield  size={14} style={{ color: '#16A34A' }} />,
     iconBg:   'rgba(22,163,74,0.1)',
     endpoint: '/api/dlp/test',
-    placeholder: 'https://dlp-server:8443',
+    placeholder: 'https://FSMServer:9443',
   },
   {
     key: 'vSeries' as const,
@@ -697,12 +716,30 @@ export function Step3DataCollectors({
   selectedProducts,
   dlpBundles, setDlpBundles,
   dlpDashboardSummary, setDlpDashboardSummary,
+  dlpPostureSummary, setDlpPostureSummary,
+  dlpPostureSections, setDlpPostureSections,
+  destinationPatterns,
+  customerConnector, setCustomerConnector,
 }: Props) {
   const [sqlStatus,  setSqlStatus]  = useState<ConnStatus>({ state: 'idle' });
   const [apiStatus,  setApiStatus]  = useState<Partial<Record<keyof ApiConnectorsConfig, ConnStatus>>>({});
   const [showPw,     setShowPw]     = useState<Partial<Record<string, boolean>>>({});
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['web', 'dlp', 'email']));
-  const [dlpExpanded, setDlpExpanded] = useState(true);
+  /* Every data-source card starts collapsed — operator opens only what
+     they need. The chevron in each card header toggles its own entry. */
+  const [cardOpen, setCardOpen] = useState<Record<string, boolean>>({});
+  const toggleCard = (key: string) => setCardOpen(prev => ({ ...prev, [key]: !prev[key] }));
+  const isCardOpen = (key: string) => !!cardOpen[key];
+  /* Backwards-compat alias for the DLP Server Info bundle card — that
+     section was previously gated on a dedicated `dlpExpanded` flag with
+     a different default; now it's part of the unified collapse map. */
+  const dlpExpanded = isCardOpen('dlp_server_info');
+  const setDlpExpanded = (next: boolean | ((p: boolean) => boolean)) => {
+    setCardOpen(prev => ({
+      ...prev,
+      dlp_server_info: typeof next === 'function' ? next(!!prev.dlp_server_info) : next,
+    }));
+  };
   const [expandedBundles, setExpandedBundles] = useState<Set<string>>(new Set());
   const [parseError, setParseError] = useState<string>('');
   const [parseBusy, setParseBusy] = useState(false);
@@ -711,6 +748,69 @@ export function Step3DataCollectors({
   const folderInputRef = useRef<HTMLInputElement>(null);
   const filesInputRef = useRef<HTMLInputElement>(null);
   const dashboardInputRef = useRef<HTMLInputElement>(null);
+
+  /* ── Customer Connector ── */
+  const [connectorStatus, setConnectorStatus] = useState<CustomerConnectorStatus | null>(null);
+  /* Poll the companion's /api/connector/status every 5s when the connector
+     is enabled AND a token has been generated. Empty token = no point
+     polling. We bail out of the effect if the user disables. */
+  useEffect(() => {
+    if (!customerConnector.enabled || !customerConnector.token) {
+      setConnectorStatus(null);
+      return;
+    }
+    let cancelled = false;
+    const tick = async () => {
+      const st = await fetchConnectorStatus(customerConnector.token);
+      if (!cancelled) setConnectorStatus(st);
+    };
+    tick();
+    const id = setInterval(tick, 5000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [customerConnector.enabled, customerConnector.token]);
+
+  /* Auto-mint token + AES-256 key the first time the operator flips the
+     Customer Connector switch on with empty fields. They can rotate
+     either via the inline regenerate buttons later. */
+  useEffect(() => {
+    if (!customerConnector.enabled) return;
+    if (customerConnector.token && customerConnector.encryptionKey) return;
+    setCustomerConnector((prev) => ({
+      ...prev,
+      token:         prev.token         || randomHex256(),
+      encryptionKey: prev.encryptionKey || randomHex256(),
+    }));
+  }, [customerConnector.enabled, customerConnector.token, customerConnector.encryptionKey, setCustomerConnector]);
+
+  const updConnector = (patch: Partial<CustomerConnectorConfig>) =>
+    setCustomerConnector((prev) => ({ ...prev, ...patch }));
+
+  const downloadConnectorBundle = () => {
+    const bundle = buildConnectorBundle(customerConnector);
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `forcepoint-hc-connector-${new Date().toISOString().slice(0,10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  /* DLP REST API is basic-auth only (Application Administrator). Any session
+     restored with the legacy 'apikey' authType or a lingering apiKey value
+     gets normalised back to a clean basic-auth shape so the UI / server
+     can't drift apart. Runs once per dlpApi snapshot. */
+  useEffect(() => {
+    const d = apiConnectors.dlpApi;
+    if (d.authType !== 'basic' || d.apiKey !== '') {
+      setApiConnectors(prev => ({
+        ...prev,
+        dlpApi: { ...prev.dlpApi, authType: 'basic', apiKey: '' },
+      }));
+    }
+  }, [apiConnectors.dlpApi.authType, apiConnectors.dlpApi.apiKey, setApiConnectors]);
 
   const handleDashboardFile = async (file: File | undefined | null) => {
     if (!file) return;
@@ -779,6 +879,18 @@ export function Step3DataCollectors({
     Object.entries(selectedProducts).filter(([, v]) => v).map(([k]) => PRODUCT_MAP[k]).filter(Boolean)
   );
 
+  /* When the DLP REST API connector is on it becomes the authoritative
+     source for DLP data — we hide the SQL DLP groups from Report Selection
+     so the operator isn't presented with two ways to pull the same numbers.
+     selectedReports state is intentionally NOT mutated; if the API is later
+     disabled, prior DLP selections come back unchanged. */
+  const dlpApiOn = !!apiConnectors.dlpApi?.enabled;
+  const visibleReportGroups = REPORT_GROUPS.filter(
+    (g) => activeProducts.has(g.product) && !(g.product === 'dlp' && dlpApiOn),
+  );
+  const visibleReportIds = visibleReportGroups.flatMap((g) => g.reports.map((r) => r.id));
+  const visibleSelectedReports = selectedReports.filter((id) => visibleReportIds.includes(id));
+
   const updSql = (p: Partial<SqlConfig>) => setSqlConfig(prev => ({ ...prev, ...p }));
   const updApi = (key: keyof ApiConnectorsConfig, p: Partial<ApiConnectorConfig>) =>
     setApiConnectors(prev => ({ ...prev, [key]: { ...prev[key], ...p } }));
@@ -793,6 +905,41 @@ export function Step3DataCollectors({
     setApiStatus(prev => ({ ...prev, [key]: { state: 'testing' } }));
     const result = await runTest(endpoint, apiConnectors[key]);
     setApiStatus(prev => ({ ...prev, [key]: result }));
+  };
+
+  /* DLP posture fetch — calls the companion's /api/dlp/posture which brokers
+     the JWT handshake and aggregates incidents server-side. Result lands in
+     hc_dlp_posture (session-scoped, persisted) so the report can render
+     without re-querying the FSM at export time. */
+  const [postureFetching, setPostureFetching] = useState(false);
+  const [postureError, setPostureError] = useState<string>('');
+  const [postureWindow, setPostureWindow] = useState<number>(dlpPostureSummary?.windowDays ?? 30);
+  const fetchPosture = async () => {
+    setPostureError('');
+    setPostureFetching(true);
+    try {
+      const summary = await fetchDlpPosture({
+        url:      apiConnectors.dlpApi.url,
+        authType: apiConnectors.dlpApi.authType,
+        username: apiConnectors.dlpApi.username,
+        password: apiConnectors.dlpApi.password,
+        apiKey:   apiConnectors.dlpApi.apiKey,
+        windowDays: postureWindow,
+        /* Send the operator-managed pattern catalogue so the FSM's
+           destination labels get bucketed using THEIR house style. */
+        patterns: destinationPatterns,
+      });
+      setDlpPostureSummary(summary);
+    } catch (e) {
+      const timeout = e instanceof Error && (e.name === 'TimeoutError' || /timed out/i.test(e.message));
+      setPostureError(
+        e instanceof Error
+          ? (timeout ? 'Posture fetch timed out (companion is reachable but FSM took >75s).' : e.message)
+          : 'Posture fetch failed.',
+      );
+    } finally {
+      setPostureFetching(false);
+    }
   };
 
   const toggleGroup    = (p: string) => setExpandedGroups(prev => { const n = new Set(prev); n.has(p) ? n.delete(p) : n.add(p); return n; });
@@ -856,10 +1003,11 @@ export function Step3DataCollectors({
   const [bulkDays, setBulkDays] = useState<number>(30);
   const [bulkRunning, setBulkRunning] = useState<{ active: boolean; current: number; total: number }>({ active: false, current: 0, total: 0 });
   const runAllSelected = async () => {
-    /* Build the run list from currently-selected reports. We resolve sqlKey
-       and id eagerly so a state change mid-loop can't desync the index. */
+    /* Build the run list from currently-VISIBLE selected reports — so a
+       DLP selection that was made before the operator enabled the REST
+       API connector doesn't quietly run when the group is hidden. */
     const targets: { id: string; sqlKey: string; fixedWindow?: boolean }[] = [];
-    for (const grp of REPORT_GROUPS) {
+    for (const grp of visibleReportGroups) {
       for (const r of grp.reports) {
         if (selectedReports.includes(r.id)) {
           targets.push({ id: r.id, sqlKey: r.sqlKey, fixedWindow: r.fixedWindow });
@@ -913,6 +1061,203 @@ export function Step3DataCollectors({
           Answer checklist questions directly in the wizard UI — no connector required.
         </div>
       </div>
+
+      {/* ─── Customer Connector — outbound-only tunnel agent ─────────
+          Hidden unless at least one telemetry-bearing product is in
+          scope. The card mints a unique token + AES-256-GCM key on
+          first enable, lets the operator pin a server cert + restrict
+          source IP, and polls the companion every 5s for the
+          connector's liveness pill. */}
+      {(selectedProducts.web || selectedProducts.data || selectedProducts.email) && (() => {
+        const cfg = customerConnector;
+        const st = connectorStatus;
+        const tokenOk = !!cfg.token;
+        const keyOk = !!cfg.encryptionKey;
+        const ipOk = !!cfg.allowedSourceIp.trim();
+        const readyChecks = [tokenOk, keyOk, ipOk];
+        const readyCount = readyChecks.filter(Boolean).length;
+        const readyTotal = readyChecks.length;
+        const onlineColor = st?.online ? '#16A34A' : (st && st.totalHeartbeats > 0) ? '#D97706' : '#94A3B8';
+        const onlineLabel = st?.online ? 'ONLINE' : (st && st.totalHeartbeats > 0) ? 'STALE' : 'WAITING';
+
+        return (
+          <div className="bg-white rounded-xl overflow-hidden"
+            style={{ border: `1.5px solid ${cfg.enabled ? '#DDD6FE' : '#E2E8F0'}`, boxShadow: '0 1px 4px rgba(15,41,82,0.06)' }}>
+
+            <div className="flex items-center gap-3 p-[16px_22px] cursor-pointer"
+              onClick={() => toggleCard('customer_connector')}
+              style={{ background: cfg.enabled ? 'rgba(124,58,237,0.03)' : 'white', borderBottom: (cfg.enabled && isCardOpen('customer_connector')) ? '1px solid #EEF0F5' : 'none' }}>
+              <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
+                style={{ background: 'rgba(124,58,237,0.1)' }}>
+                <Plug size={14} style={{ color: '#7C3AED' }} />
+              </div>
+              <div className="flex-1">
+                <div style={{ fontSize: '13px', fontWeight: 700, color: cfg.enabled ? '#0F172A' : '#64748B' }}>Customer Connector</div>
+                <div style={{ fontSize: '11px', color: '#94A3B8' }}>
+                  Outbound-only tunnel agent installed at the customer site — opens a single HTTPS to HC, no inbound firewall rules.
+                </div>
+              </div>
+
+              {cfg.enabled && (
+                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg"
+                  style={{ background: `${onlineColor}14`, border: `1px solid ${onlineColor}40` }}>
+                  <Activity size={12} style={{ color: onlineColor }} />
+                  <span style={{ fontSize: '11px', fontWeight: 700, color: onlineColor, letterSpacing: '0.05em' }}>{onlineLabel}</span>
+                </div>
+              )}
+
+              <button onClick={(e) => {
+                  e.stopPropagation();
+                  const next = !cfg.enabled;
+                  updConnector({ enabled: next });
+                  /* Enable → auto-open the card; Disable → auto-close. */
+                  setCardOpen(prev => ({ ...prev, customer_connector: next }));
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-semibold transition-all"
+                style={{
+                  fontSize: '11px',
+                  background: cfg.enabled ? 'rgba(124,58,237,0.07)' : '#F1F5F9',
+                  color:      cfg.enabled ? '#7C3AED' : '#64748B',
+                  border:     cfg.enabled ? '1.5px solid rgba(124,58,237,0.25)' : '1.5px solid #E2E8F0',
+                }}>
+                {cfg.enabled ? 'Enabled ✓' : 'Enable'}
+              </button>
+              {isCardOpen('customer_connector')
+                ? <ChevronDown size={14} style={{ color: '#94A3B8' }} />
+                : <ChevronRight size={14} style={{ color: '#94A3B8' }} />}
+            </div>
+
+            {cfg.enabled && isCardOpen('customer_connector') && (
+              <div className="p-[16px_22px] space-y-4">
+
+                {/* Live status banner */}
+                <div className="rounded-lg p-[12px_14px] flex items-center gap-4 flex-wrap"
+                  style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <Activity size={12} style={{ color: onlineColor }} />
+                    <span style={{ fontSize: '11.5px', fontWeight: 700, color: onlineColor, letterSpacing: '0.04em' }}>{onlineLabel}</span>
+                  </div>
+                  <div style={{ width: '1px', height: '16px', background: '#E2E8F0' }} />
+                  <div className="flex flex-col">
+                    <span style={{ fontSize: '9.5px', fontWeight: 700, color: '#94A3B8', letterSpacing: '0.06em' }}>LAST HEARTBEAT</span>
+                    <span className="font-mono" style={{ fontSize: '11px', color: '#0F172A', fontWeight: 600 }}>
+                      {st?.lastHeartbeatAt ? `${st.secondsSinceLastHeartbeat}s ago (${new Date(st.lastHeartbeatAt).toLocaleTimeString()})` : '— never seen —'}
+                    </span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span style={{ fontSize: '9.5px', fontWeight: 700, color: '#94A3B8', letterSpacing: '0.06em' }}>SOURCE IP</span>
+                    <span className="font-mono" style={{ fontSize: '11px', color: '#0F172A', fontWeight: 600 }}>
+                      {st?.lastSourceIp || '—'}
+                      {st?.lastSourceIp && cfg.allowedSourceIp && st.lastSourceIp !== cfg.allowedSourceIp && cfg.allowedSourceIp !== '' && (
+                        <span title={`Expected ${cfg.allowedSourceIp}`} style={{ color: '#DC2626', marginLeft: 6 }}>⚠</span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span style={{ fontSize: '9.5px', fontWeight: 700, color: '#94A3B8', letterSpacing: '0.06em' }}>HEARTBEATS</span>
+                    <span className="font-mono" style={{ fontSize: '11px', color: '#0F172A', fontWeight: 600 }}>{st?.totalHeartbeats ?? 0}</span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span style={{ fontSize: '9.5px', fontWeight: 700, color: '#94A3B8', letterSpacing: '0.06em' }}>VERSION</span>
+                    <span className="font-mono" style={{ fontSize: '11px', color: '#0F172A', fontWeight: 600 }}>{st?.connectorVersion || '—'}</span>
+                  </div>
+                  <div className="flex-1" />
+                  <span className="font-mono" style={{ fontSize: '10px', color: '#94A3B8' }}>
+                    {readyCount}/{readyTotal} ready
+                  </span>
+                </div>
+
+                {/* HC endpoint + IP allowlist */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.04em' }}>HC ENDPOINT (connector → here)</label>
+                    <input style={{ ...IS, marginTop: '4px' }}
+                      placeholder="https://hc.forcepoint-se.com"
+                      value={cfg.hcEndpoint} onChange={(e) => updConnector({ hcEndpoint: e.target.value })}
+                      onFocus={e => (e.currentTarget.style.border = '1.5px solid #C4B5FD')}
+                      onBlur={e =>  (e.currentTarget.style.border = '1.5px solid #E2E8F0')} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.04em' }}>ALLOWED SOURCE IP / CIDR</label>
+                    <div style={{ position: 'relative', marginTop: '4px' }}>
+                      <Globe2 size={11} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }} />
+                      <input style={{ ...IS, paddingLeft: 28 }}
+                        placeholder="e.g. 213.74.55.10 or 213.74.55.0/24"
+                        value={cfg.allowedSourceIp} onChange={(e) => updConnector({ allowedSourceIp: e.target.value })}
+                        onFocus={e => (e.currentTarget.style.border = '1.5px solid #C4B5FD')}
+                        onBlur={e =>  (e.currentTarget.style.border = '1.5px solid #E2E8F0')} />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Token + AES-256 key — read-only with regenerate buttons */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.04em' }}>CONNECTOR TOKEN (256-bit)</label>
+                      <button onClick={() => updConnector({ token: randomHex256() })}
+                        className="flex items-center gap-1"
+                        style={{ fontSize: '10px', color: '#7C3AED', background: 'transparent', border: 'none', cursor: 'pointer', fontWeight: 600 }}
+                        title="Generate a new random token. Connector must be re-deployed with the new config.">
+                        <RefreshCw size={9} /> Regenerate
+                      </button>
+                    </div>
+                    <div style={{ ...IS, fontFamily: "'JetBrains Mono', monospace", fontSize: '10.5px', color: '#475569', wordBreak: 'break-all', lineHeight: 1.4, paddingTop: 6, paddingBottom: 6, cursor: 'text', userSelect: 'all' }}
+                      onClick={(e) => {
+                        const sel = window.getSelection();
+                        if (sel) { sel.selectAllChildren(e.currentTarget); }
+                      }}>
+                      {cfg.token || <span style={{ color: '#CBD5E1' }}>— pending generation —</span>}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.04em' }}>AES-256-GCM KEY</label>
+                      <button onClick={() => updConnector({ encryptionKey: randomHex256() })}
+                        className="flex items-center gap-1"
+                        style={{ fontSize: '10px', color: '#7C3AED', background: 'transparent', border: 'none', cursor: 'pointer', fontWeight: 600 }}
+                        title="Generate a new AES-256-GCM key. Connector must be re-deployed with the new config.">
+                        <RefreshCw size={9} /> Regenerate
+                      </button>
+                    </div>
+                    <div style={{ ...IS, fontFamily: "'JetBrains Mono', monospace", fontSize: '10.5px', color: '#475569', wordBreak: 'break-all', lineHeight: 1.4, paddingTop: 6, paddingBottom: 6, cursor: 'text', userSelect: 'all' }}
+                      onClick={(e) => {
+                        const sel = window.getSelection();
+                        if (sel) { sel.selectAllChildren(e.currentTarget); }
+                      }}>
+                      {cfg.encryptionKey || <span style={{ color: '#CBD5E1' }}>— pending generation —</span>}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Action row — download connector.json */}
+                <div className="flex items-center gap-3 pt-2"
+                  style={{ borderTop: '1px dashed #E2E8F0' }}>
+                  <button onClick={downloadConnectorBundle}
+                    disabled={!tokenOk || !keyOk}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg font-semibold transition-all"
+                    style={{
+                      fontSize: '12px',
+                      background: !tokenOk || !keyOk ? '#F1F5F9' : 'linear-gradient(135deg,#7C3AED,#5B21B6)',
+                      color:      !tokenOk || !keyOk ? '#94A3B8' : '#fff',
+                      cursor:     !tokenOk || !keyOk ? 'not-allowed' : 'pointer',
+                      border: '1.5px solid transparent',
+                      boxShadow: !tokenOk || !keyOk ? 'none' : '0 4px 14px rgba(124,58,237,0.3)',
+                    }}
+                    title="Download the connector.json config the customer drops into the connector binary folder.">
+                    <Key size={12} /> Download connector.json
+                  </button>
+                  <span style={{ fontSize: '10.5px', color: '#64748B', lineHeight: 1.5, flex: 1 }}>
+                    The bundle contains the HC endpoint, token, AES-256-GCM key, and IP allowlist.
+                    Hand it to the customer; they drop it next to the connector binary and start the service.
+                    Once it phones home, the status pill above turns <span style={{ color: '#16A34A', fontWeight: 700 }}>ONLINE</span>.
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* DLP Server Info — bundle folder upload. Hidden when Data Security
           isn't in scope (Step 2) so the operator only sees collectors that
@@ -1023,8 +1368,9 @@ export function Step3DataCollectors({
       {selectedProducts.data && (
       <div className="bg-white rounded-xl overflow-hidden"
         style={{ border: dlpDashboardSummary ? '1.5px solid rgba(14,165,233,0.3)' : '1.5px solid #E2E8F0', boxShadow: '0 1px 4px rgba(15,41,82,0.06)' }}>
-        <div className="flex items-center gap-3 p-[16px_22px]"
-          style={{ background: dlpDashboardSummary ? 'rgba(14,165,233,0.04)' : 'white', borderBottom: '1px solid #F1F5F9' }}>
+        <div className="flex items-center gap-3 p-[16px_22px] cursor-pointer"
+          style={{ background: dlpDashboardSummary ? 'rgba(14,165,233,0.04)' : 'white', borderBottom: isCardOpen('dlp_dashboard') ? '1px solid #F1F5F9' : 'none' }}
+          onClick={() => toggleCard('dlp_dashboard')}>
           <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
             style={{ background: 'rgba(14,165,233,0.1)' }}>
             <FileText size={14} style={{ color: '#0EA5E9' }} />
@@ -1041,8 +1387,12 @@ export function Step3DataCollectors({
               {dlpDashboardSummary.totalIncidents.toLocaleString()} INCIDENTS
             </span>
           )}
+          {isCardOpen('dlp_dashboard')
+            ? <ChevronDown size={14} style={{ color: '#94A3B8' }} />
+            : <ChevronRight size={14} style={{ color: '#94A3B8' }} />}
         </div>
 
+        {isCardOpen('dlp_dashboard') && (
         <div className="p-[16px_22px] space-y-3">
           <div
             onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
@@ -1134,6 +1484,7 @@ export function Step3DataCollectors({
             </div>
           )}
         </div>
+        )}
       </div>
       )}
 
@@ -1144,8 +1495,9 @@ export function Step3DataCollectors({
       <div className="bg-white rounded-xl overflow-hidden"
         style={{ border: `1.5px solid ${sqlConfig.enabled ? '#DBEAFE' : '#E2E8F0'}`, boxShadow: '0 1px 4px rgba(15,41,82,0.06)' }}>
 
-        <div className="flex items-center gap-3 p-[16px_22px]"
-          style={{ background: sqlConfig.enabled ? '#FAFCFF' : 'white', borderBottom: sqlConfig.enabled ? '1px solid #F1F5F9' : 'none' }}>
+        <div className="flex items-center gap-3 p-[16px_22px] cursor-pointer"
+          onClick={() => toggleCard('sql_server')}
+          style={{ background: sqlConfig.enabled ? '#FAFCFF' : 'white', borderBottom: (sqlConfig.enabled && isCardOpen('sql_server')) ? '1px solid #F1F5F9' : 'none' }}>
           <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
             style={{ background: 'rgba(37,99,235,0.1)' }}>
             <Database size={14} style={{ color: '#2563EB' }} />
@@ -1161,7 +1513,12 @@ export function Step3DataCollectors({
               <span style={{ fontSize: '11px', fontWeight: 600, color: '#16A34A' }}>Connected</span>
             </div>
           )}
-          <button onClick={() => updSql({ enabled: !sqlConfig.enabled })}
+          <button onClick={(e) => {
+              e.stopPropagation();
+              const next = !sqlConfig.enabled;
+              updSql({ enabled: next });
+              setCardOpen(prev => ({ ...prev, sql_server: next }));
+            }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-semibold transition-all"
             style={{
               fontSize: '11px',
@@ -1171,9 +1528,12 @@ export function Step3DataCollectors({
             }}>
             {sqlConfig.enabled ? 'Enabled ✓' : 'Enable'}
           </button>
+          {isCardOpen('sql_server')
+            ? <ChevronDown size={14} style={{ color: '#94A3B8' }} />
+            : <ChevronRight size={14} style={{ color: '#94A3B8' }} />}
         </div>
 
-        {sqlConfig.enabled && <div className="p-[16px_22px] space-y-4">
+        {sqlConfig.enabled && isCardOpen('sql_server') && <div className="p-[16px_22px] space-y-4">
           {/* Server + Port */}
           <div className="grid grid-cols-[1fr_100px] gap-3">
             <div>
@@ -1362,8 +1722,9 @@ export function Step3DataCollectors({
             style={{ border: `1.5px solid ${cfg.enabled ? '#DBEAFE' : '#E2E8F0'}`, boxShadow: '0 1px 4px rgba(15,41,82,0.06)' }}>
 
             {/* Card header */}
-            <div className="flex items-center gap-3 p-[16px_22px]"
-              style={{ background: cfg.enabled ? '#FAFCFF' : 'white', borderBottom: cfg.enabled ? '1px solid #F1F5F9' : 'none' }}>
+            <div className="flex items-center gap-3 p-[16px_22px] cursor-pointer"
+              onClick={() => toggleCard(def.key)}
+              style={{ background: cfg.enabled ? '#FAFCFF' : 'white', borderBottom: (cfg.enabled && isCardOpen(def.key)) ? '1px solid #F1F5F9' : 'none' }}>
               <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
                 style={{ background: def.iconBg }}>
                 {def.icon}
@@ -1379,7 +1740,12 @@ export function Step3DataCollectors({
                   <span style={{ fontSize: '11px', fontWeight: 600, color: '#16A34A' }}>Connected</span>
                 </div>
               )}
-              <button onClick={() => updApi(def.key, { enabled: !cfg.enabled })}
+              <button onClick={(e) => {
+                  e.stopPropagation();
+                  const next = !cfg.enabled;
+                  updApi(def.key, { enabled: next });
+                  setCardOpen(prev => ({ ...prev, [def.key]: next }));
+                }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-semibold transition-all"
                 style={{
                   fontSize: '11px',
@@ -1389,10 +1755,13 @@ export function Step3DataCollectors({
                 }}>
                 {cfg.enabled ? 'Enabled ✓' : 'Enable'}
               </button>
+              {isCardOpen(def.key)
+                ? <ChevronDown size={14} style={{ color: '#94A3B8' }} />
+                : <ChevronRight size={14} style={{ color: '#94A3B8' }} />}
             </div>
 
             {/* Config form */}
-            {cfg.enabled && (
+            {cfg.enabled && isCardOpen(def.key) && (
               <div className="p-[16px_22px] space-y-4">
 
                 {/* Base URL */}
@@ -1404,41 +1773,48 @@ export function Step3DataCollectors({
                     onBlur={e =>  (e.currentTarget.style.border = '1.5px solid #E2E8F0')} />
                 </div>
 
-                {/* Auth type toggle */}
-                <div>
-                  <label style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.04em', display: 'block', marginBottom: '8px' }}>
-                    AUTHENTICATION
-                  </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {(['apikey', 'basic'] as const).map(type => {
-                      const active = cfg.authType === type;
-                      return (
-                        <button key={type} onClick={() => updApi(def.key, { authType: type })}
-                          className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-all text-left"
-                          style={{
-                            background: active ? 'rgba(37,99,235,0.06)' : '#F8FAFC',
-                            border: active ? '2px solid rgba(37,99,235,0.35)' : '1.5px solid #E2E8F0',
-                          }}>
-                          <div className="w-4 h-4 rounded-full flex-shrink-0 flex items-center justify-center"
-                            style={{ border: `2px solid ${active ? '#2563EB' : '#CBD5E1'}`, background: active ? '#2563EB' : 'transparent' }}>
-                            {active && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
-                          </div>
-                          <div>
-                            <div style={{ fontSize: '12px', fontWeight: 600, color: active ? '#2563EB' : '#334155' }}>
-                              {type === 'apikey' ? 'API Key' : 'Basic Auth'}
+                {/* Auth type toggle — DLP REST API only supports Application
+                    Administrator username + password, so we hide the auth
+                    picker entirely on the DLP card. V-Series and NGFW SMC
+                    still expose both modes. */}
+                {def.key !== 'dlpApi' && (
+                  <div>
+                    <label style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.04em', display: 'block', marginBottom: '8px' }}>
+                      AUTHENTICATION
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {(['apikey', 'basic'] as const).map(type => {
+                        const active = cfg.authType === type;
+                        return (
+                          <button key={type} onClick={() => updApi(def.key, { authType: type })}
+                            className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-all text-left"
+                            style={{
+                              background: active ? 'rgba(37,99,235,0.06)' : '#F8FAFC',
+                              border: active ? '2px solid rgba(37,99,235,0.35)' : '1.5px solid #E2E8F0',
+                            }}>
+                            <div className="w-4 h-4 rounded-full flex-shrink-0 flex items-center justify-center"
+                              style={{ border: `2px solid ${active ? '#2563EB' : '#CBD5E1'}`, background: active ? '#2563EB' : 'transparent' }}>
+                              {active && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
                             </div>
-                            <div style={{ fontSize: '10px', color: '#94A3B8' }}>
-                              {type === 'apikey' ? 'Bearer token / API key header' : 'Username & password'}
+                            <div>
+                              <div style={{ fontSize: '12px', fontWeight: 600, color: active ? '#2563EB' : '#334155' }}>
+                                {type === 'apikey' ? 'API Key' : 'Basic Auth'}
+                              </div>
+                              <div style={{ fontSize: '10px', color: '#94A3B8' }}>
+                                {type === 'apikey' ? 'Bearer token / API key header' : 'Username & password'}
+                              </div>
                             </div>
-                          </div>
-                        </button>
-                      );
-                    })}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
+                )}
 
-                {/* Credentials */}
-                {cfg.authType === 'apikey' ? (
+                {/* Credentials — DLP is locked to basic auth (Application
+                    Administrator only), so the apiKey branch never renders
+                    on that card. */}
+                {(def.key !== 'dlpApi' && cfg.authType === 'apikey') ? (
                   <div>
                     <label style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.04em' }}>API KEY</label>
                     <div style={{ position: 'relative', marginTop: '4px' }}>
@@ -1512,21 +1888,42 @@ export function Step3DataCollectors({
                     <span style={{ fontSize: '11px', color: '#94A3B8' }}>Enter base URL to test</span>
                   )}
                 </div>
+
+                {/* ── DLP-API hint: once the connection test is green the
+                     operator picks blocks in the "REST API Data Selection"
+                     card below; this small hint just points them there. */}
+                {def.key === 'dlpApi' && st.state === 'ok' && (
+                  <div className="rounded-lg mt-1 flex items-start gap-2"
+                    style={{ background: 'rgba(22,163,74,0.04)', border: '1px solid rgba(22,163,74,0.18)', padding: '10px 12px' }}>
+                    <CheckCircle2 size={14} style={{ color: '#16A34A', flexShrink: 0, marginTop: 1 }} />
+                    <div style={{ fontSize: '11.5px', color: '#15803D', lineHeight: 1.5 }}>
+                      <strong>Connection ready.</strong>{' '}
+                      Pick the posture blocks to include in the report from the
+                      <strong> REST API Data Selection</strong> card below — categorical rollups only,
+                      no individual user names cross this boundary.
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
         );
       })}
 
-      {/* Report Selection — only relevant when there's at least one product
-          that ships SQL reports (Web / DLP / Email). NGFW + V-Series + DSPM
-          have no reports in REPORT_GROUPS, so the whole panel is hidden when
-          none of the report-bearing products are in scope. */}
-      {(selectedProducts.web || selectedProducts.data || selectedProducts.email) && (
+      {/* Report Selection — gated on the SQL Server connector AND at least
+          one report group surviving the visibility filter. When DLP API is
+          on, the dlp group is hidden; if the only Step-2 product is DLP
+          the card disappears entirely (the DLP REST API "Data Selection"
+          card below takes over). */}
+      {(selectedProducts.web || selectedProducts.data || selectedProducts.email)
+        && sqlConfig.enabled
+        && visibleReportGroups.length > 0 && (
       <div className="bg-white rounded-xl p-[20px_22px]"
         style={{ border: '1.5px solid #E2E8F0', boxShadow: '0 1px 4px rgba(15,41,82,0.06)' }}>
 
-        <div className="flex items-center justify-between mb-5">
+        <div className="flex items-center justify-between cursor-pointer"
+          onClick={() => toggleCard('report_selection')}
+          style={{ marginBottom: isCardOpen('report_selection') ? '1.25rem' : '0' }}>
           <div>
             <div style={{ fontSize: '13px', fontWeight: 700, color: '#0F172A' }}>Report Selection</div>
             <div style={{ fontSize: '11px', color: '#94A3B8', marginTop: '2px' }}>
@@ -1536,11 +1933,15 @@ export function Step3DataCollectors({
           <div className="flex items-center gap-2">
             <span className="font-mono px-2.5 py-1 rounded-lg"
               style={{ fontSize: '11px', fontWeight: 700, background: 'rgba(37,99,235,0.07)', color: '#2563EB', border: '1px solid rgba(37,99,235,0.18)' }}>
-              {selectedReports.length} / {ALL_REPORT_IDS.length} selected
+              {visibleSelectedReports.length} / {visibleReportIds.length} selected
             </span>
+            {isCardOpen('report_selection')
+              ? <ChevronDown size={14} style={{ color: '#94A3B8' }} />
+              : <ChevronRight size={14} style={{ color: '#94A3B8' }} />}
           </div>
         </div>
 
+        {isCardOpen('report_selection') && <>
         {/* Bulk runner — fires every selected report in one go, sharing a
             Top X / Last Y window. Disabled when no SQL connection is configured
             or when nothing is selected. Sequential under the hood so the SQL
@@ -1576,28 +1977,28 @@ export function Step3DataCollectors({
             </span>
           )}
           <button onClick={runAllSelected}
-            disabled={bulkRunning.active || selectedReports.length === 0 || !sqlConfig.enabled || !sqlConfig.server.trim()}
+            disabled={bulkRunning.active || visibleSelectedReports.length === 0 || !sqlConfig.enabled || !sqlConfig.server.trim()}
             title={!sqlConfig.enabled || !sqlConfig.server.trim()
               ? 'Enable + configure SQL Server above to run reports'
-              : selectedReports.length === 0
+              : visibleSelectedReports.length === 0
                 ? 'Select at least one report to run'
                 : 'Run every selected report sequentially'}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded font-semibold transition-all"
             style={{
               fontSize: '11px',
-              background: bulkRunning.active || selectedReports.length === 0 || !sqlConfig.enabled || !sqlConfig.server.trim() ? '#F1F5F9' : '#2563EB',
-              color:      bulkRunning.active || selectedReports.length === 0 || !sqlConfig.enabled || !sqlConfig.server.trim() ? '#94A3B8' : '#fff',
-              border: `1px solid ${bulkRunning.active || selectedReports.length === 0 || !sqlConfig.enabled || !sqlConfig.server.trim() ? '#E2E8F0' : '#1D4ED8'}`,
-              cursor: bulkRunning.active || selectedReports.length === 0 || !sqlConfig.enabled || !sqlConfig.server.trim() ? 'not-allowed' : 'pointer',
-              boxShadow: bulkRunning.active || selectedReports.length === 0 || !sqlConfig.enabled || !sqlConfig.server.trim() ? 'none' : '0 2px 8px rgba(37,99,235,0.3)',
+              background: bulkRunning.active || visibleSelectedReports.length === 0 || !sqlConfig.enabled || !sqlConfig.server.trim() ? '#F1F5F9' : '#2563EB',
+              color:      bulkRunning.active || visibleSelectedReports.length === 0 || !sqlConfig.enabled || !sqlConfig.server.trim() ? '#94A3B8' : '#fff',
+              border: `1px solid ${bulkRunning.active || visibleSelectedReports.length === 0 || !sqlConfig.enabled || !sqlConfig.server.trim() ? '#E2E8F0' : '#1D4ED8'}`,
+              cursor: bulkRunning.active || visibleSelectedReports.length === 0 || !sqlConfig.enabled || !sqlConfig.server.trim() ? 'not-allowed' : 'pointer',
+              boxShadow: bulkRunning.active || visibleSelectedReports.length === 0 || !sqlConfig.enabled || !sqlConfig.server.trim() ? 'none' : '0 2px 8px rgba(37,99,235,0.3)',
             }}>
             {bulkRunning.active ? <Loader size={11} className="animate-spin" /> : <Play size={11} />}
-            {bulkRunning.active ? 'Running…' : `Run ${selectedReports.length} Selected`}
+            {bulkRunning.active ? 'Running…' : `Run ${visibleSelectedReports.length} Selected`}
           </button>
         </div>
 
         <div className="space-y-3">
-          {REPORT_GROUPS.filter((g) => activeProducts.has(g.product)).map(group => {
+          {visibleReportGroups.map(group => {
             const inScope = activeProducts.has(group.product);
             const groupIds = group.reports.map(r => r.id);
             const selCount = groupIds.filter(id => selectedReports.includes(id)).length;
@@ -1652,6 +2053,7 @@ export function Step3DataCollectors({
                           windowDays={days}
                           runResult={run}
                           isLast={isLast}
+                          sqlReady={sqlConfig.enabled && !!sqlConfig.server.trim()}
                           onToggle={() => toggleReport(report.id)}
                           onChangeWindow={(d) => setReportWindows((prev) => ({ ...prev, [report.id]: d }))}
                           onRun={() => runReport(report.sqlKey, days)}
@@ -1667,8 +2069,227 @@ export function Step3DataCollectors({
             );
           })}
         </div>
+        </>}
       </div>
       )}
+
+      {/* ═══════════════════════════════════════════════════════════════
+          REST API Data Selection — gated on the DLP REST API connector.
+          Sibling to Report Selection but pulls from the FSM /incidents
+          endpoint instead of PA_EVENTS_* SQL partitions. The operator
+          ticks which posture blocks make it into the final HTML report.
+      ═══════════════════════════════════════════════════════════════ */}
+      {selectedProducts.data && apiConnectors.dlpApi?.enabled && (() => {
+        const selectedCount = ALL_POSTURE_BLOCK_IDS.filter((id) => dlpPostureSections[id]).length;
+        const totalCount = ALL_POSTURE_BLOCK_IDS.length;
+        const allSelected = selectedCount === totalCount;
+        const noneSelected = selectedCount === 0;
+        const groups: Record<string, typeof DLP_POSTURE_BLOCKS> = {};
+        for (const b of DLP_POSTURE_BLOCKS) (groups[b.group] ??= []).push(b);
+
+        /* Tiny per-block preview — shown next to each row once the
+           operator has fetched the posture summary. Keeps the picker
+           grounded in the actual numbers instead of just labels. */
+        const blockPreview = (id: DlpPostureBlockId): string | null => {
+          if (!dlpPostureSummary) return null;
+          const ps = dlpPostureSummary;
+          const topLabel = (arr: { label: string; count: number }[]) => arr[0] ? `${arr[0].label} (${arr[0].count})` : '—';
+          switch (id) {
+            case 'overview':          return `v${ps.dlpVersion || '—'} · ${ps.deploymentStatus.replace(/_/g, ' ')} · ${ps.enabledDlpPolicies} DLP pol`;
+            case 'severity':          return `H ${ps.bySeverity.HIGH} · M ${ps.bySeverity.MEDIUM} · L ${ps.bySeverity.LOW}`;
+            case 'action':            return `${Object.keys(ps.byAction).length} action${Object.keys(ps.byAction).length === 1 ? '' : 's'}`;
+            case 'channel':           return `${Object.keys(ps.byChannel).length} channels`;
+            case 'status':            return `${Object.keys(ps.byStatus).length} status states`;
+            case 'policies':          return `top: ${topLabel(ps.topPolicies)}`;
+            case 'destinations':      return `top: ${topLabel(ps.topDestinations)}`;
+            case 'users':             return ps.topUsers?.length ? `top: ${topLabel(ps.topUsers)}` : 'no user telemetry';
+            case 'genai_apps':        return `${ps.genAiIncidentCount ?? 0} hits · ${(ps.topGenAiApps?.length ?? 0)} apps`;
+            case 'saas_apps':         return `${ps.saasIncidentCount ?? 0} hits · ${(ps.topSaasApps?.length ?? 0)} apps`;
+            case 'webmail':           return `${ps.webmailIncidentCount ?? 0} hits · ${(ps.topWebmail?.length ?? 0)} providers`;
+            case 'endpoint_type':     return `L ${ps.byEndpointType.LAPTOP} · D ${ps.byEndpointType.DESKTOP} · N ${ps.byEndpointType.NA}`;
+            case 'detection_sources': return `${Object.keys(ps.byDetectedBy).length} sources`;
+            case 'workflow_rates':    return `FP ${ps.falsePositiveCount} · Rel ${ps.releasedIncidentCount} · Ign ${ps.ignoredCount}`;
+            case 'risk_sla':          return `Risk+ ${ps.riskLevelPositiveCount ?? 0} · SLA breach ${ps.slaBreachCount ?? 0}`;
+            case 'data_exposure':     return `${formatBytes(ps.totalForensicBytes ?? 0)} crossed boundary`;
+          }
+        };
+
+        return (
+      <div className="bg-white rounded-xl p-[20px_22px]"
+        style={{ border: '1.5px solid #E2E8F0', boxShadow: '0 1px 4px rgba(15,41,82,0.06)' }}>
+
+        <div className="flex items-center justify-between cursor-pointer"
+          onClick={() => toggleCard('rest_api_data_selection')}
+          style={{ marginBottom: isCardOpen('rest_api_data_selection') ? '1.25rem' : '0' }}>
+          <div>
+            <div style={{ fontSize: '13px', fontWeight: 700, color: '#0F172A' }}>REST API Data Selection</div>
+            <div style={{ fontSize: '11px', color: '#94A3B8', marginTop: '2px' }}>
+              Choose which DLP REST API blocks populate the Information Security Posture Dashboard in the report
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={(e) => { e.stopPropagation(); setDlpPostureSections(prev => {
+                const target = !allSelected;
+                const next = { ...prev };
+                for (const id of ALL_POSTURE_BLOCK_IDS) next[id] = target;
+                return next;
+              }); }}
+              className="font-mono px-2.5 py-1 rounded-lg transition-all"
+              style={{ fontSize: '10.5px', fontWeight: 700, background: '#F8FAFC', color: '#475569', border: '1px solid #E2E8F0', cursor: 'pointer' }}>
+              {allSelected ? 'Deselect all' : 'Select all'}
+            </button>
+            <span className="font-mono px-2.5 py-1 rounded-lg"
+              style={{ fontSize: '11px', fontWeight: 700, background: 'rgba(22,163,74,0.07)', color: '#16A34A', border: '1px solid rgba(22,163,74,0.18)' }}>
+              {selectedCount} / {totalCount} selected
+            </span>
+            {isCardOpen('rest_api_data_selection')
+              ? <ChevronDown size={14} style={{ color: '#94A3B8' }} />
+              : <ChevronRight size={14} style={{ color: '#94A3B8' }} />}
+          </div>
+        </div>
+
+        {isCardOpen('rest_api_data_selection') && <>
+        {/* Fetch toolbar */}
+        <div className="rounded-lg p-[12px_14px] mb-4 flex items-center gap-3 flex-wrap"
+          style={{ background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <Play size={13} style={{ color: '#16A34A' }} />
+            <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#0F172A' }}>Pull Posture</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Clock size={11} style={{ color: '#94A3B8' }} />
+            <label style={{ fontSize: '10.5px', color: '#64748B', fontWeight: 600 }}>Window</label>
+            <select value={postureWindow}
+              onChange={(e) => setPostureWindow(parseInt(e.target.value, 10))}
+              disabled={postureFetching}
+              style={{ fontSize: '10.5px', fontWeight: 600, color: '#475569', background: '#fff', border: '1px solid #E2E8F0', borderRadius: 4, padding: '2px 6px', cursor: postureFetching ? 'not-allowed' : 'pointer' }}>
+              {[7, 14, 30, 60, 90].map((d) => <option key={d} value={d}>{d} days</option>)}
+            </select>
+          </div>
+          <div className="flex-1" />
+          {dlpPostureSummary && !postureFetching && (
+            <span style={{ fontSize: '10.5px', color: '#64748B' }}>
+              Last fetched <span style={{ fontFamily: 'monospace', color: '#0F172A' }}>
+                {new Date(dlpPostureSummary.fetchedAt).toLocaleString()}
+              </span>
+            </span>
+          )}
+          <button onClick={fetchPosture}
+            disabled={postureFetching || !apiConnectors.dlpApi.url.trim() || (apiStatus.dlpApi?.state !== 'ok' && !dlpPostureSummary)}
+            title={apiStatus.dlpApi?.state !== 'ok' && !dlpPostureSummary
+              ? 'Test the DLP REST API connection above before fetching posture data.'
+              : 'Pull deploy status, enabled policies, and aggregated incident telemetry.'}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded font-semibold transition-all"
+            style={{
+              fontSize: '11px',
+              background: postureFetching || !apiConnectors.dlpApi.url.trim() ? '#F1F5F9' : 'linear-gradient(135deg,#16A34A,#15803D)',
+              color: postureFetching || !apiConnectors.dlpApi.url.trim() ? '#94A3B8' : '#fff',
+              cursor: postureFetching || !apiConnectors.dlpApi.url.trim() ? 'not-allowed' : 'pointer',
+              border: '1px solid transparent',
+              boxShadow: postureFetching || !apiConnectors.dlpApi.url.trim() ? 'none' : '0 2px 8px rgba(22,163,74,0.3)',
+            }}>
+            {postureFetching
+              ? <><Loader size={11} className="animate-spin" /> Fetching…</>
+              : <><Play size={11} /> {dlpPostureSummary ? 'Refresh' : 'Fetch'}</>}
+          </button>
+        </div>
+
+        {postureError && (
+          <div className="mb-3 px-3 py-2 rounded-lg flex items-start gap-2"
+            style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}>
+            <XCircle size={13} style={{ color: '#DC2626', marginTop: 1, flexShrink: 0 }} />
+            <div style={{ fontSize: '11px', color: '#7F1D1D', lineHeight: 1.55, flex: 1, fontFamily: 'monospace' }}>
+              {postureError}
+            </div>
+          </div>
+        )}
+
+        {noneSelected && (
+          <div className="mb-3 px-3 py-2 rounded-lg flex items-start gap-2"
+            style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
+            <XCircle size={13} style={{ color: '#B58800', marginTop: 1, flexShrink: 0 }} />
+            <div style={{ fontSize: '11px', color: '#92400E', lineHeight: 1.55, flex: 1 }}>
+              No blocks selected — the Information Security Posture Dashboard section will be omitted from the report.
+            </div>
+          </div>
+        )}
+
+        {/* Block list, grouped by category */}
+        <div className="space-y-3">
+          {(['Overview', 'Incidents', 'Exfil Vectors', 'Org & Risk'] as const).map((groupName) => {
+            const blocks = groups[groupName] ?? [];
+            if (blocks.length === 0) return null;
+            const groupIds = blocks.map((b) => b.id);
+            const groupSelectedCount = groupIds.filter((id) => dlpPostureSections[id]).length;
+            const groupAllSelected = groupSelectedCount === groupIds.length;
+            return (
+              <div key={groupName} className="rounded-xl overflow-hidden"
+                style={{ border: '1.5px solid #E2E8F0' }}>
+                <div className="flex items-center gap-3 px-4 py-2.5"
+                  style={{ background: '#F8FAFC', borderBottom: '1px solid #EEF0F5' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: '#0F2952', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                    {groupName}
+                  </div>
+                  <span className="font-mono"
+                    style={{ fontSize: '10px', fontWeight: 600, color: '#94A3B8' }}>
+                    {groupSelectedCount}/{groupIds.length}
+                  </span>
+                  <div className="flex-1" />
+                  <button
+                    onClick={() => setDlpPostureSections(prev => {
+                      const target = !groupAllSelected;
+                      const next = { ...prev };
+                      for (const id of groupIds) next[id] = target;
+                      return next;
+                    })}
+                    style={{ fontSize: '10px', fontWeight: 600, color: '#475569', background: '#fff', border: '1px solid #E2E8F0', borderRadius: 4, padding: '2px 8px', cursor: 'pointer' }}>
+                    {groupAllSelected ? 'Clear' : 'Select all'}
+                  </button>
+                </div>
+                <div>
+                  {blocks.map((b, i) => {
+                    const checked = !!dlpPostureSections[b.id];
+                    const preview = blockPreview(b.id);
+                    const isLast = i === blocks.length - 1;
+                    return (
+                      <div key={b.id}
+                        style={{ borderBottom: isLast ? 'none' : '1px solid #F4F6FB', background: checked ? 'rgba(22,163,74,0.04)' : 'transparent' }}>
+                        <label className="flex items-start gap-3 px-4 py-2.5 cursor-pointer transition-all">
+                          <button onClick={(e) => { e.preventDefault(); setDlpPostureSections(prev => ({ ...prev, [b.id]: !checked })); }}
+                            aria-label={checked ? `Deselect ${b.title}` : `Select ${b.title}`}
+                            className="w-4 h-4 rounded flex items-center justify-center flex-shrink-0 mt-0.5"
+                            style={{ background: checked ? '#16A34A' : 'transparent', border: `2px solid ${checked ? '#16A34A' : '#CBD5E1'}`, cursor: 'pointer' }}>
+                            {checked && <Check size={10} color="#fff" strokeWidth={3} />}
+                          </button>
+                          <div className="flex-1 min-w-0"
+                            onClick={() => setDlpPostureSections(prev => ({ ...prev, [b.id]: !checked }))}>
+                            <div style={{ fontSize: '12px', fontWeight: checked ? 600 : 500, color: checked ? '#0F172A' : '#475569' }}>
+                              {b.title}
+                            </div>
+                            <div style={{ fontSize: '10.5px', color: '#94A3B8', marginTop: 2, lineHeight: 1.5 }}>
+                              {b.description}
+                            </div>
+                          </div>
+                          {preview && (
+                            <span className="font-mono flex-shrink-0"
+                              style={{ fontSize: '10px', color: '#475569', background: '#fff', border: '1px solid #E2E8F0', padding: '2px 8px', borderRadius: 4, marginTop: 2 }}>
+                              {preview}
+                            </span>
+                          )}
+                        </label>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        </>}
+      </div>
+        );
+      })()}
     </div>
   );
 }
@@ -1680,7 +2301,7 @@ export function Step3DataCollectors({
 const WINDOW_OPTIONS: number[] = [7, 14, 30, 60, 90, 100, 180, 365];
 
 function ReportRow({
-  report, group, selected, windowDays, runResult, isLast,
+  report, group, selected, windowDays, runResult, isLast, sqlReady,
   onToggle, onChangeWindow, onRun, onClear,
 }: {
   report: ReportDef;
@@ -1689,6 +2310,11 @@ function ReportRow({
   windowDays: number;
   runResult: ReportRunResult | undefined;
   isLast: boolean;
+  /* True only when the SQL Server connector is enabled AND has a non-empty
+     server host. Drives the per-row Run button — without a configured SQL
+     pool the request would fail at the companion anyway, so we surface the
+     prerequisite up front instead of waiting for the round-trip error. */
+  sqlReady: boolean;
   onToggle: () => void;
   onChangeWindow: (days: number) => void;
   onRun: () => void;
@@ -1696,6 +2322,7 @@ function ReportRow({
 }) {
   const running = runResult?.state === 'running';
   const hasResult = runResult && (runResult.state === 'ok' || runResult.state === 'error');
+  const disabled = running || !sqlReady;
   return (
     <div style={{ borderBottom: isLast ? 'none' : '1px solid #F4F6FB', background: selected ? `${group.color}06` : 'transparent' }}>
       <div className="flex items-center gap-3 px-4 py-2.5 transition-all">
@@ -1730,16 +2357,20 @@ function ReportRow({
         )}
 
         {/* Run button */}
-        <button onClick={onRun} disabled={running}
+        <button onClick={onRun} disabled={disabled}
           className="flex items-center gap-1.5 px-2.5 py-1 rounded font-semibold transition-all flex-shrink-0"
           style={{
             fontSize: '10.5px',
-            background: running ? '#F1F5F9' : runResult?.state === 'ok' ? '#DCFCE7' : runResult?.state === 'error' ? '#FEF2F2' : '#EFF6FF',
-            color: running ? '#94A3B8' : runResult?.state === 'ok' ? '#16A34A' : runResult?.state === 'error' ? '#DC2626' : '#2563EB',
-            border: `1px solid ${running ? '#E2E8F0' : runResult?.state === 'ok' ? '#BBF7D0' : runResult?.state === 'error' ? '#FECACA' : '#BFDBFE'}`,
-            cursor: running ? 'not-allowed' : 'pointer',
+            background: disabled ? '#F1F5F9' : runResult?.state === 'ok' ? '#DCFCE7' : runResult?.state === 'error' ? '#FEF2F2' : '#EFF6FF',
+            color:      disabled ? '#94A3B8' : runResult?.state === 'ok' ? '#16A34A' : runResult?.state === 'error' ? '#DC2626' : '#2563EB',
+            border: `1px solid ${disabled ? '#E2E8F0' : runResult?.state === 'ok' ? '#BBF7D0' : runResult?.state === 'error' ? '#FECACA' : '#BFDBFE'}`,
+            cursor: disabled ? 'not-allowed' : 'pointer',
           }}
-          title="Run this query against the connected SQL Server">
+          title={!sqlReady
+            ? 'Enable + configure the SQL Server connector above to run reports.'
+            : running
+              ? 'Query in progress…'
+              : 'Run this query against the connected SQL Server'}>
           {running ? <Loader size={10} className="animate-spin" /> : <Play size={10} />}
           {running ? 'Running…' : runResult?.state === 'ok' ? 'Re-run' : runResult?.state === 'error' ? 'Retry' : 'Run'}
         </button>

@@ -32,12 +32,16 @@ export const STEP_TITLES: Record<number, string> = {
 /* ─── Step visibility rules ──────────────────────────────────────────
    Maps step IDs to predicates that return TRUE when the step should be
    SKIPPED for the given product scope. Rules are keyed on `selectedProducts`
-   from Step 2 — e.g. the Endpoint Agent Analysis + Agent Compatibility
-   steps only matter when DLP is in scope.
+   from Step 2.
+     • Step 6 (Endpoint Agent Analysis — CSV ingest) is DLP-only — the CSV
+       only ships with DLP deployments.
+     • Step 7 (Agent Compatibility) runs for either DLP or Web; in Web-only
+       scope it falls back to the "Endpoint Agent (Hybrid Web)" installed
+       version from Step 4's Version & EoS list (no Step 6 CSV available).
    Add new entries here when a future step becomes product-conditional. */
 const STEP_SKIP_RULES: Partial<Record<number, (sp: Record<string, boolean>) => boolean>> = {
   6: (sp) => !sp.data,
-  7: (sp) => !sp.data,
+  7: (sp) => !sp.data && !sp.web,
 };
 
 export function isStepSkipped(stepId: number, selectedProducts: Record<string, boolean>): boolean {

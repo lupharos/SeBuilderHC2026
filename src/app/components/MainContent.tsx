@@ -33,6 +33,8 @@ import type { DlpServerBundle } from './steps/dlpServerInfoParser';
 import type { ParsedCertificate } from './steps/certificateParser';
 import type { EndpointAgentSummary } from './steps/endpointAgentParser';
 import type { DlpDashboardSummary } from './steps/dlpDashboardParser';
+import type { DlpPostureSummary, DlpPostureBlockId, DestinationPatterns } from './steps/dlpPosture';
+import type { CustomerConnectorConfig } from './steps/customerConnector';
 
 interface MainContentProps {
   currentStep: number;
@@ -76,6 +78,13 @@ interface MainContentProps {
   setEndpointAgentSummary: React.Dispatch<React.SetStateAction<EndpointAgentSummary | null>>;
   dlpDashboardSummary: DlpDashboardSummary | null;
   setDlpDashboardSummary: React.Dispatch<React.SetStateAction<DlpDashboardSummary | null>>;
+  dlpPostureSummary: DlpPostureSummary | null;
+  setDlpPostureSummary: React.Dispatch<React.SetStateAction<DlpPostureSummary | null>>;
+  dlpPostureSections: Record<DlpPostureBlockId, boolean>;
+  setDlpPostureSections: React.Dispatch<React.SetStateAction<Record<DlpPostureBlockId, boolean>>>;
+  destinationPatterns: DestinationPatterns;
+  customerConnector: CustomerConnectorConfig;
+  setCustomerConnector: React.Dispatch<React.SetStateAction<CustomerConnectorConfig>>;
   customerLogo: string | null;
   setCustomerLogo: React.Dispatch<React.SetStateAction<string | null>>;
   complianceFrameworks: ComplianceFrameworkItem[];
@@ -113,6 +122,10 @@ export function MainContent({
   licenseGaps, setLicenseGaps,
   endpointAgentSummary, setEndpointAgentSummary,
   dlpDashboardSummary, setDlpDashboardSummary,
+  dlpPostureSummary, setDlpPostureSummary,
+  dlpPostureSections, setDlpPostureSections,
+  destinationPatterns,
+  customerConnector, setCustomerConnector,
   customerLogo, setCustomerLogo,
   complianceFrameworks, setComplianceFrameworks,
   enhancementOverrides, setEnhancementOverrides,
@@ -128,7 +141,7 @@ export function MainContent({
         <div className="px-8 py-6 pb-10 w-full">
           {currentStep === 1  && <Step1CustomerInfo sessionData={sessionData} updateSessionData={updateSessionData} versionData={versionData} complianceFrameworks={complianceFrameworks} setComplianceFrameworks={setComplianceFrameworks} />}
           {currentStep === 2  && <Step2ProductScope selectedProducts={selectedProducts} setSelectedProducts={setSelectedProducts} />}
-          {currentStep === 3  && <Step3DataCollectors sqlConfig={sqlConfig} setSqlConfig={setSqlConfig} apiConnectors={apiConnectors} setApiConnectors={setApiConnectors} selectedReports={selectedReports} setSelectedReports={setSelectedReports} reportWindows={reportWindows} setReportWindows={setReportWindows} reportRuns={reportRuns} setReportRuns={setReportRuns} selectedProducts={selectedProducts} dlpBundles={dlpBundles} setDlpBundles={setDlpBundles} dlpDashboardSummary={dlpDashboardSummary} setDlpDashboardSummary={setDlpDashboardSummary} />}
+          {currentStep === 3  && <Step3DataCollectors sqlConfig={sqlConfig} setSqlConfig={setSqlConfig} apiConnectors={apiConnectors} setApiConnectors={setApiConnectors} selectedReports={selectedReports} setSelectedReports={setSelectedReports} reportWindows={reportWindows} setReportWindows={setReportWindows} reportRuns={reportRuns} setReportRuns={setReportRuns} selectedProducts={selectedProducts} dlpBundles={dlpBundles} setDlpBundles={setDlpBundles} dlpDashboardSummary={dlpDashboardSummary} setDlpDashboardSummary={setDlpDashboardSummary} dlpPostureSummary={dlpPostureSummary} setDlpPostureSummary={setDlpPostureSummary} dlpPostureSections={dlpPostureSections} setDlpPostureSections={setDlpPostureSections} destinationPatterns={destinationPatterns} customerConnector={customerConnector} setCustomerConnector={setCustomerConnector} />}
           {currentStep === 4  && <Step4VersionCheck selectedProducts={selectedProducts} versionData={versionData} versionEntries={versionEntries} onVersionEntriesChange={onVersionEntriesChange} dlpBundles={dlpBundles} />}
           {currentStep === 5  && <StepServerDetails servers={serverDetails} setServers={setServerDetails} dlpBundles={dlpBundles} />}
           {currentStep === 6  && <StepEndpointAgentAnalysis summary={endpointAgentSummary} setSummary={setEndpointAgentSummary} />}
@@ -140,6 +153,8 @@ export function MainContent({
               setAssessment={setEndpointCompatAssessment}
               matrix={endpointMatrix}
               endpointAgentSummary={endpointAgentSummary}
+              versionEntries={versionEntries}
+              selectedProducts={selectedProducts}
             />
           )}
           {currentStep === 8  && (
@@ -209,6 +224,8 @@ export function MainContent({
               licenseGaps={licenseGaps}
               endpointAgentSummary={endpointAgentSummary}
               dlpDashboardSummary={dlpDashboardSummary}
+              dlpPostureSummary={dlpPostureSummary}
+              dlpPostureSections={dlpPostureSections}
               customerLogo={customerLogo}
               setCustomerLogo={setCustomerLogo}
               complianceFrameworks={complianceFrameworks}

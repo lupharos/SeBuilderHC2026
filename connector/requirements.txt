@@ -1,0 +1,10 @@
+# Forcepoint HC Customer Connector — minimal runtime dependencies.
+# Pinned to known-stable versions so the PyInstaller .exe is reproducible.
+
+requests==2.32.3
+urllib3==2.2.3
+certifi==2024.8.30
+
+# Build tool (not bundled into the .exe itself; install on the build host).
+# Uncomment if you want one-liner setup:
+# pyinstaller==6.10.0
