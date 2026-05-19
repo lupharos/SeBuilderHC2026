@@ -26,10 +26,12 @@ export interface CustomerConnectorConfig {
       plaintext over the wire — the wizard sends it once via the
       operator-driven `connector.json` download. */
   encryptionKey: string;
-  /** Base URL the connector phones home to. Defaults to the local
-      companion ("http://localhost:3001") for dev; an SE deploying to a
-      customer site would replace this with the hosted HC companion's
-      public endpoint. */
+  /** Base URL the customer's connector phones home to. This is the
+      public address of the nginx gateway in front of the HC companion
+      (e.g. `https://hc.forcepoint-se.com`). nginx handles the
+      `/api/connector/heartbeat` route and proxies it to the loopback
+      companion. The SE fills this in per engagement; left blank by
+      default so a forgotten value is obvious in the bundle. */
   hcEndpoint: string;
 }
 
@@ -38,7 +40,7 @@ export const DEFAULT_CUSTOMER_CONNECTOR: CustomerConnectorConfig = {
   token: '',
   allowedSourceIp: '',
   encryptionKey: '',
-  hcEndpoint: 'http://localhost:3001',
+  hcEndpoint: '',
 };
 
 /* Cryptographically-random 256-bit hex string. Generated via the Web
@@ -69,7 +71,7 @@ export interface CustomerConnectorStatus {
 export async function fetchConnectorStatus(token: string, signal?: AbortSignal): Promise<CustomerConnectorStatus | null> {
   if (!token) return null;
   try {
-    const res = await fetch(`http://localhost:3001/api/connector/status?token=${encodeURIComponent(token)}`, {
+    const res = await fetch(`/api/connector/status?token=${encodeURIComponent(token)}`, {
       signal: signal ?? AbortSignal.timeout(4000),
     });
     if (!res.ok) return null;

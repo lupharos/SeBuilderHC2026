@@ -31,6 +31,18 @@ export default defineConfig({
     },
   },
 
+  /* Dev-server proxy — mirrors the production nginx routing rules so the
+     frontend can use relative URLs (/api/*, /health) in BOTH dev and prod.
+     `npm run dev` serves the SPA on :5173 and forwards /api + /health to
+     the local companion on :3001. In production, nginx does the same job.
+     Frontend code never needs to know which environment it's in. */
+  server: {
+    proxy: {
+      '/api':    { target: 'http://localhost:3001', changeOrigin: true },
+      '/health': { target: 'http://localhost:3001', changeOrigin: true },
+    },
+  },
+
   // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
   assetsInclude: ['**/*.svg', '**/*.csv'],
 

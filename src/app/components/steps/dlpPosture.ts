@@ -243,7 +243,7 @@ export async function fetchDlpPosture(
   payload: DlpPostureFetchPayload,
   signal?: AbortSignal,
 ): Promise<DlpPostureSummary> {
-  const res = await fetch('http://localhost:3001/api/dlp/posture', {
+  const res = await fetch('/api/dlp/posture', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),

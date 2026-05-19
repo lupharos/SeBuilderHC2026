@@ -112,7 +112,7 @@ const PRODUCT_MAP: Record<string, 'web' | 'dlp' | 'email'> = {
 
 async function runTest(endpoint: string, payload: unknown): Promise<ConnStatus> {
   try {
-    const res = await fetch(`http://localhost:3001${endpoint}`, {
+    const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -963,7 +963,7 @@ export function Step3DataCollectors({
     const id = reportIdBySqlKey(sqlKey);
     setReportRuns((prev) => ({ ...prev, [id]: { state: 'running', windowDays } }));
     try {
-      const res = await fetch('http://localhost:3001/api/sql/query', {
+      const res = await fetch('/api/sql/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...sqlConfig, sqlKey, windowDays, topN }),
