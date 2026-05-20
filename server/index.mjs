@@ -712,8 +712,17 @@ app.post('/api/dlp/posture', async (req, res) => {
    connector will phone home again within its heartbeat interval.
 ───────────────────────────────────────────────────────────────── */
 
-/** @type {Map<string, {firstSeen: string, lastSeen: string, lastIp: string|null, total: number, version: string|null}>} */
+/** @type {Map<string, {firstSeen: string, lastSeen: string, lastIp: string|null, total: number, version: string|null, rejected: number, lastRejectedAt: string|null, lastRejectedIp: string|null}>} */
 const connectorState = new Map();
+
+/* Per-token IP allowlist — populated by the wizard's
+   `/api/connector/register` call. Empty / absent means "any IP". A
+   non-empty value can be a single IP (`213.74.55.10`) or CIDR
+   (`213.74.55.0/24`). The heartbeat handler enforces this strictly:
+   non-matching beats are rejected with 403 and counted under
+   `connectorState[token].rejected`. */
+/** @type {Map<string, string>} */
+const connectorAllowlist = new Map();
 
 /* Heartbeat freshness window. The connector beats every 30s; we treat
    anything < 90s as ONLINE so a single missed beat doesn't flap. */
@@ -721,29 +730,122 @@ const CONNECTOR_ONLINE_WINDOW_MS = 90 * 1000;
 
 function clientIp(req) {
   const xff = req.headers['x-forwarded-for'];
-  if (typeof xff === 'string' && xff.length > 0) return xff.split(',')[0].trim();
-  return req.ip || req.socket?.remoteAddress || null;
+  let ip = (typeof xff === 'string' && xff.length > 0)
+    ? xff.split(',')[0].trim()
+    : (req.ip || req.socket?.remoteAddress || null);
+  /* IPv4-mapped IPv6 addresses come through Node as `::ffff:1.2.3.4`.
+     Strip the prefix so allowlist comparisons against plain IPv4
+     entries work as the operator typed them. */
+  if (typeof ip === 'string' && ip.startsWith('::ffff:')) ip = ip.slice(7);
+  return ip;
 }
+
+/* IPv4 + CIDR matcher. Returns true when `allowed` is empty (no
+   restriction), or when `clientIp` matches the literal IP or falls
+   inside the CIDR block. IPv6 support is best-effort — exact-match
+   only; CIDR for v6 returns false. */
+function ipv4ToInt(ip) {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return null;
+  let n = 0;
+  for (const p of parts) {
+    const o = Number(p);
+    if (!Number.isInteger(o) || o < 0 || o > 255) return null;
+    n = (n * 256) + o;
+  }
+  return n >>> 0; /* unsigned */
+}
+
+function ipMatchesAllowlist(clientIpStr, allowed) {
+  if (!allowed || !clientIpStr) return true;
+  const allowedTrim = allowed.trim();
+  if (!allowedTrim) return true;
+
+  /* IPv4 / CIDR fast path */
+  if (allowedTrim.includes('/')) {
+    const [base, prefixStr] = allowedTrim.split('/');
+    const prefix = Number(prefixStr);
+    if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) return false;
+    const baseInt = ipv4ToInt(base);
+    const clientInt = ipv4ToInt(clientIpStr);
+    if (baseInt === null || clientInt === null) return false;
+    if (prefix === 0) return true; /* 0.0.0.0/0 — wildcard */
+    const mask = (~0 << (32 - prefix)) >>> 0;
+    return (baseInt & mask) === (clientInt & mask);
+  }
+  return allowedTrim === clientIpStr;
+}
+
+/* POST /api/connector/register
+   Body: { token: string, allowedSourceIp?: string }
+   The wizard calls this whenever the operator sets / changes the
+   token or the allowed-source-IP. Companion stores the allowlist
+   per-token in memory; subsequent heartbeats are validated against
+   it. Empty `allowedSourceIp` clears the restriction for that token.
+
+   Idempotent — safe to re-call after a wizard refresh or server
+   restart (the companion's in-memory map is wiped on restart, so the
+   wizard re-pushes the allowlist on every page open). */
+app.post('/api/connector/register', (req, res) => {
+  const { token, allowedSourceIp } = req.body ?? {};
+  if (!token || typeof token !== 'string') {
+    return res.status(400).json({ ok: false, message: 'Missing token.' });
+  }
+  const ip = typeof allowedSourceIp === 'string' ? allowedSourceIp.trim() : '';
+  if (ip) connectorAllowlist.set(token, ip);
+  else    connectorAllowlist.delete(token);
+  res.json({ ok: true, token: token.slice(0, 8) + '…', allowedSourceIp: ip || null });
+});
 
 /* POST /api/connector/heartbeat
    Body: { token: string, version?: string, encrypted?: string }
-   Connector calls this every 30s. We record the timestamp + source IP
-   keyed on the token. `encrypted` is the AES-256-GCM job-result payload
-   when the connector has work to report back; for the bare heartbeat
-   it's absent. (Decryption + dispatch is iteration 2.) */
+   Connector calls this every 30s. Validates:
+     1. Token is non-empty.
+     2. Source IP matches the registered allowlist (if one exists).
+   On allowlist mismatch the heartbeat is REJECTED with 403; the
+   rejection is counted under connectorState so the wizard can show
+   "X rejected attempts from <wrong IP>" diagnostic info. */
 app.post('/api/connector/heartbeat', (req, res) => {
   const { token, version } = req.body ?? {};
   if (!token || typeof token !== 'string') {
     return res.status(400).json({ ok: false, message: 'Missing token.' });
   }
+  const ip = clientIp(req);
+  const allowed = connectorAllowlist.get(token) ?? '';
+  if (allowed && !ipMatchesAllowlist(ip, allowed)) {
+    /* Track the rejection so the wizard's status pill can surface
+       "wrong IP" attempts even though no successful heartbeat was
+       recorded. lastSeen / total stay untouched — the token is still
+       considered un-phoned-home as far as ONLINE/STALE is concerned. */
+    const nowIso = new Date().toISOString();
+    const prev = connectorState.get(token);
+    connectorState.set(token, {
+      firstSeen:        prev?.firstSeen        ?? nowIso,
+      lastSeen:         prev?.lastSeen         ?? nowIso,
+      lastIp:           prev?.lastIp           ?? null,
+      total:            prev?.total            ?? 0,
+      version:          prev?.version          ?? null,
+      rejected:        (prev?.rejected         ?? 0) + 1,
+      lastRejectedAt:   nowIso,
+      lastRejectedIp:   ip,
+    });
+    return res.status(403).json({
+      ok: false,
+      message: `Source IP ${ip} not in allowlist (${allowed}).`,
+    });
+  }
+
   const nowIso = new Date().toISOString();
   const prev = connectorState.get(token);
   connectorState.set(token, {
-    firstSeen: prev?.firstSeen ?? nowIso,
-    lastSeen: nowIso,
-    lastIp: clientIp(req),
-    total: (prev?.total ?? 0) + 1,
-    version: typeof version === 'string' ? version : (prev?.version ?? null),
+    firstSeen:      prev?.firstSeen      ?? nowIso,
+    lastSeen:       nowIso,
+    lastIp:         ip,
+    total:         (prev?.total          ?? 0) + 1,
+    version:        typeof version === 'string' ? version : (prev?.version ?? null),
+    rejected:       prev?.rejected       ?? 0,
+    lastRejectedAt: prev?.lastRejectedAt ?? null,
+    lastRejectedIp: prev?.lastRejectedIp ?? null,
   });
   res.json({ ok: true, recordedAt: nowIso });
 });
@@ -756,6 +858,7 @@ app.get('/api/connector/status', (req, res) => {
     return res.status(400).json({ ok: false, message: 'Missing token.' });
   }
   const st = connectorState.get(token);
+  const allowed = connectorAllowlist.get(token) ?? null;
   if (!st) {
     /* Connector never phoned home — return the empty shape so the wizard
        still has a valid object to render. */
@@ -766,16 +869,28 @@ app.get('/api/connector/status', (req, res) => {
       lastSourceIp: null,
       totalHeartbeats: 0,
       connectorVersion: null,
+      registeredAllowedSourceIp: allowed,
+      rejectedAttempts: 0,
+      lastRejectedAt: null,
+      lastRejectedIp: null,
     });
   }
+  /* `lastSeen` may be a stale placeholder if only rejections have
+     been recorded — only count online when at least one accepted
+     heartbeat exists (total > 0) AND it's fresh. */
   const ageMs = Date.now() - new Date(st.lastSeen).getTime();
+  const online = st.total > 0 && ageMs < CONNECTOR_ONLINE_WINDOW_MS;
   res.json({
-    online: ageMs < CONNECTOR_ONLINE_WINDOW_MS,
-    lastHeartbeatAt: st.lastSeen,
-    secondsSinceLastHeartbeat: Math.floor(ageMs / 1000),
+    online,
+    lastHeartbeatAt: st.total > 0 ? st.lastSeen : null,
+    secondsSinceLastHeartbeat: st.total > 0 ? Math.floor(ageMs / 1000) : Number.POSITIVE_INFINITY,
     lastSourceIp: st.lastIp,
     totalHeartbeats: st.total,
     connectorVersion: st.version,
+    registeredAllowedSourceIp: allowed,
+    rejectedAttempts: st.rejected ?? 0,
+    lastRejectedAt: st.lastRejectedAt ?? null,
+    lastRejectedIp: st.lastRejectedIp ?? null,
   });
 });
 
@@ -808,6 +923,8 @@ app.listen(PORT, HOST, () => {
   console.log('  POST /api/dlp/test       — DLP REST API connection test');
   // eslint-disable-next-line no-console
   console.log('  POST /api/dlp/posture    — fetch Information Security Posture summary');
+  // eslint-disable-next-line no-console
+  console.log('  POST /api/connector/register  — register per-token IP allowlist');
   // eslint-disable-next-line no-console
   console.log('  POST /api/connector/heartbeat — Customer Connector ping-in');
   // eslint-disable-next-line no-console

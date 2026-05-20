@@ -4,7 +4,7 @@ import { REPORT_GROUPS, type ReportRunResult, type ReportDef } from '../../const
 import { parseDlpBundle, formatMemoryGB, memoryUsagePct, statusColor, type DlpServerBundle, type UploadedFile } from './dlpServerInfoParser';
 import { parseDlpDashboardPdf, type DlpDashboardSummary } from './dlpDashboardParser';
 import { fetchDlpPosture, type DlpPostureSummary, type DlpPostureBlockId, type DestinationPatterns, DLP_POSTURE_BLOCKS, ALL_POSTURE_BLOCK_IDS, formatBytes } from './dlpPosture';
-import { type CustomerConnectorConfig, type CustomerConnectorStatus, randomHex256, fetchConnectorStatus, buildConnectorBundle } from './customerConnector';
+import { type CustomerConnectorConfig, type CustomerConnectorStatus, randomHex256, fetchConnectorStatus, buildConnectorBundle, registerConnectorAllowlist } from './customerConnector';
 import { Key, Plug, RefreshCw, Activity, Globe2 } from 'lucide-react';
 
 // ── SQL Server config ────────────────────────────────────────────────────────
@@ -769,6 +769,29 @@ export function Step3DataCollectors({
     return () => { cancelled = true; clearInterval(id); };
   }, [customerConnector.enabled, customerConnector.token]);
 
+  /* Push the IP allowlist to the companion whenever the token or the
+     allowed IP changes. Also re-pushes on every 60s heartbeat so a
+     companion restart doesn't leave us with a stale allowlist that
+     would silently let any IP through. The empty string case clears
+     the rule. */
+  useEffect(() => {
+    if (!customerConnector.enabled || !customerConnector.token) return;
+    let cancelled = false;
+    const push = () => {
+      if (cancelled) return;
+      void registerConnectorAllowlist(
+        customerConnector.token,
+        customerConnector.allowedSourceIp || '',
+      );
+    };
+    push();
+    /* Re-push every 60s — companion in-memory state is cleared on
+       restart, so this is the cheapest way to converge after an
+       outage without operator intervention. */
+    const id = setInterval(push, 60000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [customerConnector.enabled, customerConnector.token, customerConnector.allowedSourceIp]);
+
   /* Auto-mint token + AES-256 key the first time the operator flips the
      Customer Connector switch on with empty fields. They can rotate
      either via the inline regenerate buttons later. */
@@ -1166,6 +1189,36 @@ export function Step3DataCollectors({
                     {readyCount}/{readyTotal} ready
                   </span>
                 </div>
+
+                {/* Rejection banner — surfaces when the server has
+                    refused one or more heartbeats due to allowlist
+                    mismatch. SE sees the offending IP and can either
+                    correct allowedSourceIp or investigate why the
+                    connector is phoning home from an unexpected
+                    address. */}
+                {(st?.rejectedAttempts ?? 0) > 0 && (
+                  <div className="rounded-lg p-[10px_14px] flex items-start gap-3"
+                    style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderLeft: '3px solid #DC2626' }}>
+                    <XCircle size={14} style={{ color: '#DC2626', flexShrink: 0, marginTop: 1 }} />
+                    <div style={{ fontSize: '11.5px', color: '#7F1D1D', lineHeight: 1.55, flex: 1 }}>
+                      <strong>{st!.rejectedAttempts} heartbeat{st!.rejectedAttempts === 1 ? '' : 's'} rejected</strong>{' '}
+                      — source IP <span className="font-mono" style={{ background: '#fff', padding: '1px 5px', borderRadius: 3, border: '1px solid #FECACA' }}>{st!.lastRejectedIp || '?'}</span>
+                      {' '}didn't match the allowlist
+                      {st!.registeredAllowedSourceIp && (
+                        <> (<span className="font-mono">{st!.registeredAllowedSourceIp}</span>)</>
+                      )}.
+                      {st!.lastRejectedAt && (
+                        <span style={{ color: '#94A3B8', marginLeft: 6 }}>
+                          last attempt {new Date(st!.lastRejectedAt).toLocaleTimeString()}
+                        </span>
+                      )}
+                      <div style={{ fontSize: '10.5px', color: '#9F1239', marginTop: 4 }}>
+                        Either update <strong>ALLOWED SOURCE IP / CIDR</strong> below to the real outbound IP,
+                        or investigate why the connector is phoning home from <span className="font-mono">{st!.lastRejectedIp}</span>.
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* HC endpoint + IP allowlist */}
                 <div className="grid grid-cols-2 gap-3">

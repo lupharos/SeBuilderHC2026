@@ -66,6 +66,17 @@ export interface CustomerConnectorStatus {
   totalHeartbeats: number;
   /** Connector self-reported version string (sent in heartbeat body). */
   connectorVersion: string | null;
+  /** Allowlist value the server is currently enforcing for this token —
+      mirrors what the wizard pushed via /api/connector/register. */
+  registeredAllowedSourceIp?: string | null;
+  /** Count of heartbeats the server rejected because the source IP
+      didn't match the registered allowlist. */
+  rejectedAttempts?: number;
+  /** Timestamp of the most recent rejection (ISO). */
+  lastRejectedAt?: string | null;
+  /** Source IP of the most recent rejected attempt — surfaced to the
+      operator so they can correct the allowlist if it's wrong. */
+  lastRejectedIp?: string | null;
 }
 
 export async function fetchConnectorStatus(token: string, signal?: AbortSignal): Promise<CustomerConnectorStatus | null> {
@@ -78,6 +89,30 @@ export async function fetchConnectorStatus(token: string, signal?: AbortSignal):
     return (await res.json()) as CustomerConnectorStatus;
   } catch {
     return null;
+  }
+}
+
+/* Push the current per-token IP allowlist to the companion. The
+   wizard calls this whenever the token or allowedSourceIp changes —
+   and again on mount, in case the companion was restarted and lost
+   its in-memory allowlist. Empty `allowedSourceIp` clears the rule
+   (no restriction). */
+export async function registerConnectorAllowlist(
+  token: string,
+  allowedSourceIp: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (!token) return false;
+  try {
+    const res = await fetch('/api/connector/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, allowedSourceIp }),
+      signal: signal ?? AbortSignal.timeout(4000),
+    });
+    return res.ok;
+  } catch {
+    return false;
   }
 }
 

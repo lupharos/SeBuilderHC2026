@@ -63,6 +63,15 @@ The script detects the existing checkout and performs a `git pull` instead of re
 
 ---
 
+## update server
+cd ~/SeBuilderHC2026 && git pull
+
+## Output
+----
+student@ubuntu-2204:~/SeBuilderHC2026$ cd ~/SeBuilderHC2026 && git pull
+Already up to date.
+----
+
 ## Troubleshooting
 
 | Symptom | Check |
