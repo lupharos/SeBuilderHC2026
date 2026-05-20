@@ -770,18 +770,32 @@ export function Step3DataCollectors({
   }, [customerConnector.enabled, customerConnector.token]);
 
   /* Track the previously-registered token so we can deregister it on
-     the server when the operator rotates. Without this, an old token
-     stays valid forever — the deployed connector binary still has it
-     in connector.json and would keep phoning home successfully. */
+     the server when the operator rotates OR disables the connector.
+     Without this, an old token stays valid forever — the deployed
+     connector binary still has it in connector.json and would keep
+     phoning home successfully. */
   const previouslyRegisteredTokenRef = useRef<string>('');
 
   /* Push the IP allowlist to the companion whenever the token or the
-     allowed IP changes. On token rotation, first deregister the old
-     token (cuts off any deployed connector still using it), then
-     register the new one. Also re-pushes every 60s so a companion
-     restart doesn't leave us with a stale allowlist. */
+     allowed IP changes. Three scenarios this handles:
+       1. Disabled (or no token yet)  → deregister previous token so
+          a deployed connector loses its server session.
+       2. Token rotated               → deregister old, register new.
+       3. Allowlist IP changed        → re-register (overwrites old).
+     Also re-pushes every 60s so a companion restart doesn't leave us
+     with a stale allowlist. */
   useEffect(() => {
-    if (!customerConnector.enabled || !customerConnector.token) return;
+    if (!customerConnector.enabled || !customerConnector.token) {
+      /* Connector turned OFF (or no token). If we had previously
+         registered a token, deregister it now so the wizard's "off"
+         state matches what the server enforces. */
+      const prev = previouslyRegisteredTokenRef.current;
+      if (prev) {
+        void deregisterConnectorToken(prev);
+        previouslyRegisteredTokenRef.current = '';
+      }
+      return;
+    }
     let cancelled = false;
     const sync = async () => {
       if (cancelled) return;

@@ -792,8 +792,12 @@ app.post('/api/connector/register', (req, res) => {
     return res.status(400).json({ ok: false, message: 'Missing token.' });
   }
   const ip = typeof allowedSourceIp === 'string' ? allowedSourceIp.trim() : '';
-  if (ip) connectorAllowlist.set(token, ip);
-  else    connectorAllowlist.delete(token);
+  /* Always set the token in the allowlist — empty IP means "registered
+     with no IP restriction" (any source IP accepted). The HEARTBEAT
+     handler treats absence-from-the-map as "not registered → reject",
+     so a registered-with-empty-IP entry is the way to whitelist a
+     token without locking it to a specific IP. */
+  connectorAllowlist.set(token, ip);
   res.json({ ok: true, token: token.slice(0, 8) + '…', allowedSourceIp: ip || null });
 });
 
@@ -833,18 +837,33 @@ app.post('/api/connector/deregister', (req, res) => {
 
 /* POST /api/connector/heartbeat
    Body: { token: string, version?: string, encrypted?: string }
-   Connector calls this every 30s. Validates:
-     1. Token is non-empty.
-     2. Source IP matches the registered allowlist (if one exists).
-   On allowlist mismatch the heartbeat is REJECTED with 403; the
-   rejection is counted under connectorState so the wizard can show
-   "X rejected attempts from <wrong IP>" diagnostic info. */
+   Connector calls this every 30s. Validates in this order:
+     1. Token is non-empty                          → 400 if missing
+     2. Token has been registered by the wizard     → 401 if unknown
+     3. Source IP matches the registered allowlist  → 403 if mismatch
+   The "registered token" requirement is the symmetry with the wizard:
+   if the wizard doesn't currently know about a token (operator never
+   set it, or rotated it, or disabled the connector entirely), the
+   server refuses heartbeats from it. Without this rule, any random
+   token would be silently accepted and a stale `connector.json` from
+   a previous engagement would keep working forever. */
 app.post('/api/connector/heartbeat', (req, res) => {
   const { token, version } = req.body ?? {};
   if (!token || typeof token !== 'string') {
     return res.status(400).json({ ok: false, message: 'Missing token.' });
   }
   const ip = clientIp(req);
+
+  /* Whitelist check — token MUST have been registered via
+     /api/connector/register first. Otherwise reject with 401 and
+     don't pollute connectorState with random-token entries. */
+  if (!connectorAllowlist.has(token)) {
+    return res.status(401).json({
+      ok: false,
+      message: 'Token not registered with this server. The wizard must register the token before heartbeats are accepted.',
+    });
+  }
+
   const allowed = connectorAllowlist.get(token) ?? '';
   if (allowed && !ipMatchesAllowlist(ip, allowed)) {
     /* Track the rejection so the wizard's status pill can surface

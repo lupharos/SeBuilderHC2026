@@ -236,22 +236,27 @@ def heartbeat_loop(cfg: dict, hostname: str, local_ip: str, stop: threading.Even
                 ok += 1
                 consecutive_fail = 0
                 print(f"[{ts}] OK    heartbeat #{ok}  ({latency_ms:.0f}ms)")
-            elif r.status_code == 403:
-                # Allowlist rejection — the companion has an
-                # `allowedSourceIp` registered for this token that
-                # doesn't match where we're phoning home from.
-                # Re-format the server message so the customer admin
-                # can read it without parsing JSON. Body shape:
-                # {"ok":false,"message":"Source IP X not in allowlist (Y)."}
+            elif r.status_code in (401, 403):
+                # Explicit server-side rejection — either the token
+                # isn't registered with the wizard (401) or the
+                # source IP doesn't match the allowlist (403). Pull
+                # the server's human-readable message out of the
+                # JSON body and surface it cleanly.
                 fail += 1
                 consecutive_fail += 1
                 try:
                     msg = (r.json() or {}).get("message", "")
                 except Exception:
-                    msg = (r.text or "").strip().splitlines()[0:1]
-                    msg = msg[0] if msg else ""
-                print(f"[{ts}] REJECT  {msg or 'allowlist denied this source IP'}")
-                print( "           Ask the SE to update ALLOWED SOURCE IP / CIDR in the HC wizard.")
+                    msg_lines = (r.text or "").strip().splitlines()
+                    msg = msg_lines[0] if msg_lines else ""
+                kind = "UNREGISTERED" if r.status_code == 401 else "ALLOWLIST"
+                print(f"[{ts}] REJECT/{kind}  {msg or 'server refused this heartbeat'}")
+                if r.status_code == 401:
+                    print( "           The HC wizard does not currently recognise this token —")
+                    print( "           the SE may have rotated it, disabled the connector, or")
+                    print( "           revoked access. Ask for an updated connector.json.")
+                else:
+                    print( "           Ask the SE to update ALLOWED SOURCE IP / CIDR in the HC wizard.")
             else:
                 fail += 1
                 consecutive_fail += 1
@@ -284,7 +289,8 @@ def heartbeat_loop(cfg: dict, hostname: str, local_ip: str, stop: threading.Even
             print(f"[!] {consecutive_fail} consecutive failures. Check:")
             print(f"    - Is the HC endpoint URL correct?  ({endpoint})")
             print(f"    - Is outbound HTTPS allowed from this host?")
-            print(f"    - Is the token expired or rotated?  (regenerate in HC wizard)")
+            print(f"    - Is the HC wizard open AND showing this token as enabled?")
+            print(f"      (server only accepts heartbeats for currently-registered tokens)")
             print(f"    - Is the ALLOWED SOURCE IP / CIDR set in the HC wizard")
             print(f"      matching this host's outbound IP?  (REJECT messages above")
             print(f"      include the IP the companion actually saw)")
