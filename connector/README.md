@@ -18,22 +18,49 @@ done.
 
 ## What the SE ships to the customer
 
-Two files in the same folder:
+Two files from the SE, **plus one file the customer admin fills in**:
 
 ```
 fsm-host/forcepoint-hc/
-├── forcepoint-hc-connector.exe   ← the program (built from this folder)
-└── connector.json                ← per-engagement config bundle from the HC wizard
+├── forcepoint-hc-connector.exe         ← the program (built from this folder)
+├── connector.json                      ← per-engagement bundle (SE produces it)
+└── connector-secrets.json   (optional) ← SQL / DLP credentials (customer fills it in)
 ```
 
-The `connector.json` is produced by the HC wizard's **Step 3 → Customer
-Connector → Download connector.json** button. It contains:
+### `connector.json` — produced by SE
+
+Downloaded from HC wizard's **Step 3 → Customer Connector → Download
+connector.json**. Contains:
 
 - `hcEndpoint` — where the connector phones home
 - `token` — unique 256-bit random identifier
-- `encryptionKeyHex` — AES-256-GCM key (used by later iterations for job payloads)
+- `encryptionKeyHex` — AES-256-GCM key (used by iteration 2 for job payloads)
 - `allowedSourceIp` — optional IP/CIDR the HC companion validates against
 - `heartbeatIntervalSeconds` — usually 30
+
+**No customer credentials in this file.** Safe for the SE to email,
+upload to a shared drive, or paste into a ticket.
+
+### `connector-secrets.json` — filled in by customer admin
+
+Optional file. Copy `connector-secrets.json.template` (shipped beside
+the .exe), rename to `connector-secrets.json`, and fill in the SQL +
+DLP REST API credentials. These never leave the customer host:
+
+- The SE never sees them — they're not in `connector.json`.
+- They are not transmitted over the network.
+- They live only on this FSM host, readable by the user who launched
+  the .exe.
+
+When iteration 2 of the connector lands (SQL query / DLP REST API job
+dispatch from the HC wizard), the connector uses these credentials
+locally to talk to SQL Server / FSM. Until then, the file is loaded +
+validated at startup but only used by heartbeat-mode for the console
+banner.
+
+If the file is **absent**, the connector runs in heartbeat-only mode
+— no SQL / DLP queries will succeed. This is the safe default for
+engagements where credentials haven't been provisioned yet.
 
 The customer admin does **not** need Python, pip, or anything else
 installed.

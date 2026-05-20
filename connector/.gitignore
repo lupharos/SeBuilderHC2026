@@ -8,3 +8,8 @@ venv/
 
 # Connector engagement bundle — never check in, contains a per-customer token.
 connector.json
+
+# Customer-side secrets — SQL + DLP REST API credentials.
+# This file is filled in by the customer admin on the FSM host and
+# must NEVER be committed. The .template file in the repo is safe.
+connector-secrets.json

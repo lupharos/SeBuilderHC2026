@@ -122,6 +122,92 @@ def load_config(install_dir: str) -> tuple[dict, str]:
 
 
 # ─────────────────────────────────────────────────────────────────────
+#   Local secrets — SQL + DLP REST API credentials
+# ─────────────────────────────────────────────────────────────────────
+#
+# `connector-secrets.json` lives next to the .exe and is filled in by
+# the CUSTOMER ADMIN — NEVER by the SE, never transmitted over the
+# network. The connector loads it once at startup and keeps the values
+# in memory. When iteration 2 lands (job dispatch from HC), SQL queries
+# and DLP REST API calls will use these locally-stored credentials.
+#
+# Two-file split is deliberate:
+#   connector.json          — SE produces, contains token + AES key +
+#                             HC endpoint (no customer secrets)
+#   connector-secrets.json  — customer admin produces, contains SQL +
+#                             DLP credentials (never leaves this host)
+#
+# The secrets file is OPTIONAL — without it the connector runs in
+# heartbeat-only mode (current behaviour).
+
+SECRETS_FORMAT = "forcepoint-hc-customer-connector-secrets"
+
+
+def load_secrets(install_dir: str) -> tuple[dict | None, str | None]:
+    """Locate and parse connector-secrets.json if present.
+
+    Returns (secrets_dict, file_path) when found and valid, or
+    (None, None) when the file is absent. Validation errors are fatal
+    — same fail-closed pattern as connector.json so a misformatted
+    file doesn't get silently ignored.
+    """
+    secrets_path = os.path.join(install_dir, "connector-secrets.json")
+    if not os.path.exists(secrets_path):
+        return None, None
+
+    try:
+        with open(secrets_path, "r", encoding="utf-8") as fh:
+            sec = json.load(fh)
+    except (OSError, json.JSONDecodeError) as e:
+        die(f"connector-secrets.json could not be read: {e}", code=2)
+
+    if sec.get("_format") != SECRETS_FORMAT:
+        die(
+            "connector-secrets.json _format mismatch — expected",
+            f"\"{SECRETS_FORMAT}\". Drop the template file beside the .exe",
+            "and fill it in. See README.md.",
+            code=2,
+        )
+
+    # Both sub-sections are optional; an empty file is allowed (gives
+    # the customer admin a way to ship the file without any creds yet
+    # while iteration 2 ramps up).
+    sec.setdefault("sql", None)
+    sec.setdefault("dlpApi", None)
+    return sec, secrets_path
+
+
+def describe_secrets(secrets: dict | None) -> list[str]:
+    """Format a human-readable summary of the loaded credentials for
+    the startup banner. Always masks passwords and API keys."""
+    if not secrets:
+        return ["Local credentials:   — connector-secrets.json not present —",
+                "                     (heartbeat-only mode; SQL / DLP queries will be rejected)"]
+    lines: list[str] = ["Local credentials:"]
+    sql = secrets.get("sql") or {}
+    if sql:
+        mode = sql.get("authMode", "sql")
+        srv = sql.get("server", "?")
+        port = sql.get("port", 1433)
+        db = sql.get("database", "?")
+        if mode == "windows":
+            lines.append(f"  SQL:               windows auth · {srv}:{port}/{db}")
+        else:
+            user = sql.get("username", "?")
+            lines.append(f"  SQL:               sql auth · {srv}:{port}/{db}  user={user}  pass={mask(sql.get('password',''))}")
+    else:
+        lines.append("  SQL:               — not configured —")
+    api = secrets.get("dlpApi") or {}
+    if api:
+        url = api.get("url", "?")
+        user = api.get("username", "?")
+        lines.append(f"  DLP REST API:      {url}  user={user}  pass={mask(api.get('password',''))}")
+    else:
+        lines.append("  DLP REST API:      — not configured —")
+    return lines
+
+
+# ─────────────────────────────────────────────────────────────────────
 #   Display helpers
 # ─────────────────────────────────────────────────────────────────────
 
@@ -312,12 +398,15 @@ def main() -> int:
 
     install_dir = get_install_dir()
     cfg, config_path = load_config(install_dir)
+    secrets, secrets_path = load_secrets(install_dir)
 
     hostname, local_ip = local_identity()
 
     # ── Sanitised banner — secrets masked ───────────────────────────
     print(f"  Install dir:        {install_dir}")
     print(f"  Config file:        {config_path}")
+    if secrets_path:
+        print(f"  Secrets file:       {secrets_path}")
     print(f"  HC endpoint:        {cfg['hcEndpoint']}")
     print(f"  Token (masked):     {mask(cfg['token'])}")
     print(f"  AES key (masked):   {mask(cfg['encryptionKeyHex'])}")
@@ -327,6 +416,8 @@ def main() -> int:
     print(f"  Local host:         {hostname} ({local_ip})")
     if "--insecure" in sys.argv:
         print(f"  TLS verify:         NO (--insecure)")
+    for line in describe_secrets(secrets):
+        print(f"  {line}")
     print()
 
     # Sanity warning when the operator-declared allowed-source-IP doesn't
