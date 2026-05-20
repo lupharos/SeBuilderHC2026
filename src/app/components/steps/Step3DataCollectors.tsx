@@ -4,7 +4,7 @@ import { REPORT_GROUPS, type ReportRunResult, type ReportDef } from '../../const
 import { parseDlpBundle, formatMemoryGB, memoryUsagePct, statusColor, type DlpServerBundle, type UploadedFile } from './dlpServerInfoParser';
 import { parseDlpDashboardPdf, type DlpDashboardSummary } from './dlpDashboardParser';
 import { fetchDlpPosture, type DlpPostureSummary, type DlpPostureBlockId, type DestinationPatterns, DLP_POSTURE_BLOCKS, ALL_POSTURE_BLOCK_IDS, formatBytes } from './dlpPosture';
-import { type CustomerConnectorConfig, type CustomerConnectorStatus, randomHex256, fetchConnectorStatus, buildConnectorBundle, registerConnectorAllowlist } from './customerConnector';
+import { type CustomerConnectorConfig, type CustomerConnectorStatus, randomHex256, fetchConnectorStatus, buildConnectorBundle, registerConnectorAllowlist, deregisterConnectorToken } from './customerConnector';
 import { Key, Plug, RefreshCw, Activity, Globe2 } from 'lucide-react';
 
 // ── SQL Server config ────────────────────────────────────────────────────────
@@ -769,28 +769,64 @@ export function Step3DataCollectors({
     return () => { cancelled = true; clearInterval(id); };
   }, [customerConnector.enabled, customerConnector.token]);
 
+  /* Track the previously-registered token so we can deregister it on
+     the server when the operator rotates. Without this, an old token
+     stays valid forever — the deployed connector binary still has it
+     in connector.json and would keep phoning home successfully. */
+  const previouslyRegisteredTokenRef = useRef<string>('');
+
   /* Push the IP allowlist to the companion whenever the token or the
-     allowed IP changes. Also re-pushes on every 60s heartbeat so a
-     companion restart doesn't leave us with a stale allowlist that
-     would silently let any IP through. The empty string case clears
-     the rule. */
+     allowed IP changes. On token rotation, first deregister the old
+     token (cuts off any deployed connector still using it), then
+     register the new one. Also re-pushes every 60s so a companion
+     restart doesn't leave us with a stale allowlist. */
   useEffect(() => {
     if (!customerConnector.enabled || !customerConnector.token) return;
     let cancelled = false;
-    const push = () => {
+    const sync = async () => {
       if (cancelled) return;
-      void registerConnectorAllowlist(
-        customerConnector.token,
+      const prev = previouslyRegisteredTokenRef.current;
+      const next = customerConnector.token;
+      /* Token rotated since last sync — wipe server-side state for
+         the old token before registering the new one. */
+      if (prev && prev !== next) {
+        await deregisterConnectorToken(prev);
+      }
+      const ok = await registerConnectorAllowlist(
+        next,
         customerConnector.allowedSourceIp || '',
       );
+      if (ok) previouslyRegisteredTokenRef.current = next;
     };
-    push();
+    void sync();
     /* Re-push every 60s — companion in-memory state is cleared on
        restart, so this is the cheapest way to converge after an
        outage without operator intervention. */
-    const id = setInterval(push, 60000);
+    const id = setInterval(() => { void sync(); }, 60000);
     return () => { cancelled = true; clearInterval(id); };
   }, [customerConnector.enabled, customerConnector.token, customerConnector.allowedSourceIp]);
+
+  /* Manual revoke — clears server-side state for the current token
+     so a deployed connector loses its session. Status pill returns to
+     WAITING; new heartbeats start a fresh session unless the SE also
+     rotates the token + redeploys the bundle. */
+  const revokeConnectorAccess = async () => {
+    if (!customerConnector.token) return;
+    if (!confirm(
+      'Revoke this connector token on the server? '
+      + 'The deployed connector will keep phoning home but the server will '
+      + 'treat it as a brand-new session (allowlist re-applies on next register). '
+      + 'For a hard kill, also regenerate the token and re-deploy the bundle.'
+    )) return;
+    const ok = await deregisterConnectorToken(customerConnector.token);
+    if (!ok) {
+      alert('Revoke failed — server may be unreachable. Check the API health indicator.');
+    }
+    /* Force the status panel to immediately reflect the revoked state.
+       The 5s poll will refresh in a moment anyway. */
+    setConnectorStatus(null);
+    previouslyRegisteredTokenRef.current = '';
+  };
 
   /* Auto-mint token + AES-256 key the first time the operator flips the
      Customer Connector switch on with empty fields. They can rotate
@@ -1283,7 +1319,7 @@ export function Step3DataCollectors({
                   </div>
                 </div>
 
-                {/* Action row — download connector.json */}
+                {/* Action row — download connector.json + revoke */}
                 <div className="flex items-center gap-3 pt-2"
                   style={{ borderTop: '1px dashed #E2E8F0' }}>
                   <button onClick={downloadConnectorBundle}
@@ -1299,6 +1335,19 @@ export function Step3DataCollectors({
                     }}
                     title="Download the connector.json config the customer drops into the connector binary folder.">
                     <Key size={12} /> Download connector.json
+                  </button>
+                  <button onClick={revokeConnectorAccess}
+                    disabled={!tokenOk}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg font-semibold transition-all"
+                    style={{
+                      fontSize: '11.5px',
+                      background: '#FFFFFF',
+                      color: !tokenOk ? '#CBD5E1' : '#DC2626',
+                      border: `1.5px solid ${!tokenOk ? '#E2E8F0' : 'rgba(220,38,38,0.3)'}`,
+                      cursor: !tokenOk ? 'not-allowed' : 'pointer',
+                    }}
+                    title="Clear server-side state for this token — a deployed connector will lose its session.">
+                    <Trash2 size={12} /> Revoke access
                   </button>
                   <span style={{ fontSize: '10.5px', color: '#64748B', lineHeight: 1.5, flex: 1 }}>
                     The bundle contains the HC endpoint, token, AES-256-GCM key, and IP allowlist.

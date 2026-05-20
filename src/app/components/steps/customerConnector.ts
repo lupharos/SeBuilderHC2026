@@ -116,6 +116,34 @@ export async function registerConnectorAllowlist(
   }
 }
 
+/* Revoke a token on the server — wipes both the allowlist entry and
+   the liveness record. After this:
+     - Any heartbeat with the same token starts a fresh session.
+     - The wizard's status pill resets to WAITING.
+   Used in two paths:
+     1. Automatic — when the operator regenerates the token in the
+        wizard, the OLD token is deregistered before the new one is
+        registered, so the deployed connector (still using the old
+        token) loses its server-side record.
+     2. Manual — "Revoke connector access" button. */
+export async function deregisterConnectorToken(
+  token: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (!token) return false;
+  try {
+    const res = await fetch('/api/connector/deregister', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+      signal: signal ?? AbortSignal.timeout(4000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 /* Snapshot of the operator-visible connector config that gets exported
    to the customer's connector.json. Encryption key + token live here in
    plaintext; this file leaves the SE laptop only when handed to the

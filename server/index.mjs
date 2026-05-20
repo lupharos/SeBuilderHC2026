@@ -797,6 +797,40 @@ app.post('/api/connector/register', (req, res) => {
   res.json({ ok: true, token: token.slice(0, 8) + '…', allowedSourceIp: ip || null });
 });
 
+/* POST /api/connector/deregister
+   Body: { token: string }
+   Wipes ALL server-side state for the given token — both the
+   allowlist entry AND the heartbeat / liveness record. After
+   deregistration, any heartbeat arriving with that token will be
+   treated as a brand-new connector (no allowlist enforcement until
+   register is called again).
+
+   The wizard calls this in two scenarios:
+     (a) operator clicks "Regenerate token" → the OLD token is
+         deregistered before the new one gets pushed via /register.
+         Stops the deployed connector (still using the old token)
+         from continuing to phone home.
+     (b) operator clicks "Revoke connector access" → explicit
+         tear-down. The deployed connector starts seeing 400
+         "Missing token" on its next heartbeat… actually no, the
+         token is still in its config, so it'll just look like a
+         brand-new connector and start fresh. To truly disable, the
+         SE must also rotate to a new token + redeploy. */
+app.post('/api/connector/deregister', (req, res) => {
+  const { token } = req.body ?? {};
+  if (!token || typeof token !== 'string') {
+    return res.status(400).json({ ok: false, message: 'Missing token.' });
+  }
+  const hadState     = connectorState.delete(token);
+  const hadAllowlist = connectorAllowlist.delete(token);
+  res.json({
+    ok: true,
+    token: token.slice(0, 8) + '…',
+    hadState,
+    hadAllowlist,
+  });
+});
+
 /* POST /api/connector/heartbeat
    Body: { token: string, version?: string, encrypted?: string }
    Connector calls this every 30s. Validates:
@@ -924,9 +958,11 @@ app.listen(PORT, HOST, () => {
   // eslint-disable-next-line no-console
   console.log('  POST /api/dlp/posture    — fetch Information Security Posture summary');
   // eslint-disable-next-line no-console
-  console.log('  POST /api/connector/register  — register per-token IP allowlist');
+  console.log('  POST /api/connector/register   — register per-token IP allowlist');
   // eslint-disable-next-line no-console
-  console.log('  POST /api/connector/heartbeat — Customer Connector ping-in');
+  console.log('  POST /api/connector/deregister — revoke a token + clear its state');
+  // eslint-disable-next-line no-console
+  console.log('  POST /api/connector/heartbeat  — Customer Connector ping-in');
   // eslint-disable-next-line no-console
   console.log('  GET  /api/connector/status    — Customer Connector liveness');
   // eslint-disable-next-line no-console
