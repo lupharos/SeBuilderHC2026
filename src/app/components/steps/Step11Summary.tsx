@@ -97,7 +97,18 @@ function buildReportHTML(p: {
     versionPenalty: number;
     infraPenalty: number;
   };
+  /* Selects which of the two report formats to produce:
+       - 'healthcheck' (default): full technical Health Check & Maturity Assessment for
+         Security/SOC/Infra/Ops teams. Includes every Part except Part 0 (CISO briefing).
+       - 'executive': condensed Executive Risk Briefing for CISO/CIO/Director. Keeps the
+         Part 0 CISO dashboard + compliance lens, the Executive Overview, and only the
+         License Extension + Recommended Enhancements from the roadmap. Skips Parts II
+         and IV entirely. */
+  variant?: 'executive' | 'healthcheck';
 }) {
+  const variant = p.variant ?? 'healthcheck';
+  const isExec = variant === 'executive';
+  const isTech = variant === 'healthcheck';
   /* Checklist-only counts (kept for legacy callsites in this file). For the
      cover/Part 0 "Critical Findings" headline we use the aggregate below. */
   const checklistCritical = p.allFindings.filter(f => f.severity === 'CRITICAL').length;
@@ -475,50 +486,59 @@ function buildReportHTML(p: {
   const apiPostureActive = !!p.dlpPostureSummary && Object.values(p.dlpPostureSections).some(Boolean);
   const dlpSqlSuppressed = hasDLP && apiPostureActive;
 
-  /* Grouped TOC by Part — each part renders as a sub-header in the TOC list */
+  /* Grouped TOC by Part — each part renders as a sub-header in the TOC list.
+     Executive variant strips Part II + IV and keeps only Licensing + Enhancements
+     from the roadmap; HealthCheck variant strips Part 0. */
   type TocEntry = { kind: 'part'; label: string } | { kind: 'item'; label: string };
+  const roadmapPartLabel = isExec ? 'Part 2 · Roadmap &amp; Strategy' : 'Part III · Roadmap &amp; Strategy';
   const tocEntries: TocEntry[] = [
     { kind: 'part', label: 'Foreword' },
     { kind: 'item', label: 'Purpose of This Report' },
 
-    { kind: 'part', label: 'Part 0 · Executive Briefing' },
-    { kind: 'item', label: 'Risk Posture &amp; CISO Dashboard' },
-    { kind: 'item', label: 'Compliance Exposure' },
+    ...(isExec ? [
+      { kind: 'part' as const, label: 'Part 0 · Executive Briefing' },
+      { kind: 'item' as const, label: 'Risk Posture &amp; CISO Dashboard' },
+      { kind: 'item' as const, label: 'Compliance Exposure' },
+    ] : []),
 
-    { kind: 'part', label: 'Part I · Executive Overview' },
+    { kind: 'part', label: isExec ? 'Part 1 · Executive Overview' : 'Part I · Executive Overview' },
     { kind: 'item', label: 'Introduction' },
     ...(hasAccountSection ? [{ kind: 'item' as const, label: 'Customer Account &amp; Licensing' }] : []),
     { kind: 'item', label: 'Executive Details' },
 
-    { kind: 'part', label: 'Part II · Technical Assessment' },
-    { kind: 'item', label: 'Infrastructure &amp; Version Review' },
-    ...(activeServers.length > 0 ? [{ kind: 'item' as const, label: 'Server Infrastructure' }] : []),
-    ...(p.dlpBundles.length > 0 ? [{ kind: 'item' as const, label: 'DLP Telemetry File Analysis' }] : []),
-    ...(p.endpointAgentSummary && p.endpointAgentSummary.totalRecords > 0 ? [{ kind: 'item' as const, label: 'Endpoint Agent Analysis' }] : []),
-    ...((p.dlpPostureSummary && Object.values(p.dlpPostureSections).some(Boolean)) ? [{ kind: 'item' as const, label: 'Information Security Posture Dashboard' }] : []),
-    ...(p.certificates.length > 0 ? [{ kind: 'item' as const, label: 'Certificate Analysis' }] : []),
-    ...(p.selectedTemplates.length > 0 ? [{ kind: 'item' as const, label: 'Per-Product Security Assessment' }] : []),
-    ...(p.allFindings.length > 0 ? [{ kind: 'item' as const, label: 'Checklist Findings' }] : []),
-    ...(hasWeb                    ? [{ kind: 'item' as const, label: 'Web Security Usage' }] : []),
-    ...(hasDLP && !dlpSqlSuppressed ? [{ kind: 'item' as const, label: 'Data Security Usage' }] : []),
-    ...(hasEmail                  ? [{ kind: 'item' as const, label: 'Email Security Usage' }] : []),
+    ...(isTech ? [
+      { kind: 'part' as const, label: 'Part II · Technical Assessment' },
+      { kind: 'item' as const, label: 'Infrastructure &amp; Version Review' },
+      ...(activeServers.length > 0 ? [{ kind: 'item' as const, label: 'Server Infrastructure' }] : []),
+      ...(p.dlpBundles.length > 0 ? [{ kind: 'item' as const, label: 'DLP Telemetry File Analysis' }] : []),
+      ...(p.endpointAgentSummary && p.endpointAgentSummary.totalRecords > 0 ? [{ kind: 'item' as const, label: 'Endpoint Agent Analysis' }] : []),
+      ...((p.dlpPostureSummary && Object.values(p.dlpPostureSections).some(Boolean)) ? [{ kind: 'item' as const, label: 'Information Security Posture Dashboard' }] : []),
+      ...(p.certificates.length > 0 ? [{ kind: 'item' as const, label: 'Certificate Analysis' }] : []),
+      ...(p.selectedTemplates.length > 0 ? [{ kind: 'item' as const, label: 'Per-Product Security Assessment' }] : []),
+      ...(p.allFindings.length > 0 ? [{ kind: 'item' as const, label: 'Checklist Findings' }] : []),
+      ...(hasWeb                    ? [{ kind: 'item' as const, label: 'Web Security Usage' }] : []),
+      ...(hasDLP && !dlpSqlSuppressed ? [{ kind: 'item' as const, label: 'Data Security Usage' }] : []),
+      ...(hasEmail                  ? [{ kind: 'item' as const, label: 'Email Security Usage' }] : []),
+    ] : []),
 
-    { kind: 'part', label: 'Part III · Roadmap &amp; Strategy' },
-    ...(p.recommendations.length > 0 ? [{ kind: 'item' as const, label: 'Recommendations' }] : []),
-    ...(p.versionUpgrades.length > 0 ? [{ kind: 'item' as const, label: 'Version Upgrade Proposals' }] : []),
+    { kind: 'part', label: roadmapPartLabel },
+    ...(isTech && p.recommendations.length > 0 ? [{ kind: 'item' as const, label: 'Recommendations' }] : []),
+    ...(isTech && p.versionUpgrades.length > 0 ? [{ kind: 'item' as const, label: 'Version Upgrade Proposals' }] : []),
     /* Agent Compatibility section renders when DLP or Web is in scope AND
        we have either a customer assessment or a non-empty matrix to fall
        back on. TOC stays in sync with what actually gets emitted further
        down. */
-    ...((p.selectedProducts.data || p.selectedProducts.web) && (p.endpointCompatAssessment || !isMatrixEmpty(p.endpointMatrix))
+    ...(isTech && (p.selectedProducts.data || p.selectedProducts.web) && (p.endpointCompatAssessment || !isMatrixEmpty(p.endpointMatrix))
       ? [{ kind: 'item' as const, label: 'Agent Compatibility' }] : []),
-    ...(p.actionItems.length > 0 ? [{ kind: 'item' as const, label: 'Action Items &amp; Next Steps' }] : []),
-    ...(p.featureRequests.length > 0 ? [{ kind: 'item' as const, label: 'Customer Feature Requests' }] : []),
+    ...(isTech && p.actionItems.length > 0 ? [{ kind: 'item' as const, label: 'Action Items &amp; Next Steps' }] : []),
+    ...(isTech && p.featureRequests.length > 0 ? [{ kind: 'item' as const, label: 'Customer Feature Requests' }] : []),
     ...((p.licenseGaps?.length ?? 0) > 0 ? [{ kind: 'item' as const, label: 'Recommended License Extension' }] : []),
     ...(p.selectedEnhancements.length > 0 ? [{ kind: 'item' as const, label: 'Recommended Enhancements' }] : []),
 
-    { kind: 'part', label: 'Part IV · Reference' },
-    { kind: 'item', label: 'Appendix — Effort Score Card' },
+    ...(isTech ? [
+      { kind: 'part' as const, label: 'Part IV · Reference' },
+      { kind: 'item' as const, label: 'Appendix — Effort Score Card' },
+    ] : []),
 
     { kind: 'part', label: 'Closing' },
     { kind: 'item', label: "Forcepoint's Commitment" },
@@ -635,11 +655,29 @@ function buildReportHTML(p: {
     </div>`;
   };
 
-  return `<!DOCTYPE html>
+  /* Post-render variant stripper. Each variant block is bracketed by
+     paired HTML comments:
+       <!--VARIANT:EXEC_ONLY:START--> … <!--VARIANT:EXEC_ONLY:END-->
+       <!--VARIANT:TECH_ONLY:START--> … <!--VARIANT:TECH_ONLY:END-->
+     The opposite variant strips the irrelevant blocks here at the
+     boundary, rather than via inline ${'$'}{cond ? ... : ''} wrappers
+     which the existing template literal can't host because it contains
+     nested template literals throughout. */
+  const stripVariantBlocks = (html: string): string => {
+    const dropOpposite = isExec ? 'TECH_ONLY' : 'EXEC_ONLY';
+    const dropRe = new RegExp(
+      `<!--VARIANT:${dropOpposite}:START-->[\\s\\S]*?<!--VARIANT:${dropOpposite}:END-->`,
+      'g',
+    );
+    const markerRe = /<!--VARIANT:(EXEC_ONLY|TECH_ONLY):(START|END)-->/g;
+    return html.replace(dropRe, '').replace(markerRe, '');
+  };
+
+  const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>HC Report — ${esc(p.sessionData.customerName || 'Customer')}</title>
+<title>${isExec ? 'Executive Risk Briefing' : 'HC Report'} — ${esc(p.sessionData.customerName || 'Customer')}</title>
 <style>
 /* ═══════════════════════════════════════════════════════════════
    FORCEPOINT HEALTH CHECK REPORT — BRAND-ALIGNED EDITION
@@ -1389,8 +1427,10 @@ tr:last-child td{border-bottom:none;}
       <div class="cover-classification">CONFIDENTIAL · CUSTOMER</div>
     </div>
     <div class="cover-eyebrow">FORCEPOINT INTELLIGENCE PLATFORM</div>
-    <div class="cover-h1">Health Check &amp; Maturity Assessment</div>
-    <div class="cover-sub">A comprehensive review of the customer's Forcepoint infrastructure — infrastructure posture, version &amp; lifecycle risk, licensing alignment, and a prioritized roadmap of remediation actions.</div>
+    <div class="cover-h1">${isExec ? 'Executive Risk Briefing' : 'Health Check &amp; Maturity Assessment'}</div>
+    <div class="cover-sub">${isExec
+      ? `A decision-ready briefing for the CISO, CIO and security leadership — risk posture at a glance, the compliance exposure created by today's deployment, and the licensing &amp; enhancement decisions that translate the technical assessment into a forward roadmap.`
+      : `A comprehensive review of the customer's Forcepoint infrastructure — infrastructure posture, version &amp; lifecycle risk, licensing alignment, and a prioritized roadmap of remediation actions.`}</div>
   </div>
 
   <div class="cover-body">
@@ -1499,11 +1539,16 @@ tr:last-child td{border-bottom:none;}
 
 <!-- ══════════════════════════════════════
      PART 0 — EXECUTIVE BRIEFING (CISO, ≤3 pages)
+     Bracketed with VARIANT EXEC_ONLY markers so the HealthCheck variant
+     can strip the entire block via the post-render regex in
+     stripVariantBlocks(). Inline conditional wrapping isn't usable here
+     because Part 0's body contains nested template literals.
 ══════════════════════════════════════ -->
+<!--VARIANT:EXEC_ONLY:START-->
 <div class="chapter">
   <div class="chapter-part">PART 0</div>
   <div class="chapter-title">Executive Briefing</div>
-  <div class="chapter-sub">A decision-ready three-page brief for the CISO and security leadership — the risk posture at a glance, the top critical risks framed in business terms, and the compliance exposure created by today's deployment. The detailed technical evidence follows in Parts I–III.</div>
+  <div class="chapter-sub">A decision-ready three-page brief for the CISO and security leadership — the risk posture at a glance, the top critical risks framed in business terms, and the compliance exposure created by today's deployment.</div>
 </div>
 
 <div class="content">
@@ -1954,6 +1999,7 @@ tr:last-child td{border-bottom:none;}
 </div>
 
 </div><!-- /content (Part 0 closes here) -->
+<!--VARIANT:EXEC_ONLY:END-->
 
 <!-- ══════════════════════════════════════
      PART I — EXECUTIVE OVERVIEW
@@ -2865,7 +2911,11 @@ ${(() => {
 
 <!-- ══════════════════════════════════════
      PART II — TECHNICAL ASSESSMENT
+     Stripped from the Executive Risk Briefing variant via VARIANT:TECH_ONLY
+     markers (regex-stripped post-render). CISO briefing skips all the
+     technical evidence and jumps from Part I to the roadmap.
 ══════════════════════════════════════ -->
+<!--VARIANT:TECH_ONLY:START-->
 <div class="chapter">
   <div class="chapter-part">PART II</div>
   <div class="chapter-title">Technical Assessment</div>
@@ -3820,18 +3870,24 @@ ${p.certificates.length > 0 ? `
 </div>` : ''}
 
 </div><!-- /content (Part II closes here) -->
+<!--VARIANT:TECH_ONLY:END-->
 
 <!-- ══════════════════════════════════════
      PART III — ROADMAP & STRATEGY
+     Chapter header itself is shared across both variants; only the
+     "Part III" label flips to "Part 2" for the Executive Risk Briefing.
 ══════════════════════════════════════ -->
 <div class="chapter">
-  <div class="chapter-part">PART III</div>
+  <div class="chapter-part">${isExec ? 'PART 2' : 'PART III'}</div>
   <div class="chapter-title">Roadmap &amp; Strategy</div>
-  <div class="chapter-sub">The implementation plan — prioritized recommendations, dated action items, customer-requested enhancements, and forward-looking Forcepoint product proposals that translate the assessment into a sequence of decisions.</div>
+  <div class="chapter-sub">${isExec
+    ? `Decision points for security leadership — the additional Forcepoint entitlement coverage that closes today's licensing gaps, and the enhancement initiatives that strengthen the customer's overall security posture.`
+    : `The implementation plan — prioritized recommendations, dated action items, customer-requested enhancements, and forward-looking Forcepoint product proposals that translate the assessment into a sequence of decisions.`}</div>
 </div>
 
 <div class="content">
 
+<!--VARIANT:TECH_ONLY:START-->
 <!-- ══════════════════════════════════════
      FINDINGS, OBSERVATIONS & RECOMMENDATIONS
 ══════════════════════════════════════ -->
@@ -4738,8 +4794,12 @@ ${p.featureRequests.length > 0 ? `
   </table>
 </div>` : ''}
 
+<!--VARIANT:TECH_ONLY:END-->
+
 <!-- ══════════════════════════════════════
      RECOMMENDED LICENSE EXTENSION (standalone section, above Enhancements)
+     Kept in BOTH variants — license decisions are an executive concern
+     even in the short-form Executive Risk Briefing.
 ══════════════════════════════════════ -->
 ${(() => {
   const gaps = p.licenseGaps ?? [];
@@ -4848,6 +4908,7 @@ ${p.selectedEnhancements.length > 0 ? `
 
 </div><!-- /content (Part III closes here) -->
 
+<!--VARIANT:TECH_ONLY:START-->
 <!-- ══════════════════════════════════════
      PART IV — REFERENCE
 ══════════════════════════════════════ -->
@@ -4902,6 +4963,7 @@ ${p.selectedEnhancements.length > 0 ? `
     </tbody>
   </table>
 </div>
+<!--VARIANT:TECH_ONLY:END-->
 
 <!-- ══════════════════════════════════════
      CLOSING NOTE — Forcepoint's Commitment
@@ -4934,7 +4996,7 @@ ${p.selectedEnhancements.length > 0 ? `
 <!-- FOOTER -->
 <div class="rpt-footer">
   <div class="rpt-footer-brand">Forcepoint</div>
-  <div>Health Check &amp; Maturity Assessment Report &nbsp;·&nbsp; ${esc(p.date)} &nbsp;·&nbsp; Confidential</div>
+  <div>${isExec ? 'Executive Risk Briefing' : 'Health Check &amp; Maturity Assessment Report'} &nbsp;·&nbsp; ${esc(p.date)} &nbsp;·&nbsp; Confidential</div>
   <div style="display:flex;align-items:center;gap:10px;">
     ${p.customerLogo ? `<img src="${esc(p.customerLogo)}" alt="${esc(p.sessionData.customerName || 'Customer')} logo" style="max-height:22px;max-width:80px;object-fit:contain;opacity:0.8;">` : ''}
     <span>© ${new Date().getFullYear()} Forcepoint LLC | Confidential</span>
@@ -4944,10 +5006,14 @@ ${p.selectedEnhancements.length > 0 ? `
 </div>
 </body>
 </html>`;
+
+  return stripVariantBlocks(html);
 }
 
 export function Step11Summary({ sessionData, templates, selectedProducts, checklistAnswers, versionEntries, versionData, recommendations, actionItems, featureRequests, serverDetails, selectedReports, dlpBundles, certificates, selectedEnhancements, licenseGaps, endpointAgentSummary, dlpDashboardSummary, dlpPostureSummary, dlpPostureSections, customerLogo, setCustomerLogo, complianceFrameworks, enhancementOverrides, versionUpgrades, endpointMatrix, endpointCompatAssessment, reportRuns, onComplete, isComplete }: Step11Props) {
-  const [isExporting, setIsExporting] = useState(false);
+  /* Tracks which report variant is mid-generation so only that card's
+     button switches to "Generating…". null when idle. */
+  const [isExporting, setIsExporting] = useState<'executive' | 'healthcheck' | null>(null);
   const [exportDone,  setExportDone]  = useState(false);
   const [logoError,   setLogoError]   = useState<string | null>(null);
   const logoInputRef = useRef<HTMLInputElement>(null);
@@ -5008,8 +5074,8 @@ export function Step11Summary({ sessionData, templates, selectedProducts, checkl
   const highCount     = allFindings.filter(f => f.severity === 'HIGH').length;
   const date = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
 
-  const handleExport = () => {
-    setIsExporting(true);
+  const handleExport = (variant: 'executive' | 'healthcheck' = 'healthcheck') => {
+    setIsExporting(variant);
     setExportDone(false);
     setTimeout(() => {
       /* Wrap the build + write in try/catch so any synchronous throw doesn't
@@ -5024,19 +5090,20 @@ export function Step11Summary({ sessionData, templates, selectedProducts, checkl
           complianceFrameworks, enhancementOverrides, versionUpgrades, endpointMatrix, endpointCompatAssessment,
           reportRuns: reportRuns ?? {},
           healthBreakdown,
+          variant,
         });
         const win = window.open('', '_blank', 'width=1100,height=900');
         if (win) {
           win.document.write(html);
           win.document.close();
           win.focus();
-          setTimeout(() => { setIsExporting(false); setExportDone(true); }, 400);
+          setTimeout(() => { setIsExporting(null); setExportDone(true); }, 400);
         } else {
-          setIsExporting(false);
+          setIsExporting(null);
           alert('Pop-up blocked. Please allow pop-ups for this page and try again.');
         }
       } catch (err) {
-        setIsExporting(false);
+        setIsExporting(null);
         setExportDone(false);
         console.error('[Step11Summary] buildReportHTML failed:', err);
         alert(`Report generation failed:\n\n${(err as Error).message}\n\nCheck the browser console for the full stack trace.`);
@@ -5206,12 +5273,14 @@ export function Step11Summary({ sessionData, templates, selectedProducts, checkl
         )}
       </div>
 
-      {/* ── EXPORT CTA ── */}
-      <div className="rounded-xl overflow-hidden"
-        style={{ border: exportDone ? '1.5px solid rgba(22,163,74,0.3)' : '1.5px solid rgba(37,99,235,0.2)', boxShadow: '0 2px 12px rgba(15,41,82,0.06)' }}>
-        <div className="p-[22px_26px]"
-          style={{ background: exportDone ? 'rgba(22,163,74,0.03)' : 'linear-gradient(135deg, #F8FAFC 0%, #EEF4FF 100%)' }}>
-          {exportDone ? (
+      {/* ── EXPORT CTA — two report variants side-by-side ──
+          Left card: Executive Risk Briefing (short, CISO/CIO/Director).
+          Right card: Health Check & Maturity Assessment (full technical, SOC/Infra/Ops).
+          Same underlying data, different framing/depth. */}
+      {exportDone ? (
+        <div className="rounded-xl overflow-hidden"
+          style={{ border: '1.5px solid rgba(22,163,74,0.3)', boxShadow: '0 2px 12px rgba(15,41,82,0.06)' }}>
+          <div className="p-[22px_26px]" style={{ background: 'rgba(22,163,74,0.03)' }}>
             <div className="flex items-center gap-5">
               <div className="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0"
                 style={{ background: 'rgba(22,163,74,0.1)', border: '1.5px solid rgba(22,163,74,0.25)' }}>
@@ -5228,45 +5297,112 @@ export function Step11Summary({ sessionData, templates, selectedProducts, checkl
               <button onClick={() => setExportDone(false)}
                 className="px-5 py-2.5 rounded-xl font-semibold transition-all flex-shrink-0"
                 style={{ fontSize: '12.5px', background: '#F1F5F9', color: '#64748B', border: '1.5px solid #E2E8F0' }}>
-                Regenerate
+                Pick another
               </button>
             </div>
-          ) : (
-            <div className="flex items-center gap-5">
-              <div className="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0"
-                style={{ background: 'rgba(37,99,235,0.1)', border: '1.5px solid rgba(37,99,235,0.2)' }}>
-                <Shield size={22} style={{ color: '#023E8A' }} />
-              </div>
-              <div className="flex-1">
-                <div style={{ fontSize: '14px', fontWeight: 700, color: '#1D252C', marginBottom: '3px' }}>
-                  Generate Executive Report
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          {/* ── Executive Risk Briefing ── */}
+          <div className="rounded-xl overflow-hidden flex flex-col"
+            style={{ border: '1.5px solid rgba(163,0,128,0.22)', boxShadow: '0 2px 12px rgba(15,41,82,0.06)', background: 'linear-gradient(135deg, #FDF7FB 0%, #F9F0F6 100%)' }}>
+            <div className="p-[20px_22px] flex-1 flex flex-col">
+              <div className="flex items-start gap-3 mb-3">
+                <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
+                  style={{ background: 'rgba(163,0,128,0.1)', border: '1.5px solid rgba(163,0,128,0.25)' }}>
+                  <Shield size={20} style={{ color: '#A30080' }} />
                 </div>
-                <div style={{ fontSize: '12px', color: '#64748B' }}>
-                  Opens a complete, print-ready HTML report in a new tab. Contains all {reportItems.filter(i => i.ok).length} data sections.
-                  Use browser <strong>Print → Save as PDF</strong> to create a PDF file.
+                <div className="flex-1">
+                  <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#1D252C', letterSpacing: '-0.01em', marginBottom: '2px' }}>
+                    Executive Risk Briefing
+                  </div>
+                  <div style={{ fontSize: '10.5px', fontWeight: 600, color: '#A30080', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                    Short · CISO, CIO, Director
+                  </div>
                 </div>
               </div>
+              <div style={{ fontSize: '11.5px', color: '#475569', lineHeight: 1.55, marginBottom: '14px' }}>
+                Decision-ready summary for security leadership. Risk posture, compliance exposure, executive overview, and the licensing &amp; enhancement roadmap. Technical evidence is excluded.
+              </div>
+              <ul style={{ fontSize: '10.5px', color: '#64748B', lineHeight: 1.7, margin: '0 0 16px 16px', padding: 0 }}>
+                <li>Risk Posture &amp; CISO Dashboard</li>
+                <li>Compliance Exposure</li>
+                <li>Customer Account &amp; Licensing</li>
+                <li>Recommended License Extension</li>
+                <li>Recommended Enhancements</li>
+              </ul>
               <button
-                onClick={handleExport}
-                disabled={isExporting}
-                className="flex items-center gap-2.5 px-7 py-3.5 rounded-xl font-bold text-white transition-all flex-shrink-0"
+                onClick={() => handleExport('executive')}
+                disabled={!!isExporting}
+                className="flex items-center justify-center gap-2 px-5 py-3 rounded-xl font-bold text-white transition-all w-full mt-auto"
                 style={{
-                  fontSize: '14px',
-                  background: isExporting ? '#93C5FD' : 'linear-gradient(135deg, #023E8A, #023E8A)',
+                  fontSize: '13px',
+                  background: isExporting === 'executive' ? '#D8B4D5' : 'linear-gradient(135deg, #A30080, #7A005F)',
                   cursor: isExporting ? 'not-allowed' : 'pointer',
-                  boxShadow: isExporting ? 'none' : '0 4px 18px rgba(37,99,235,0.4)',
+                  boxShadow: isExporting ? 'none' : '0 4px 14px rgba(163,0,128,0.3)',
                   letterSpacing: '-0.01em',
+                  opacity: isExporting && isExporting !== 'executive' ? 0.5 : 1,
                 }}
               >
-                {isExporting
-                  ? <><Loader size={16} className="animate-spin" /> Generating…</>
-                  : <><Download size={16} /> Export Report</>
+                {isExporting === 'executive'
+                  ? <><Loader size={14} className="animate-spin" /> Generating…</>
+                  : <><Download size={14} /> Generate Executive Risk Briefing</>
                 }
               </button>
             </div>
-          )}
+          </div>
+
+          {/* ── Health Check & Maturity Assessment ── */}
+          <div className="rounded-xl overflow-hidden flex flex-col"
+            style={{ border: '1.5px solid rgba(2,62,138,0.22)', boxShadow: '0 2px 12px rgba(15,41,82,0.06)', background: 'linear-gradient(135deg, #F8FAFC 0%, #EEF4FF 100%)' }}>
+            <div className="p-[20px_22px] flex-1 flex flex-col">
+              <div className="flex items-start gap-3 mb-3">
+                <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
+                  style={{ background: 'rgba(37,99,235,0.1)', border: '1.5px solid rgba(37,99,235,0.2)' }}>
+                  <Shield size={20} style={{ color: '#023E8A' }} />
+                </div>
+                <div className="flex-1">
+                  <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#1D252C', letterSpacing: '-0.01em', marginBottom: '2px' }}>
+                    Health Check &amp; Maturity Assessment
+                  </div>
+                  <div style={{ fontSize: '10.5px', fontWeight: 600, color: '#023E8A', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                    Full · Security Team, SOC, Infra, Ops
+                  </div>
+                </div>
+              </div>
+              <div style={{ fontSize: '11.5px', color: '#475569', lineHeight: 1.55, marginBottom: '14px' }}>
+                Technical deep-dive — every checklist finding, version &amp; EoS detail, server posture, certificate trust, agent compatibility, and the prioritized remediation roadmap. Contains {reportItems.filter(i => i.ok).length} data sections.
+              </div>
+              <ul style={{ fontSize: '10.5px', color: '#64748B', lineHeight: 1.7, margin: '0 0 16px 16px', padding: 0 }}>
+                <li>Infrastructure &amp; Version Review · Server Health</li>
+                <li>DLP / Endpoint / Posture Telemetry</li>
+                <li>Certificate Analysis · Per-Product Findings</li>
+                <li>Recommendations · Version Upgrades · Action Items</li>
+                <li>Recommended License Extension &amp; Enhancements</li>
+              </ul>
+              <button
+                onClick={() => handleExport('healthcheck')}
+                disabled={!!isExporting}
+                className="flex items-center justify-center gap-2 px-5 py-3 rounded-xl font-bold text-white transition-all w-full mt-auto"
+                style={{
+                  fontSize: '13px',
+                  background: isExporting === 'healthcheck' ? '#93C5FD' : 'linear-gradient(135deg, #023E8A, #022D66)',
+                  cursor: isExporting ? 'not-allowed' : 'pointer',
+                  boxShadow: isExporting ? 'none' : '0 4px 14px rgba(37,99,235,0.3)',
+                  letterSpacing: '-0.01em',
+                  opacity: isExporting && isExporting !== 'healthcheck' ? 0.5 : 1,
+                }}
+              >
+                {isExporting === 'healthcheck'
+                  ? <><Loader size={14} className="animate-spin" /> Generating…</>
+                  : <><Download size={14} /> Generate Health Check &amp; Maturity Assessment</>
+                }
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* ── COMPLETE SESSION CTA ──
           Final action of the wizard. Marks the session as completed (sets
