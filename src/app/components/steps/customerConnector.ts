@@ -62,7 +62,18 @@ export interface ConnectorSelftestResult {
 }
 
 export interface ConnectorSelftest {
-  sql: ConnectorSelftestResult | null;
+  /* Three discrete SQL probes — one per DLP-stack DB. Each value is
+     null when the connector-secrets.json on the customer host doesn't
+     have that block configured. The wizard renders only the configured
+     rows (no "FAIL — block missing" noise for DBs the customer simply
+     doesn't expose). `sql` is the legacy single-probe field kept here
+     so heartbeats from older connector .exe builds still render
+     something — the UI maps it onto sqlData when the new keys are all
+     absent. */
+  sqlData?: ConnectorSelftestResult | null;
+  sqlWeb?: ConnectorSelftestResult | null;
+  sqlEmail?: ConnectorSelftestResult | null;
+  sql?: ConnectorSelftestResult | null; // legacy v1 field
   dlpApi: ConnectorSelftestResult | null;
 }
 

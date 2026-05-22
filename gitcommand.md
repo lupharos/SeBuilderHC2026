@@ -118,3 +118,17 @@ sudo nginx -t
 | 2 | Sunucu | `cd ~/SeBuilderHC2026 && git pull && sudo bash deploy.sh && bash statuscheck.sh` |
 | 3 | Sunucu (gerekirse) | `sudo systemctl restart sebuilderhc-companion` |
 | 4 | Tarayıcı | `Ctrl+Shift+R` ile hard refresh (cache busted ama emin olalım) |
+
+
+
+
+git add -A
+git commit -m "update"
+git push origin main
+
+
+Sonra Ubuntu'da: 
+
+git pull && sudo bash deploy.sh
+
+

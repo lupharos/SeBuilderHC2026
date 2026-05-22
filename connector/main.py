@@ -169,11 +169,21 @@ def load_secrets(install_dir: str) -> tuple[dict | None, str | None]:
             code=2,
         )
 
-    # Both sub-sections are optional; an empty file is allowed (gives
-    # the customer admin a way to ship the file without any creds yet
-    # while iteration 2 ramps up).
-    sec.setdefault("sql", None)
-    sec.setdefault("dlpApi", None)
+    # Every SQL sub-block + the DLP API block is optional; the connector
+    # only probes the blocks that are present and reports which ones
+    # authenticate. Three discrete SQL blocks let the customer expose
+    # whichever DBs are relevant to their deployment:
+    #   - sql_Data   → DLP forensics / policy DB (wbsn-data-security)
+    #   - sql_Web    → Web Security log DB        (wslogdb70)
+    #   - sql_Email  → Email Security log DB      (esglogdb76)
+    # Legacy v1 templates used a single `sql` key — treat it as sql_Data
+    # so existing installs keep working after the .exe is rebuilt.
+    if sec.get("sql") and not sec.get("sql_Data"):
+        sec["sql_Data"] = sec["sql"]
+    sec.setdefault("sql_Data",  None)
+    sec.setdefault("sql_Web",   None)
+    sec.setdefault("sql_Email", None)
+    sec.setdefault("dlpApi",    None)
     return sec, secrets_path
 
 
@@ -384,18 +394,38 @@ def _selftest_to_dict(result: tuple[str, str, int] | None) -> dict | None:
 # heartbeat thread reads this every 30s and embeds it in the
 # heartbeat body; the background selftest thread writes to it every
 # 5 minutes (and once at startup). Lock keeps reads coherent.
-selftest_results: dict = {"sql": None, "dlpApi": None}
+#
+# Keys mirror what the HC wizard renders in the "SELFTEST" panel of
+# the Customer Connector card:
+#   sqlData / sqlWeb / sqlEmail → one row per configured SQL DB
+#   dlpApi                       → DLP REST API row
+# A null value means the corresponding secrets block was absent on
+# this connector host, so the wizard hides that row entirely (instead
+# of showing it as "failed").
+selftest_results: dict = {
+    "sqlData":  None,
+    "sqlWeb":   None,
+    "sqlEmail": None,
+    "dlpApi":   None,
+}
 selftest_lock = threading.Lock()
 
 
 def selftest_run_all(secrets: dict | None, insecure: bool) -> dict:
-    """Run both selftests and return a JSON-friendly dict. Side-effect
-    free — caller decides whether to update the shared holder."""
-    sql_cfg = (secrets or {}).get("sql") or None
-    api_cfg = (secrets or {}).get("dlpApi") or None
+    """Run every configured selftest and return a JSON-friendly dict.
+    Each SQL block runs as its own probe — the connector reports per-DB
+    pass/fail so the wizard can show "DLP DB ok, Web DB ok, Email DB
+    auth failed" granularly instead of one blanket "SQL failed"."""
+    sec = secrets or {}
+    sql_data  = sec.get("sql_Data")  or None
+    sql_web   = sec.get("sql_Web")   or None
+    sql_email = sec.get("sql_Email") or None
+    api_cfg   = sec.get("dlpApi")    or None
     return {
-        "sql":    _selftest_to_dict(selftest_sql(sql_cfg))             if sql_cfg else None,
-        "dlpApi": _selftest_to_dict(selftest_dlp_api(api_cfg, insecure)) if api_cfg else None,
+        "sqlData":  _selftest_to_dict(selftest_sql(sql_data))  if sql_data  else None,
+        "sqlWeb":   _selftest_to_dict(selftest_sql(sql_web))   if sql_web   else None,
+        "sqlEmail": _selftest_to_dict(selftest_sql(sql_email)) if sql_email else None,
+        "dlpApi":   _selftest_to_dict(selftest_dlp_api(api_cfg, insecure)) if api_cfg else None,
     }
 
 
@@ -417,27 +447,40 @@ def selftest_background_loop(secrets: dict | None, insecure: bool, stop: threadi
 
 
 def run_selftest(secrets: dict | None, insecure: bool = False) -> None:
-    """Startup orchestrator — runs both selftests once at boot,
-    prints the human-readable banner, AND seeds the shared
-    selftest_results dict so the very first heartbeat already
-    carries fresh data to the HC wizard."""
+    """Startup orchestrator — runs every configured selftest once at
+    boot, prints the human-readable banner, AND seeds the shared
+    selftest_results dict so the very first heartbeat already carries
+    fresh data to the HC wizard."""
     if not secrets:
         return
-    sql_cfg = secrets.get("sql") or None
-    api_cfg = secrets.get("dlpApi") or None
-    if not sql_cfg and not api_cfg:
+    sql_data  = secrets.get("sql_Data")  or None
+    sql_web   = secrets.get("sql_Web")   or None
+    sql_email = secrets.get("sql_Email") or None
+    api_cfg   = secrets.get("dlpApi")    or None
+    if not any((sql_data, sql_web, sql_email, api_cfg)):
         return
 
     print()
     print("[selftest] Validating local credentials before starting heartbeat loop...")
 
-    sql_result = selftest_sql(sql_cfg) if sql_cfg else None
+    # Each SQL probe runs sequentially — they're cheap (single SELECT
+    # @@VERSION) and parallelism would interleave banner output in a
+    # way that's confusing to read. ~5-10s total for three probes.
+    sql_results: list[tuple[str, dict | None, tuple[str, str, int] | None]] = []
+    if sql_data:
+        sql_results.append(("SQL DLP   ", sql_data,  selftest_sql(sql_data)))
+    if sql_web:
+        sql_results.append(("SQL Web   ", sql_web,   selftest_sql(sql_web)))
+    if sql_email:
+        sql_results.append(("SQL Email ", sql_email, selftest_sql(sql_email)))
     api_result = selftest_dlp_api(api_cfg, insecure=insecure) if api_cfg else None
 
-    if sql_result:
-        status, msg, latency = sql_result
+    for label, _cfg, res in sql_results:
+        if not res:
+            continue
+        status, msg, latency = res
         marker = "OK  " if status == "ok" else "FAIL"
-        print(f"  {marker}  SQL  {msg}  ({latency}ms)")
+        print(f"  {marker}  {label}  {msg}  ({latency}ms)")
     if api_result:
         status, msg, latency = api_result
         marker = "OK  " if status == "ok" else "FAIL"
@@ -448,9 +491,27 @@ def run_selftest(secrets: dict | None, insecure: bool = False) -> None:
 
     # Seed the shared holder so the first heartbeat already carries
     # selftest info — the wizard will see it on its 5s status poll.
+    # Use selftest_run_all() rather than re-packaging the tuples we just
+    # printed to keep one canonical packing path; the extra runtime is
+    # negligible (a few hundred ms of network probes that already
+    # cached pyodbc/requests imports above).
     with selftest_lock:
-        selftest_results["sql"]    = _selftest_to_dict(sql_result)
-        selftest_results["dlpApi"] = _selftest_to_dict(api_result)
+        selftest_results.update(selftest_run_all(secrets, insecure))
+
+
+def _describe_sql_line(label: str, sql: dict | None) -> str:
+    """Format a single SQL block as a banner row. Returns a 'not
+    configured' placeholder when the block is missing."""
+    if not sql:
+        return f"  {label:18s} — not configured —"
+    mode = sql.get("authMode", "sql")
+    srv = sql.get("server", "?")
+    port = sql.get("port", 1433)
+    db = sql.get("database", "?")
+    if mode == "windows":
+        return f"  {label:18s} windows auth · {srv}:{port}/{db}"
+    user = sql.get("username", "?")
+    return f"  {label:18s} sql auth · {srv}:{port}/{db}  user={user}  pass={mask(sql.get('password',''))}"
 
 
 def describe_secrets(secrets: dict | None) -> list[str]:
@@ -460,19 +521,9 @@ def describe_secrets(secrets: dict | None) -> list[str]:
         return ["Local credentials:   — connector-secrets.json not present —",
                 "                     (heartbeat-only mode; SQL / DLP queries will be rejected)"]
     lines: list[str] = ["Local credentials:"]
-    sql = secrets.get("sql") or {}
-    if sql:
-        mode = sql.get("authMode", "sql")
-        srv = sql.get("server", "?")
-        port = sql.get("port", 1433)
-        db = sql.get("database", "?")
-        if mode == "windows":
-            lines.append(f"  SQL:               windows auth · {srv}:{port}/{db}")
-        else:
-            user = sql.get("username", "?")
-            lines.append(f"  SQL:               sql auth · {srv}:{port}/{db}  user={user}  pass={mask(sql.get('password',''))}")
-    else:
-        lines.append("  SQL:               — not configured —")
+    lines.append(_describe_sql_line("SQL DLP:",   secrets.get("sql_Data")  or None))
+    lines.append(_describe_sql_line("SQL Web:",   secrets.get("sql_Web")   or None))
+    lines.append(_describe_sql_line("SQL Email:", secrets.get("sql_Email") or None))
     api = secrets.get("dlpApi") or {}
     if api:
         url = api.get("url", "?")
@@ -589,9 +640,15 @@ def heartbeat_loop(cfg: dict, hostname: str, local_ip: str, stop: threading.Even
         # Snapshot the latest selftest results under lock so the
         # background thread can't mutate them mid-serialisation.
         with selftest_lock:
+            # Per-DB selftest snapshot — wizard renders one row per
+            # configured probe. Each value is either None (block not
+            # present on this connector) or {status, message,
+            # latencyMs, checkedAt}.
             selftest_snapshot = {
-                "sql":    selftest_results.get("sql"),
-                "dlpApi": selftest_results.get("dlpApi"),
+                "sqlData":  selftest_results.get("sqlData"),
+                "sqlWeb":   selftest_results.get("sqlWeb"),
+                "sqlEmail": selftest_results.get("sqlEmail"),
+                "dlpApi":   selftest_results.get("dlpApi"),
             }
         try:
             r = session.post(
