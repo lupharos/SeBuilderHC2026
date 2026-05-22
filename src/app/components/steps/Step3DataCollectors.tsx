@@ -1153,6 +1153,19 @@ export function Step3DataCollectors({
         const onlineColor = st?.online ? '#16A34A' : (st && st.totalHeartbeats > 0) ? '#D97706' : '#94A3B8';
         const onlineLabel = st?.online ? 'ONLINE' : (st && st.totalHeartbeats > 0) ? 'STALE' : 'WAITING';
 
+        /* Selftest summary — used both in the card header (always
+           visible, even when card collapsed) and inline in the
+           expanded panel. Counts the OK/FAIL split across SQL and
+           DLP REST API probes the connector itself ran. */
+        const selftestProbes = [st?.selftest?.sql, st?.selftest?.dlpApi].filter(Boolean) as Array<{ status: string }>;
+        const selftestPassCount = selftestProbes.filter((p) => p.status === 'ok').length;
+        const selftestTotal = selftestProbes.length;
+        const selftestAllPass = selftestTotal > 0 && selftestPassCount === selftestTotal;
+        const selftestAnyFail = selftestProbes.some((p) => p.status !== 'ok');
+        const selftestColor = selftestTotal === 0
+          ? '#94A3B8'
+          : selftestAllPass ? '#16A34A' : selftestAnyFail ? '#DC2626' : '#D97706';
+
         return (
           <div className="bg-white rounded-xl overflow-hidden"
             style={{ border: `1.5px solid ${cfg.enabled ? '#DDD6FE' : '#E2E8F0'}`, boxShadow: '0 1px 4px rgba(15,41,82,0.06)' }}>
@@ -1176,6 +1189,23 @@ export function Step3DataCollectors({
                   style={{ background: `${onlineColor}14`, border: `1px solid ${onlineColor}40` }}>
                   <Activity size={12} style={{ color: onlineColor }} />
                   <span style={{ fontSize: '11px', fontWeight: 700, color: onlineColor, letterSpacing: '0.05em' }}>{onlineLabel}</span>
+                </div>
+              )}
+
+              {/* Selftest summary pill — always visible in the card
+                  header so the SE can see SQL / DLP probe health even
+                  when the body is collapsed. Empty when the connector
+                  hasn't reported any selftest yet (no secrets file). */}
+              {cfg.enabled && selftestTotal > 0 && (
+                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg"
+                  title={`${selftestPassCount}/${selftestTotal} local credential probes passing on the connector`}
+                  style={{ background: `${selftestColor}14`, border: `1px solid ${selftestColor}40` }}>
+                  {selftestAllPass
+                    ? <CheckCircle2 size={12} style={{ color: selftestColor }} />
+                    : <XCircle      size={12} style={{ color: selftestColor }} />}
+                  <span style={{ fontSize: '11px', fontWeight: 700, color: selftestColor, letterSpacing: '0.05em' }}>
+                    SELFTEST {selftestPassCount}/{selftestTotal}
+                  </span>
                 </div>
               )}
 
@@ -1239,6 +1269,78 @@ export function Step3DataCollectors({
                     {readyCount}/{readyTotal} ready
                   </span>
                 </div>
+
+                {/* Selftest panel — what the connector itself has
+                    verified locally: SQL auth + DLP REST API auth.
+                    Connector re-runs these every 5 minutes and sends
+                    the snapshot in every heartbeat, so the wizard
+                    sees fresh status without polling the customer
+                    side directly. Header repeats the same pill that's
+                    in the card header so SE knows where the data lives. */}
+                {st?.selftest && (st.selftest.sql || st.selftest.dlpApi) && (
+                  <div className="rounded-lg p-[12px_14px]"
+                    style={{ background: '#FAFCFF', border: `1.5px solid ${selftestColor}33` }}>
+                    <div className="flex items-center justify-between mb-2.5">
+                      <div style={{ fontSize: '10px', fontWeight: 700, color: '#475569', letterSpacing: '0.08em' }}>
+                        CONNECTOR-SIDE SELFTEST
+                        <span style={{ color: '#94A3B8', fontWeight: 500, marginLeft: 6, letterSpacing: 0 }}>
+                          (probes the connector ran against its own local SQL + DLP REST API credentials)
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5 px-2 py-0.5 rounded"
+                        style={{ background: `${selftestColor}14`, border: `1px solid ${selftestColor}40` }}>
+                        <span style={{ fontSize: '10px', fontWeight: 800, color: selftestColor, letterSpacing: '0.06em' }}>
+                          {selftestPassCount} / {selftestTotal} PASS
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-2">
+                      {(['sql', 'dlpApi'] as const).map((kind) => {
+                        const r = st.selftest?.[kind];
+                        if (!r) return null;
+                        const ok = r.status === 'ok';
+                        const color = ok ? '#16A34A' : '#DC2626';
+                        const bg = ok ? '#F0FDF4' : '#FEF2F2';
+                        const border = ok ? '#BBF7D0' : '#FECACA';
+                        const label = kind === 'sql' ? 'SQL' : 'DLP REST API';
+                        const badge = ok ? 'PASS' : 'FAIL';
+                        const ageSec = Math.floor((Date.now() - new Date(r.checkedAt).getTime()) / 1000);
+                        const ageLabel =
+                          ageSec < 60     ? `${ageSec}s ago`
+                          : ageSec < 3600 ? `${Math.floor(ageSec / 60)}m ago`
+                          :                 `${Math.floor(ageSec / 3600)}h ago`;
+                        return (
+                          <div key={kind}
+                            className="flex items-start gap-2.5 px-3 py-2 rounded-md"
+                            style={{ background: bg, border: `1px solid ${border}`, borderLeft: `4px solid ${color}` }}>
+                            {/* Big colored PASS/FAIL badge — impossible to miss */}
+                            <div className="flex items-center gap-1 px-2 py-1 rounded flex-shrink-0"
+                              style={{ background: color, color: '#fff', fontWeight: 800, fontSize: '10px', letterSpacing: '0.08em', minWidth: 50, justifyContent: 'center' }}>
+                              {ok ? <CheckCircle2 size={11} strokeWidth={3} /> : <XCircle size={11} strokeWidth={3} />}
+                              {badge}
+                            </div>
+
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: '11.5px', fontWeight: 700, color: '#0F172A', marginBottom: 2 }}>
+                                {label}
+                              </div>
+                              <div className="font-mono" style={{ fontSize: '10.5px', color: '#475569', lineHeight: 1.5, wordBreak: 'break-word' }}>
+                                {r.message}
+                              </div>
+                            </div>
+
+                            <div className="flex flex-col items-end flex-shrink-0"
+                              style={{ fontSize: '10px', color: '#64748B', whiteSpace: 'nowrap' }}>
+                              <span className="font-mono" style={{ fontWeight: 600, color: '#0F172A' }}>{r.latencyMs}ms</span>
+                              <span style={{ marginTop: 2 }}>{ageLabel}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 {/* Rejection banner — surfaces when the server has
                     refused one or more heartbeats due to allowlist

@@ -51,6 +51,21 @@ export function randomHex256(): string {
   return Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/* Single sub-component selftest result reported by the connector
+   inside each heartbeat. The connector re-runs SQL + DLP REST API
+   probes every 5 minutes and ships the latest snapshot up. */
+export interface ConnectorSelftestResult {
+  status: 'ok' | 'fail';
+  message: string;
+  latencyMs: number;
+  checkedAt: string;
+}
+
+export interface ConnectorSelftest {
+  sql: ConnectorSelftestResult | null;
+  dlpApi: ConnectorSelftestResult | null;
+}
+
 /* Connector status returned by GET /api/connector/status. */
 export interface CustomerConnectorStatus {
   /** true when the connector has phoned home within the last 90s. */
@@ -77,6 +92,11 @@ export interface CustomerConnectorStatus {
   /** Source IP of the most recent rejected attempt — surfaced to the
       operator so they can correct the allowlist if it's wrong. */
   lastRejectedIp?: string | null;
+  /** Result of the connector's local SQL + DLP REST API probes. The
+      connector runs these every 5 minutes against the credentials
+      stored in `connector-secrets.json` on the FSM host. null when
+      the connector has no secrets file or the test hasn't run yet. */
+  selftest?: ConnectorSelftest | null;
 }
 
 export async function fetchConnectorStatus(token: string, signal?: AbortSignal): Promise<CustomerConnectorStatus | null> {

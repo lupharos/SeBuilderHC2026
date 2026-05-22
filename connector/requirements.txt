@@ -5,6 +5,13 @@ requests==2.32.3
 urllib3==2.2.3
 certifi==2024.8.30
 
+# SQL Server authentication probe — used by the startup selftest. On
+# Windows hosts (FSM) this uses the bundled SQL Server ODBC driver
+# (ODBC Driver 17/18 for SQL Server, usually already installed). If
+# pyodbc fails to import OR no ODBC driver is detected at runtime,
+# the selftest gracefully falls back to a TCP-reachability probe.
+pyodbc==5.1.0
+
 # Build tool (not bundled into the .exe itself; install on the build host).
 # Uncomment if you want one-liner setup:
 # pyinstaller==6.10.0

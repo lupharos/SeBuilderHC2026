@@ -712,7 +712,7 @@ app.post('/api/dlp/posture', async (req, res) => {
    connector will phone home again within its heartbeat interval.
 ───────────────────────────────────────────────────────────────── */
 
-/** @type {Map<string, {firstSeen: string, lastSeen: string, lastIp: string|null, total: number, version: string|null, rejected: number, lastRejectedAt: string|null, lastRejectedIp: string|null}>} */
+/** @type {Map<string, {firstSeen: string, lastSeen: string, lastIp: string|null, total: number, version: string|null, rejected: number, lastRejectedAt: string|null, lastRejectedIp: string|null, selftest: {sql: object|null, dlpApi: object|null}|null}>} */
 const connectorState = new Map();
 
 /* Per-token IP allowlist — populated by the wizard's
@@ -890,6 +890,20 @@ app.post('/api/connector/heartbeat', (req, res) => {
 
   const nowIso = new Date().toISOString();
   const prev = connectorState.get(token);
+  /* Capture the selftest snapshot the connector includes with every
+     heartbeat. Shape:
+       { sql: {status, message, latencyMs, checkedAt} | null,
+         dlpApi: {status, message, latencyMs, checkedAt} | null }
+     The connector re-runs selftests every 5 minutes, so the freshest
+     state always lands here within 30s + 5m of any change. */
+  const incomingSelftest = (req.body ?? {}).selftest;
+  const selftest = (incomingSelftest && typeof incomingSelftest === 'object')
+    ? {
+        sql:    incomingSelftest.sql    ?? null,
+        dlpApi: incomingSelftest.dlpApi ?? null,
+      }
+    : (prev?.selftest ?? null);
+
   connectorState.set(token, {
     firstSeen:      prev?.firstSeen      ?? nowIso,
     lastSeen:       nowIso,
@@ -899,6 +913,7 @@ app.post('/api/connector/heartbeat', (req, res) => {
     rejected:       prev?.rejected       ?? 0,
     lastRejectedAt: prev?.lastRejectedAt ?? null,
     lastRejectedIp: prev?.lastRejectedIp ?? null,
+    selftest,
   });
   res.json({ ok: true, recordedAt: nowIso });
 });
@@ -926,6 +941,7 @@ app.get('/api/connector/status', (req, res) => {
       rejectedAttempts: 0,
       lastRejectedAt: null,
       lastRejectedIp: null,
+      selftest: null,
     });
   }
   /* `lastSeen` may be a stale placeholder if only rejections have
@@ -944,6 +960,7 @@ app.get('/api/connector/status', (req, res) => {
     rejectedAttempts: st.rejected ?? 0,
     lastRejectedAt: st.lastRejectedAt ?? null,
     lastRejectedIp: st.lastRejectedIp ?? null,
+    selftest: st.selftest ?? null,
   });
 });
 

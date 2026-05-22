@@ -177,6 +177,282 @@ def load_secrets(install_dir: str) -> tuple[dict | None, str | None]:
     return sec, secrets_path
 
 
+def selftest_sql(sql_cfg: dict | None) -> tuple[str, str, int] | None:
+    """SQL auth probe — connects with the configured credentials, runs
+    `SELECT @@VERSION`, returns the server's reported product version.
+    Falls back to a TCP-reachability check when no ODBC driver is
+    installed (so the .exe still gives a useful signal on hosts that
+    lack pyodbc — connector still runs in heartbeat-only mode).
+
+    Auth modes:
+      - 'windows' → Trusted_Connection=yes (uses the connector's process
+                    identity, same as the customer admin who launched
+                    .exe — typically a Windows domain account that
+                    already has DLP database read access).
+      - 'sql'     → UID / PWD from connector-secrets.json.
+
+    Returns (status, message, latency_ms) or None when no SQL is
+    configured.
+    """
+    if not sql_cfg:
+        return None
+    host = (sql_cfg.get("server") or "").strip()
+    port = int(sql_cfg.get("port") or 1433)
+    db = (sql_cfg.get("database") or "wbsn-data-security").strip()
+    auth_mode = (sql_cfg.get("authMode") or "sql").lower()
+    if not host:
+        return ("fail", "no server host configured", 0)
+
+    # Try real auth via pyodbc; fall back to TCP probe if pyodbc is
+    # absent or no SQL Server ODBC driver is installed.
+    try:
+        import pyodbc  # type: ignore
+    except ImportError:
+        return _selftest_sql_tcp_fallback(host, port, "pyodbc not bundled")
+
+    drivers = [d for d in pyodbc.drivers() if "SQL Server" in d]
+    if not drivers:
+        return _selftest_sql_tcp_fallback(host, port, "no SQL Server ODBC driver on this host")
+    # Prefer the newest driver name (ODBC Driver 18 > 17 > native client)
+    driver = sorted(drivers, reverse=True)[0]
+
+    trust_cert = "yes" if sql_cfg.get("trustServerCertificate", True) else "no"
+    if auth_mode == "windows":
+        conn_str = (
+            f"DRIVER={{{driver}}};"
+            f"SERVER={host},{port};"
+            f"DATABASE={db};"
+            f"Trusted_Connection=yes;"
+            f"TrustServerCertificate={trust_cert};"
+        )
+    else:
+        user = sql_cfg.get("username", "")
+        pw = sql_cfg.get("password", "")
+        if not user or not pw:
+            return ("fail", "authMode=sql but username/password empty", 0)
+        conn_str = (
+            f"DRIVER={{{driver}}};"
+            f"SERVER={host},{port};"
+            f"DATABASE={db};"
+            f"UID={user};PWD={pw};"
+            f"TrustServerCertificate={trust_cert};"
+        )
+
+    started = time.time()
+    try:
+        # pyodbc connect timeout is in seconds; on slow hosts we still
+        # want to cap to 8s so the selftest doesn't hold up the boot
+        # banner forever.
+        conn = pyodbc.connect(conn_str, timeout=8)
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT @@VERSION")
+            row = cur.fetchone()
+        finally:
+            conn.close()
+        latency = int((time.time() - started) * 1000)
+        version = (row[0] if row else "?")
+        # @@VERSION is a multi-line blob; squash + truncate for the banner.
+        version_short = " ".join(version.split())[:80]
+        return ("ok", f"{host}:{port}/{db} authenticated — {version_short}", latency)
+    except pyodbc.Error as e:
+        latency = int((time.time() - started) * 1000)
+        msg = str(e).splitlines()[0][:160]
+        return ("fail", f"{host}:{port}/{db} {msg}", latency)
+    except Exception as e:  # noqa: BLE001 — defensive
+        latency = int((time.time() - started) * 1000)
+        return ("fail", f"{host}:{port}/{db} {type(e).__name__}: {e}", latency)
+
+
+def _selftest_sql_tcp_fallback(host: str, port: int, reason: str) -> tuple[str, str, int]:
+    """Used when pyodbc / a SQL Server ODBC driver isn't available.
+    We can't authenticate, but we can still confirm the network path
+    is open — better than skipping the test entirely."""
+    started = time.time()
+    try:
+        with socket.create_connection((host, port), timeout=5):
+            latency = int((time.time() - started) * 1000)
+            return ("ok", f"{host}:{port} TCP reachable (auth skipped: {reason})", latency)
+    except socket.timeout:
+        return ("fail", f"{host}:{port} TCP timeout after 5s", 5000)
+    except OSError as e:
+        latency = int((time.time() - started) * 1000)
+        return ("fail", f"{host}:{port} {type(e).__name__}: {e}", latency)
+
+
+def selftest_dlp_api(api_cfg: dict | None, insecure: bool = True) -> tuple[str, str, int] | None:
+    """Full DLP REST API auth probe — hits /auth/refresh-token with
+    the operator-supplied credentials, then /deploy/status to recover
+    the DLP version for display.
+
+    NOTE: FSM ALWAYS uses self-signed certs (per Forcepoint reference),
+    so cert verification is hard-disabled here regardless of the
+    `insecure` flag, which only applies to the HC endpoint. Trying to
+    validate against the system CA trust store would fail 100% of the
+    time on production FSM hosts.
+
+    Returns (status, message, latency_ms) or None when no DLP API is
+    configured.
+    """
+    # Override: FSM REST API certs are always self-signed — see Forcepoint
+    # DLP REST API documentation, section 1 (Authentication).
+    del insecure  # explicit signal that we ignore the caller's value
+    insecure = True
+    if not api_cfg:
+        return None
+    url = (api_cfg.get("url") or "").strip().rstrip("/")
+    if not url:
+        return ("fail", "no DLP REST API url configured", 0)
+    # Tolerate operators pasting bare host OR full /dlp/rest/v1 prefix
+    base = url if url.lower().endswith("/dlp/rest/v1") else url + "/dlp/rest/v1"
+    username = api_cfg.get("username", "")
+    password = api_cfg.get("password", "")
+    if not username or not password:
+        return ("fail", "username or password missing", 0)
+
+    if insecure:
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    started = time.time()
+    try:
+        r = requests.post(
+            f"{base}/auth/refresh-token",
+            headers={"username": username, "password": password},
+            timeout=10,
+            verify=not insecure,
+        )
+        if r.status_code != 200:
+            latency = int((time.time() - started) * 1000)
+            body = (r.text or "").strip().splitlines()
+            body_one = body[0][:80] if body else ""
+            hint = "" if r.status_code != 403 else " (Application Administrator required)"
+            return ("fail", f"auth HTTP {r.status_code}{hint} — {body_one}", latency)
+
+        try:
+            access_token = r.json().get("access_token", "")
+        except Exception:
+            access_token = ""
+        if not access_token:
+            latency = int((time.time() - started) * 1000)
+            return ("fail", "auth ok but access_token missing in response", latency)
+
+        # Bonus probe — /deploy/status to display the DLP version
+        ver = "?"
+        try:
+            d = requests.get(
+                f"{base}/deploy/status",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=5,
+                verify=not insecure,
+            )
+            if d.ok:
+                ver = d.json().get("dlp_version", "?")
+        except Exception:
+            pass
+        latency = int((time.time() - started) * 1000)
+        return ("ok", f"authenticated — DLP v{ver}", latency)
+
+    except requests.exceptions.SSLError as e:
+        latency = int((time.time() - started) * 1000)
+        return ("fail", f"TLS error: {e}", latency)
+    except requests.exceptions.ConnectionError:
+        latency = int((time.time() - started) * 1000)
+        return ("fail", "cannot reach DLP REST API host", latency)
+    except requests.exceptions.Timeout:
+        return ("fail", "timed out (>10s)", 10000)
+    except requests.exceptions.RequestException as e:
+        latency = int((time.time() - started) * 1000)
+        return ("fail", f"{type(e).__name__}: {e}", latency)
+
+
+def _selftest_to_dict(result: tuple[str, str, int] | None) -> dict | None:
+    """Pack a selftest tuple into a JSON-friendly shape for transport
+    in the heartbeat body. Adds a UTC timestamp so the HC wizard can
+    show "checked X seconds ago"."""
+    if result is None:
+        return None
+    status, msg, latency = result
+    return {
+        "status": status,
+        "message": msg,
+        "latencyMs": latency,
+        "checkedAt": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# Shared, thread-safe holder for the latest selftest results. The
+# heartbeat thread reads this every 30s and embeds it in the
+# heartbeat body; the background selftest thread writes to it every
+# 5 minutes (and once at startup). Lock keeps reads coherent.
+selftest_results: dict = {"sql": None, "dlpApi": None}
+selftest_lock = threading.Lock()
+
+
+def selftest_run_all(secrets: dict | None, insecure: bool) -> dict:
+    """Run both selftests and return a JSON-friendly dict. Side-effect
+    free — caller decides whether to update the shared holder."""
+    sql_cfg = (secrets or {}).get("sql") or None
+    api_cfg = (secrets or {}).get("dlpApi") or None
+    return {
+        "sql":    _selftest_to_dict(selftest_sql(sql_cfg))             if sql_cfg else None,
+        "dlpApi": _selftest_to_dict(selftest_dlp_api(api_cfg, insecure)) if api_cfg else None,
+    }
+
+
+def selftest_background_loop(secrets: dict | None, insecure: bool, stop: threading.Event) -> None:
+    """Re-runs selftests every 5 minutes so the HC wizard sees a
+    relatively fresh snapshot even on long engagements. Runs in its
+    own daemon thread; failures don't propagate to the heartbeat
+    loop. Interruptible — stop event aborts immediately."""
+    interval = 300  # 5 minutes
+    while not stop.is_set():
+        if stop.wait(interval):
+            break
+        try:
+            fresh = selftest_run_all(secrets, insecure)
+            with selftest_lock:
+                selftest_results.update(fresh)
+        except Exception as e:  # noqa: BLE001 — daemon thread, log + continue
+            print(f"[selftest-bg] unexpected error: {type(e).__name__}: {e}")
+
+
+def run_selftest(secrets: dict | None, insecure: bool = False) -> None:
+    """Startup orchestrator — runs both selftests once at boot,
+    prints the human-readable banner, AND seeds the shared
+    selftest_results dict so the very first heartbeat already
+    carries fresh data to the HC wizard."""
+    if not secrets:
+        return
+    sql_cfg = secrets.get("sql") or None
+    api_cfg = secrets.get("dlpApi") or None
+    if not sql_cfg and not api_cfg:
+        return
+
+    print()
+    print("[selftest] Validating local credentials before starting heartbeat loop...")
+
+    sql_result = selftest_sql(sql_cfg) if sql_cfg else None
+    api_result = selftest_dlp_api(api_cfg, insecure=insecure) if api_cfg else None
+
+    if sql_result:
+        status, msg, latency = sql_result
+        marker = "OK  " if status == "ok" else "FAIL"
+        print(f"  {marker}  SQL  {msg}  ({latency}ms)")
+    if api_result:
+        status, msg, latency = api_result
+        marker = "OK  " if status == "ok" else "FAIL"
+        url = (api_cfg.get("url") or "").strip()
+        print(f"  {marker}  DLP REST API  {url}  {msg}  ({latency}ms)")
+
+    print()
+
+    # Seed the shared holder so the first heartbeat already carries
+    # selftest info — the wizard will see it on its 5s status poll.
+    with selftest_lock:
+        selftest_results["sql"]    = _selftest_to_dict(sql_result)
+        selftest_results["dlpApi"] = _selftest_to_dict(api_result)
+
+
 def describe_secrets(secrets: dict | None) -> list[str]:
     """Format a human-readable summary of the loaded credentials for
     the startup banner. Always masks passwords and API keys."""
@@ -310,10 +586,21 @@ def heartbeat_loop(cfg: dict, hostname: str, local_ip: str, stop: threading.Even
 
     while not stop.is_set():
         ts = datetime.now().strftime("%H:%M:%S")
+        # Snapshot the latest selftest results under lock so the
+        # background thread can't mutate them mid-serialisation.
+        with selftest_lock:
+            selftest_snapshot = {
+                "sql":    selftest_results.get("sql"),
+                "dlpApi": selftest_results.get("dlpApi"),
+            }
         try:
             r = session.post(
                 heartbeat_url,
-                json={"token": token, "version": version_string},
+                json={
+                    "token": token,
+                    "version": version_string,
+                    "selftest": selftest_snapshot,
+                },
                 timeout=10,
                 verify=not insecure,
             )
@@ -428,6 +715,13 @@ def main() -> int:
         print(f"             The HC companion may reject heartbeats. Update the IP in the HC wizard or use a CIDR.")
         print()
 
+    # ── Self-test local credentials before phoning home ─────────────
+    # Failure is informational — heartbeat loop starts regardless so
+    # the customer admin doesn't lose the connector entirely just
+    # because SQL credentials are wrong or the FSM is offline.
+    if "--skip-selftest" not in sys.argv:
+        run_selftest(secrets, insecure=("--insecure" in sys.argv))
+
     # ── Graceful shutdown ───────────────────────────────────────────
     stop = threading.Event()
 
@@ -439,6 +733,19 @@ def main() -> int:
     signal.signal(signal.SIGINT, handle_signal)
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, handle_signal)
+
+    # ── Background selftest re-runner ────────────────────────────────
+    # Keeps the shared selftest_results dict fresh every 5 minutes so
+    # the HC wizard sees current SQL / DLP API status (not just the
+    # boot-time snapshot). Daemon thread — dies when main exits.
+    if "--skip-selftest" not in sys.argv and secrets:
+        bg = threading.Thread(
+            target=selftest_background_loop,
+            args=(secrets, "--insecure" in sys.argv, stop),
+            daemon=True,
+            name="selftest-bg",
+        )
+        bg.start()
 
     # ── Run ─────────────────────────────────────────────────────────
     start_ts = time.time()
