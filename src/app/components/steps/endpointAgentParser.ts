@@ -157,6 +157,12 @@ export interface EndpointAgentSummary {
   /* ─── Section 3: Version analysis ─── */
   versionDistribution: EndpointVersionRow[];
   latestVersion: string | null;
+  /* Operator-selected "active" agent version — the one the customer
+     treats as their current production agent. When set, downstream
+     pages (Step 6 Endpoint Compatibility) evaluate against this
+     instead of the auto-detected `latestVersion`. null on fresh
+     imports — the latest version is the default fallback. */
+  activeVersion?: string | null;
   outdatedCount: number;
   outdatedPct: number;
   versionBuckets: VersionBucketRow[];
@@ -281,18 +287,42 @@ const EXPECTED_COLUMNS = [
   'Safari Extension Status',
 ];
 
-function parseRows(text: string): { rows: RawRow[]; headers: string[] } {
+/* Auto-detect delimiter by scanning the header line. The DLP Manager
+   in some locales exports semicolon-delimited CSV (EU-style), in others
+   comma-delimited (US-style). We count unquoted occurrences of each and
+   pick the winner. Quoted fields can themselves contain `,` (multi-IP,
+   multi-MAC) or `;`, so we only count delimiters that occur OUTSIDE
+   double quotes. */
+function detectDelimiter(headerLine: string): ',' | ';' {
+  let commas = 0;
+  let semis = 0;
+  let inQuotes = false;
+  for (let i = 0; i < headerLine.length; i++) {
+    const c = headerLine[i];
+    if (c === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (inQuotes) continue;
+    if (c === ',') commas++;
+    else if (c === ';') semis++;
+  }
+  return semis > commas ? ';' : ',';
+}
+
+function parseRows(text: string): { rows: RawRow[]; headers: string[]; delimiter: string } {
   const lines = stripBom(text)
     .split(/\r?\n/)
     .filter((l) => l.trim().length > 0);
 
-  if (lines.length < 2) return { rows: [], headers: [] };
+  if (lines.length < 2) return { rows: [], headers: [], delimiter: ',' };
 
-  const headers = splitCsvLine(lines[0]);
+  const delim = detectDelimiter(lines[0]);
+  const headers = splitCsvLine(lines[0], delim);
   const rows: RawRow[] = [];
 
   for (let i = 1; i < lines.length; i++) {
-    const cells = splitCsvLine(lines[i]);
+    const cells = splitCsvLine(lines[i], delim);
     if (cells.length === 1 && cells[0] === '') continue;
     const obj: RawRow = {};
     for (let j = 0; j < headers.length; j++) {
@@ -300,10 +330,15 @@ function parseRows(text: string): { rows: RawRow[]; headers: string[] } {
     }
     rows.push(obj);
   }
-  return { rows, headers };
+  return { rows, headers, delimiter: delim };
 }
 
 /* ─── Date parsing ───────────────────────────────────────────── */
+
+const MONTH_ABBR: Record<string, number> = {
+  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+  jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+};
 
 function parseDateLoose(raw: string): Date | null {
   if (!raw) return null;
@@ -313,8 +348,35 @@ function parseDateLoose(raw: string): Date | null {
   const native = new Date(s);
   if (!Number.isNaN(native.getTime())) return native;
 
+  // DLP Manager export format — "14 Oct. 2025, 03:40:13 PM GMT+0400"
+  // Period after month abbreviation, comma before time, AM/PM, explicit tz.
+  // The native Date parser handles this inconsistently across browsers, so
+  // we match explicitly. Timezone offset honored as ±HHMM.
+  let m = s.match(/^(\d{1,2})\s+([A-Za-z]{3})\.?\s+(\d{4}),?\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?\s*(?:GMT\s*([+-]\d{2})(\d{2})?)?$/i);
+  if (m) {
+    const [, da, monStr, yr, hhStr, mi, se = '0', ampm, tzH, tzM = '00'] = m;
+    const mon = MONTH_ABBR[monStr.toLowerCase()];
+    if (mon !== undefined) {
+      let hh = Number(hhStr);
+      if (ampm) {
+        const upper = ampm.toUpperCase();
+        if (upper === 'PM' && hh < 12) hh += 12;
+        else if (upper === 'AM' && hh === 12) hh = 0;
+      }
+      if (tzH) {
+        const tzOffsetMin = (Number(tzH) * 60) + (Number(tzH) < 0 ? -Number(tzM) : Number(tzM));
+        const utcMs = Date.UTC(Number(yr), mon, Number(da), hh, Number(mi), Number(se));
+        const d = new Date(utcMs - tzOffsetMin * 60_000);
+        if (!Number.isNaN(d.getTime())) return d;
+      } else {
+        const d = new Date(Number(yr), mon, Number(da), hh, Number(mi), Number(se));
+        if (!Number.isNaN(d.getTime())) return d;
+      }
+    }
+  }
+
   // DD/MM/YYYY HH:mm[:ss] — dayfirst (matches the user's pandas spec)
-  let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
   if (m) {
     const [, da, mo, yr, hh = '0', mi = '0', se = '0'] = m;
     const d = new Date(Number(yr), Number(mo) - 1, Number(da), Number(hh), Number(mi), Number(se));
@@ -1017,6 +1079,7 @@ export function parseEndpointAgentCsv(text: string, fileName: string): EndpointA
     unmanagedCount,
     versionDistribution,
     latestVersion,
+    activeVersion: null,
     outdatedCount,
     outdatedPct: pct(outdatedCount, total),
     versionBuckets,

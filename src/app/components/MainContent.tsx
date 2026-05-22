@@ -93,6 +93,10 @@ interface MainContentProps {
   setEnhancementOverrides: React.Dispatch<React.SetStateAction<Record<string, EnhancementOverride>>>;
   versionUpgrades: VersionUpgradeProposal[];
   setVersionUpgrades: React.Dispatch<React.SetStateAction<VersionUpgradeProposal[]>>;
+  /* Global Version & Release catalog — read-only inside the wizard. The
+     "Add from Catalog" picker on Step 9 pulls from this. Catalog edits
+     happen on the standalone "Version & Release Catalog" left-rail page. */
+  versionUpgradeCatalog: VersionUpgradeProposal[];
   endpointMatrix: EndpointSupportMatrix;
   endpointCompatInput: EndpointCompatibilityInput;
   setEndpointCompatInput: React.Dispatch<React.SetStateAction<EndpointCompatibilityInput>>;
@@ -130,6 +134,7 @@ export function MainContent({
   complianceFrameworks, setComplianceFrameworks,
   enhancementOverrides, setEnhancementOverrides,
   versionUpgrades, setVersionUpgrades,
+  versionUpgradeCatalog,
   endpointMatrix,
   endpointCompatInput, setEndpointCompatInput,
   endpointCompatAssessment, setEndpointCompatAssessment,
@@ -174,17 +179,22 @@ export function MainContent({
           )}
           {currentStep === 10 && <Step7CertificateAnalysis certificates={certificates} setCertificates={setCertificates} />}
           {currentStep === 11 && <Step8Recommendations recommendations={recommendations} setRecommendations={setRecommendations} />}
-          {currentStep === 12 && <StepVersionUpgrades items={versionUpgrades} setItems={setVersionUpgrades} />}
-          {currentStep === 13 && <Step9NextSteps items={actionItems} setItems={setActionItems} />}
-          {currentStep === 14 && <Step10FeatureRequests items={featureRequests} setItems={setFeatureRequests} />}
-          {currentStep === 15 && <StepRecommendedEnhancements selectedEnhancements={selectedEnhancements} setSelectedEnhancements={setSelectedEnhancements} enhancementOverrides={enhancementOverrides} setEnhancementOverrides={setEnhancementOverrides} />}
-          {currentStep === 16 && (
+          {currentStep === 12 && <StepVersionUpgrades items={versionUpgrades} setItems={setVersionUpgrades} catalog={versionUpgradeCatalog} />}
+          {/* Step 13-16 routing follows the operator-validated roadmap order:
+                Customer Feature Requests → License Gap → Urgent Actions → Recommended Enhancements.
+              The component file names (Step9NextSteps, Step10FeatureRequests, …) reflect
+              the historical step IDs from before this reshuffle — kept as-is to avoid
+              churning rename diffs across the report and report constants. */}
+          {currentStep === 13 && <Step10FeatureRequests items={featureRequests} setItems={setFeatureRequests} />}
+          {currentStep === 14 && (
             <StepLicenseGap
               licenseGaps={licenseGaps}
               setLicenseGaps={setLicenseGaps}
               existingLicenses={sessionData.licenses ?? []}
             />
           )}
+          {currentStep === 15 && <Step9NextSteps items={actionItems} setItems={setActionItems} />}
+          {currentStep === 16 && <StepRecommendedEnhancements selectedEnhancements={selectedEnhancements} setSelectedEnhancements={setSelectedEnhancements} enhancementOverrides={enhancementOverrides} setEnhancementOverrides={setEnhancementOverrides} />}
           {currentStep === 17 && (
             <Step10Summary
               templates={templates}

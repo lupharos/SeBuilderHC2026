@@ -21,10 +21,14 @@ export const STEP_TITLES: Record<number, string> = {
   10: 'Certificate Analysis',
   11: 'Recommendations',
   12: 'Version Upgrade Proposals',
-  13: 'Next Steps & Roadmap',
-  14: 'Customer Feature Requests',
-  15: 'Recommended Enhancements',
-  16: 'License Gap',
+  /* Steps 13-16 reordered: roadmap deliverables now flow as
+       Customer Feature Requests → License Gap → Urgent Actions → Recommended Enhancements
+     so that "Urgent Actions" lives directly between the licensing decision and
+     the enhancement upsell pitch (operator-validated layout). */
+  13: 'Customer Feature Requests',
+  14: 'License Gap',
+  15: 'Urgent Actions',
+  16: 'Recommended Enhancements',
   17: 'Summary & Review',
   18: 'Final Export',
 };
@@ -74,10 +78,10 @@ export const STEP_LABELS: Record<number, string> = {
   10: 'Certificates',
   11: 'Recommendations',
   12: 'Version Upgrades',
-  13: 'Next Steps',
-  14: 'Customer FRs',
-  15: 'Enhancements',
-  16: 'License Gap',
+  13: 'Customer FRs',
+  14: 'License Gap',
+  15: 'Urgent Actions',
+  16: 'Enhancements',
   17: 'Summary & Review',
   18: 'Final Export',
 };

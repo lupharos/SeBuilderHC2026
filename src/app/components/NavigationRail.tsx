@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { FolderOpen, Braces, Layers, ClipboardCheck, MonitorSmartphone, Sparkles, Activity } from 'lucide-react';
+import { FolderOpen, Braces, Layers, ClipboardCheck, MonitorSmartphone, Sparkles, Activity, ArrowUpCircle } from 'lucide-react';
 
-export type ActiveView = 'wizard' | 'templates' | 'sessions' | 'versions' | 'endpoint_matrix' | 'destination_patterns';
+export type ActiveView = 'wizard' | 'templates' | 'sessions' | 'versions' | 'endpoint_matrix' | 'destination_patterns' | 'version_upgrade_catalog';
 
 interface NavigationRailProps {
   activeView: ActiveView;
@@ -124,6 +124,12 @@ export function NavigationRail({ activeView, onChangeView, onOpenProfile, onStar
         label="GenAI Apps & Destination Patterns"
         active={activeView === 'destination_patterns'}
         onClick={() => onChangeView('destination_patterns')}
+      />
+      <NavButton
+        icon={<ArrowUpCircle size={16} />}
+        label="Version & Release Catalog"
+        active={activeView === 'version_upgrade_catalog'}
+        onClick={() => onChangeView('version_upgrade_catalog')}
       />
       <NavButton
         icon={<ClipboardCheck size={16} />}

@@ -74,6 +74,32 @@ export const ENHANCEMENTS: Enhancement[] = [
       'Secure Email Delivery ensures that emails containing sensitive or regulated content are automatically encrypted at the point of transmission — protecting the organization from inadvertent disclosure and demonstrating compliance to regulators and auditors across all operating jurisdictions. Advanced Logs provide granular, structured telemetry for every email transaction, enabling faster incident response, deeper SOC integration, and a complete audit trail for legal and compliance purposes.',
   },
   {
+    id: 'cloud-dlp-casb',
+    name: 'Cloud DLP & Inline/API Cloud Application Control',
+    shortName: 'Cloud DLP / CASB',
+    category: 'Cloud',
+    emoji: '☁️',
+    accent: '#2563EB',
+    tagline: 'Real-time and out-of-band data security across Microsoft 365, Google Workspace, and beyond — natively unified with Forcepoint DLP.',
+    whyWeRecommendIt:
+      'Cloud adoption has moved sensitive data out of the perimeter and into SaaS platforms where traditional controls don\'t reach. Most organizations rely on basic access controls without inspecting what data is actually flowing into — or out of — Microsoft 365, Google Workspace, Salesforce, or Box. Without Cloud DLP, a user can share a file containing regulated data via a public OneDrive link or upload it to an unsanctioned app — and no policy fires.',
+    businessValue:
+      'Inline & API-Based Enforcement delivers two complementary coverage layers: API mode scans and remediates sensitive content already at rest in sanctioned cloud apps without any network redirection, while inline mode enforces real-time upload blocking, adaptive access control, and Shadow IT governance at the point of transmission — before data reaches the cloud. Native DLP Integration is the decisive architectural advantage. Forcepoint CASB enforces the same classification engine, fingerprints, and policy framework as Forcepoint DLP — extended natively to the cloud channel. No re-authoring policies, no siloed incident queues, no integration overhead. A violation detected on SharePoint surfaces in the same workflow as an endpoint or network DLP event. For organizations subject to GDPR, KVKK, PDPL, or BDDK, CASB Cloud DLP provides auditable evidence that data protection controls follow the data — into every cloud environment.',
+  },
+  {
+    id: 'web-security',
+    name: 'Web Security — SSL Inspection, Advanced Reporting & Native DLP Integration',
+    shortName: 'Web Security',
+    category: 'Web',
+    emoji: '🌐',
+    accent: '#0EA5E9',
+    tagline: 'Encrypted traffic visibility + granular telemetry + inline data loss prevention — without the complexity of third-party stacks.',
+    whyWeRecommendIt:
+      'Web remains the primary vector for both inbound malware delivery and outbound data exfiltration. Most organizations apply URL filtering and category controls without enabling SSL/TLS inspection — leaving the majority of today\'s encrypted web traffic completely unexamined. Without Advanced Reporting, security teams lack the structured telemetry needed for incident reconstruction, compliance evidence, and SIEM/SOC correlation. And critically: organizations running a separate, bolt-on DLP solution face policy fragmentation, coverage gaps at the web channel, and the operational overhead of managing two disconnected enforcement points.',
+    businessValue:
+      'SSL/TLS Inspection ensures that encrypted web sessions are fully decoded and inspected at the gateway — eliminating the blind spot that attackers and malicious insiders exploit to bypass standard controls, and providing consistent policy enforcement regardless of whether traffic is plain or encrypted. Advanced Reporting delivers granular, structured logs for every web transaction — user, URL, category, action, bytes transferred, and policy match — enabling faster incident response, complete audit trails for regulatory and legal purposes, and seamless integration into SOC workflows and SIEM platforms across all operating jurisdictions. Native DLP Integration is where Forcepoint\'s architecture creates a decisive advantage over point solutions. Rather than routing web traffic through a separate DLP engine — introducing latency, sync complexity, and policy drift — Forcepoint Web Security enforces DLP policies inline, at the web channel, using the same classification engine and policy framework as Forcepoint DLP. A single policy defined once, enforced everywhere — web upload, cloud sync, HTTP/S POST, and file transfer channels covered natively. No gap between what the DLP policy intends and what the web gateway actually enforces. Unified incident management: web-channel DLP violations appear in the same console and workflow as endpoint and network DLP events. Significantly lower total cost and operational complexity vs. stitching together a third-party web proxy with a standalone DLP platform. For organizations already running or evaluating Forcepoint DLP, the web gateway is not an add-on — it is the web enforcement arm of the same data security architecture.',
+  },
+  {
     id: 'rbi',
     name: 'Remote Browser Isolation (RBI)',
     shortName: 'RBI',

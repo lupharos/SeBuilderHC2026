@@ -9,6 +9,7 @@ import { BottomPanel } from './BottomPanel';
 import { VersionDataPage } from './VersionDataPage';
 import { EndpointMatrixPage } from './EndpointMatrixPage';
 import { DestinationPatternsPage } from './DestinationPatternsPage';
+import { VersionUpgradeCatalogPage } from './VersionUpgradeCatalogPage';
 import { CancelSessionModal } from './CancelSessionModal';
 import type { Template } from './types/templates';
 import type { QuestionAnswer, TemplateAnswers } from './rules/ruleEngine';
@@ -302,6 +303,11 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
   const [complianceFrameworks, setComplianceFrameworks] = useLocalStorage<ComplianceFrameworkItem[]>('hc_compliance_frameworks', []);
   const [enhancementOverrides, setEnhancementOverrides] = useLocalStorage<Record<string, EnhancementOverride>>('hc_enhancement_overrides', {});
   const [versionUpgrades, setVersionUpgrades] = useLocalStorage<VersionUpgradeProposal[]>('hc_version_upgrades', []);
+  /* Global catalog of reusable upgrade proposals — independent from any
+     session, edited via the "Version & Release Catalog" left-rail page.
+     The wizard's Version Upgrade Proposals step reads this catalog to
+     offer a one-click "Add from Catalog" picker. */
+  const [versionUpgradeCatalog, setVersionUpgradeCatalog] = useLocalStorage<VersionUpgradeProposal[]>('hc_version_upgrade_catalog', []);
   const [endpointCompatInput, setEndpointCompatInput] = useLocalStorage<EndpointCompatibilityInput>('hc_endpoint_compat_input', { ...EMPTY_COMPAT_INPUT });
   const [endpointCompatAssessment, setEndpointCompatAssessment] = useLocalStorage<EndpointCompatibilityAssessment | null>('hc_endpoint_compat_assessment', null);
 
@@ -665,6 +671,7 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
               setEnhancementOverrides={setEnhancementOverrides}
               versionUpgrades={versionUpgrades}
               setVersionUpgrades={setVersionUpgrades}
+              versionUpgradeCatalog={versionUpgradeCatalog}
               endpointMatrix={endpointMatrix}
               endpointCompatInput={endpointCompatInput}
               setEndpointCompatInput={setEndpointCompatInput}
@@ -739,6 +746,12 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
       {activeView === 'destination_patterns' && (
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
           <DestinationPatternsPage patterns={destinationPatterns} onChange={setDestinationPatterns} />
+        </div>
+      )}
+
+      {activeView === 'version_upgrade_catalog' && (
+        <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+          <VersionUpgradeCatalogPage catalog={versionUpgradeCatalog} setCatalog={setVersionUpgradeCatalog} />
         </div>
       )}
 

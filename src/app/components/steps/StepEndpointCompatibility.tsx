@@ -129,20 +129,36 @@ export function StepEndpointCompatibility({
     return null;
   })();
 
+  /* Operator-selected active version on Step 5 wins over the auto-detected
+     "latest seen" version. Falls back to latestVersion when nothing was
+     explicitly picked. */
+  const step6Version = endpointAgentSummary?.activeVersion ?? endpointAgentSummary?.latestVersion ?? null;
+  const step6IsOperatorPicked = !!endpointAgentSummary?.activeVersion;
+
   const agentSource: AgentSource =
-    endpointAgentSummary?.latestVersion ? { kind: 'step6' }
+    step6Version                        ? { kind: 'step6' }
     : step4Fallback                     ? { kind: 'step4', mode: step4Fallback.mode }
     : null;
 
   useEffect(() => {
+    const wantAgentVersion = step6Version ?? step4Fallback?.version ?? '';
+    const wantTotalEndpoints = endpointAgentSummary?.totalRecords ?? 0;
     setInput((prev) => {
-      const next = { ...prev };
-      next.agentVersion   = endpointAgentSummary?.latestVersion ?? step4Fallback?.version ?? '';
-      next.totalEndpoints = endpointAgentSummary?.totalRecords ?? 0;
-      return next;
+      /* Defensive guard — only commit a new input object when at least
+         one of the agent fields actually changed. Without this, the
+         functional update returned a fresh object on every render of
+         this effect's deps, which (in combination with the fact that
+         `endpointAgentSummary` can be a new reference even when its
+         contents are unchanged after a sibling step re-renders) cascaded
+         into a setInput → input change → liveAssessment recompute →
+         setAssessment → re-render loop. */
+      if (prev.agentVersion === wantAgentVersion && prev.totalEndpoints === wantTotalEndpoints) {
+        return prev;
+      }
+      return { ...prev, agentVersion: wantAgentVersion, totalEndpoints: wantTotalEndpoints };
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [endpointAgentSummary, step4Fallback?.version]);
+  }, [endpointAgentSummary, step4Fallback?.version, step6Version]);
 
   /* ── Live assessment ── */
   const liveAssessment = useMemo(
@@ -316,7 +332,7 @@ export function StepEndpointCompatibility({
         <div className="flex flex-col gap-4">
           {/* Agent context — Step 6 CSV when present, otherwise Step 4's
               "Endpoint Agent (Hybrid Web)" installed version. */}
-          <AgentContextCard summary={endpointAgentSummary} agentVersion={input.agentVersion} totalEndpoints={input.totalEndpoints} source={agentSource} />
+          <AgentContextCard summary={endpointAgentSummary} agentVersion={input.agentVersion} totalEndpoints={input.totalEndpoints} source={agentSource} operatorPicked={step6IsOperatorPicked} />
 
           {/* Forcepoint solutions in use */}
           <FieldCard title="Forcepoint Solutions in Use" subtitle="Which F1E products the customer's agent is deployed for. Filters the matrix accordingly.">
@@ -509,12 +525,13 @@ function AgentMissingBanner() {
   );
 }
 
-function AgentContextCard({ summary, agentVersion, totalEndpoints, source }: { summary: EndpointAgentSummary | null; agentVersion: string; totalEndpoints: number; source: AgentSource }) {
+function AgentContextCard({ summary, agentVersion, totalEndpoints, source, operatorPicked }: { summary: EndpointAgentSummary | null; agentVersion: string; totalEndpoints: number; source: AgentSource; operatorPicked: boolean }) {
   const fromCsv  = source?.kind === 'step6';
   const fromV4   = source?.kind === 'step4';
   const hasData  = source !== null && !!agentVersion;
   const v4Mode   = source?.kind === 'step4' ? source.mode : null;
   const sourceLabel = (() => {
+    if (fromCsv && operatorPicked) return 'AGENT CONTEXT — STEP 6 · OPERATOR-PICKED';
     if (fromCsv) return 'AGENT CONTEXT — STEP 6';
     if (v4Mode === 'both') return 'AGENT CONTEXT — STEP 4 · DLP + HYBRID WEB';
     if (v4Mode === 'dlp')  return 'AGENT CONTEXT — STEP 4 · DLP ENDPOINT';
@@ -522,8 +539,9 @@ function AgentContextCard({ summary, agentVersion, totalEndpoints, source }: { s
     return 'AGENT CONTEXT';
   })();
   const installedSubtitle = (() => {
-    if (!hasData)          return 'no version detected';
-    if (fromCsv)           return 'latest deployed';
+    if (!hasData)                      return 'no version detected';
+    if (fromCsv && operatorPicked)     return 'marked active on Step 5';
+    if (fromCsv)                       return 'latest deployed';
     if (v4Mode === 'both') return 'installed (DLP + Hybrid Web)';
     if (v4Mode === 'dlp')  return 'installed (DLP)';
     if (v4Mode === 'web')  return 'installed (Hybrid Web)';
@@ -540,7 +558,7 @@ function AgentContextCard({ summary, agentVersion, totalEndpoints, source }: { s
           {hasData && (
             <span className="flex items-center gap-1.5"
               style={{ fontSize: '9px', fontWeight: 700, color: '#A7F3D0', background: 'rgba(167,243,208,0.12)', border: '1px solid rgba(167,243,208,0.3)', borderRadius: 4, padding: '2px 7px', letterSpacing: '0.06em' }}>
-              <Cpu size={9} /> {fromCsv ? 'AUTO-DETECTED' : 'FROM VERSION CHECK'}
+              <Cpu size={9} /> {fromCsv && operatorPicked ? 'OPERATOR-PICKED' : fromCsv ? 'AUTO-DETECTED' : 'FROM VERSION CHECK'}
             </span>
           )}
         </div>

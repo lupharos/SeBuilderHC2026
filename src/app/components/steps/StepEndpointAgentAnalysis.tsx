@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Upload, FileText, AlertTriangle, AlertCircle, RefreshCw, Trash2, Monitor, ShieldOff, ServerCog, Clock, Lock, Download } from 'lucide-react';
+import { Upload, FileText, AlertTriangle, AlertCircle, RefreshCw, Trash2, Monitor, ShieldOff, ServerCog, Clock, Lock, Download, CheckCircle2 } from 'lucide-react';
 import { parseEndpointAgentCsv, type EndpointAgentSummary } from './endpointAgentParser';
 import { generateEndpointTextReport } from './endpointAgentTextReport';
 
@@ -134,6 +134,14 @@ export function StepEndpointAgentAnalysis({ summary, setSummary }: Props) {
 
       <div className="grid grid-cols-2 gap-[13px]">
         <Panel title="Agent Version Distribution" icon={<Monitor size={13} />} accent="#06B6D4">
+          <div style={{ fontSize: '10.5px', color: '#475569', marginBottom: 8, padding: '6px 9px', background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 6, lineHeight: 1.5 }}>
+            Mark which version is the customer's <strong>active production agent</strong>. Step 6 (Endpoint Compatibility) will evaluate against the version you pick here instead of auto-detecting the highest version seen.
+            {summary.activeVersion && (
+              <span style={{ display: 'block', marginTop: 4, color: '#0891B2', fontWeight: 600 }}>
+                Active: <span style={{ fontFamily: "'JetBrains Mono', monospace" }}>{summary.activeVersion}</span>
+              </span>
+            )}
+          </div>
           <table className="w-full" style={{ fontSize: '11.5px' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid #EEF0F5', color: '#94A3B8' }}>
@@ -141,13 +149,23 @@ export function StepEndpointAgentAnalysis({ summary, setSummary }: Props) {
                 <th className="text-right py-1.5 px-2 font-semibold" style={{ fontSize: '10px', letterSpacing: '0.05em' }}>COUNT</th>
                 <th className="text-right py-1.5 px-2 font-semibold" style={{ fontSize: '10px', letterSpacing: '0.05em' }}>%</th>
                 <th className="text-center py-1.5 px-2 font-semibold" style={{ fontSize: '10px', letterSpacing: '0.05em' }}>STATUS</th>
+                <th className="text-center py-1.5 px-2 font-semibold" style={{ fontSize: '10px', letterSpacing: '0.05em' }}>ACTIVE</th>
               </tr>
             </thead>
             <tbody>
               {summary.versionDistribution.map((v) => {
                 const isLatest = v.version === summary.latestVersion;
+                const isActive = v.version === summary.activeVersion;
+                const setActive = () => setSummary({
+                  ...summary,
+                  activeVersion: isActive ? null : v.version,
+                });
                 return (
-                  <tr key={v.version} style={{ borderBottom: '1px solid #F4F6FA' }}>
+                  <tr key={v.version}
+                    style={{
+                      borderBottom: '1px solid #F4F6FA',
+                      background: isActive ? 'rgba(8,145,178,0.06)' : 'transparent',
+                    }}>
                     <td className="py-1.5 px-2 font-mono" style={{ color: '#0F172A', fontWeight: isLatest ? 700 : 500 }}>{v.version}</td>
                     <td className="py-1.5 px-2 text-right font-mono" style={{ color: '#334155' }}>{v.count.toLocaleString()}</td>
                     <td className="py-1.5 px-2 text-right font-mono" style={{ color: '#64748B' }}>{v.pct}%</td>
@@ -155,6 +173,24 @@ export function StepEndpointAgentAnalysis({ summary, setSummary }: Props) {
                       {isLatest && <Badge color="#16A34A" bg="rgba(22,163,74,0.1)">LATEST</Badge>}
                       {v.isOutdated && <Badge color="#DC2626" bg="rgba(220,38,38,0.08)">OUTDATED</Badge>}
                       {!isLatest && !v.isOutdated && <Badge color="#94A3B8" bg="#F1F5F9">CURRENT</Badge>}
+                    </td>
+                    <td className="py-1.5 px-2 text-center">
+                      <button
+                        onClick={setActive}
+                        title={isActive ? 'Click to clear — Step 6 will fall back to the latest version' : 'Mark this as the active production agent'}
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4,
+                          padding: isActive ? '3px 8px' : '3px 7px',
+                          fontSize: '10px', fontWeight: 700, letterSpacing: '0.04em',
+                          background: isActive ? '#0891B2' : '#FFFFFF',
+                          color: isActive ? '#FFFFFF' : '#475569',
+                          border: `1px solid ${isActive ? '#0E7490' : '#CBD5E1'}`,
+                          borderRadius: 4,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {isActive ? <><CheckCircle2 size={10} /> ACTIVE</> : 'Set active'}
+                      </button>
                     </td>
                   </tr>
                 );

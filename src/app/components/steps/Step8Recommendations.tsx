@@ -310,55 +310,13 @@ export function Step8Recommendations({ recommendations, setRecommendations }: { 
               </div>
             </div>
 
-            {/* Release Notes block — only when category is Version Upgrade */}
-            {form.category === 'version_upgrade' && (
-              <div className="mb-5 rounded-lg p-[14px_16px]" style={{ background: '#EFF6FF', border: '1.5px solid #BFDBFE' }}>
-                <div className="flex items-center gap-1.5 mb-3">
-                  <span style={{ fontSize: '14px' }}>⬆️</span>
-                  <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#1E40AF', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
-                    Release Notes (target version)
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 gap-3 mb-3">
-                  <div>
-                    <label style={{ fontSize: '10.5px', fontWeight: 600, color: '#1E40AF', display: 'block', marginBottom: '5px' }}>
-                      Target Version
-                    </label>
-                    <input
-                      type="text"
-                      value={form.targetVersion ?? ''}
-                      onChange={(e) => setForm((f) => ({ ...f, targetVersion: e.target.value }))}
-                      placeholder="e.g. 10.4 or 26.02"
-                      style={{ ...inputStyle, fontFamily: 'monospace', background: '#fff' }}
-                    />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: '10.5px', fontWeight: 600, color: '#1E40AF', display: 'block', marginBottom: '5px' }}>
-                      Release Notes URL
-                    </label>
-                    <input
-                      type="url"
-                      value={form.releaseNotesUrl ?? ''}
-                      onChange={(e) => setForm((f) => ({ ...f, releaseNotesUrl: e.target.value }))}
-                      placeholder="https://help.forcepoint.com/…"
-                      style={{ ...inputStyle, background: '#fff' }}
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label style={{ fontSize: '10.5px', fontWeight: 600, color: '#1E40AF', display: 'block', marginBottom: '5px' }}>
-                    Release Notes Highlights (optional)
-                  </label>
-                  <textarea
-                    value={form.releaseNotes ?? ''}
-                    onChange={(e) => setForm((f) => ({ ...f, releaseNotes: e.target.value }))}
-                    placeholder="Key fixes, security patches, breaking changes, prerequisites…"
-                    rows={3}
-                    style={{ ...inputStyle, background: '#fff', resize: 'vertical' }}
-                  />
-                </div>
-              </div>
-            )}
+            {/* Release Notes fields previously lived here when category was
+                "Version Upgrade", but version-specific details (target version,
+                release notes URL, highlights) are already captured in detail on
+                the next page (Step 9 — Version Upgrade Proposals). Keeping them
+                here too is duplicate data-entry. The type fields stay on the
+                Recommendation interface for backward-compat with existing
+                sessions, but no UI emits them on new recommendations. */}
 
             {/* Action buttons */}
             <div className="flex gap-2">
