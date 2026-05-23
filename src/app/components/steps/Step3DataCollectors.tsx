@@ -8,7 +8,7 @@ import { parseAuditSystemLogs, type AuditSystemLogsReport, type AuditSeverity } 
 import { parseDlpServiceLogs, isServiceLogFilename, type ServiceLogsReport, type ServiceLogSeverity, type ServiceLogFile } from './dlpServiceLogsParser';
 import { fetchDlpPosture, type DlpPostureSummary, type DlpPostureBlockId, type DestinationPatterns, DLP_POSTURE_BLOCKS, ALL_POSTURE_BLOCK_IDS, formatBytes } from './dlpPosture';
 import { type CustomerConnectorConfig, type CustomerConnectorStatus, randomHex256, fetchConnectorStatus, buildConnectorBundle, buildConnectorSecretsTemplate, registerConnectorAllowlist, deregisterConnectorToken, runJobViaConnector } from './customerConnector';
-import { Key, Plug, RefreshCw, Activity, Globe2, Download } from 'lucide-react';
+import { Key, Plug, RefreshCw, Activity, Globe2, Download, Eye, EyeOff, Copy } from 'lucide-react';
 
 /* Download URL for the customer connector .exe. The Ubuntu deploy
    host already keeps the binary at
@@ -1392,6 +1392,14 @@ export function Step3DataCollectors({
   const updConnector = (patch: Partial<CustomerConnectorConfig>) =>
     setCustomerConnector((prev) => ({ ...prev, ...patch }));
 
+  /* Toggle state for the inline JSON preview that sits below the
+     Download buttons. null = collapsed, 'bundle' = show connector.json,
+     'secrets' = show connector-secrets.json. Same UX pattern as
+     "preview before download" on most config CLIs — operator can
+     eyeball values before handing the file to the customer. */
+  const [showingJson, setShowingJson] = useState<null | 'bundle' | 'secrets'>(null);
+  const [jsonCopied, setJsonCopied] = useState(false);
+
   const downloadConnectorBundle = () => {
     const bundle = buildConnectorBundle(customerConnector);
     const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
@@ -1945,6 +1953,37 @@ export function Step3DataCollectors({
   const toggleGroupAll = (ids: string[], all: boolean) =>
     setSelectedReports(prev => all ? prev.filter(id => !ids.includes(id)) : [...new Set([...prev, ...ids])]);
 
+  /* Single source of truth for "is SQL ready to run reports?" used
+     by BOTH the per-row Run buttons and the bulk "Run N Selected"
+     button. Without this they kept drifting apart:
+       direct        — SQL card enabled AND SERVER / HOST filled.
+       via-connector — SQL card enabled AND Customer Connector
+                       registered + ONLINE (the connector owns the
+                       credentials in connector-secrets.json, so the
+                       wizard's server field is intentionally empty
+                       in this transport mode). */
+  const sqlBackendReady = (() => {
+    if (!sqlConfig.enabled) return false;
+    if ((sqlConfig.transport ?? 'direct') === 'via-connector') {
+      return customerConnector.enabled && !!customerConnector.token && !!connectorStatus?.online;
+    }
+    return !!sqlConfig.server.trim();
+  })();
+  /* Human-readable explanation of why sqlBackendReady is false —
+     surfaced as the disabled-button tooltip so the operator knows
+     which fix to apply (set a server, enable the connector, wait
+     for ONLINE). Empty string when ready. */
+  const sqlBackendBlocker: string = (() => {
+    if (!sqlConfig.enabled) return 'Enable the SQL Server card above to run reports.';
+    if ((sqlConfig.transport ?? 'direct') === 'via-connector') {
+      if (!customerConnector.enabled || !customerConnector.token) return 'Via-Connector mode is selected but the Customer Connector card is OFF / has no token. Enable it above.';
+      if (!connectorStatus?.online) return 'Customer Connector is registered but OFFLINE — wait for it to phone home.';
+      return '';
+    }
+    if (!sqlConfig.server.trim()) return 'Direct mode needs the SERVER / HOST field filled in the SQL Server card above.';
+    return '';
+  })();
+
   return (
     <div className="space-y-[13px]">
 
@@ -2325,33 +2364,78 @@ export function Step3DataCollectors({
                 {/* Action row — download connector.json + secrets template + revoke */}
                 <div className="flex flex-wrap items-center gap-3 pt-2"
                   style={{ borderTop: '1px dashed #E2E8F0' }}>
-                  <button onClick={downloadConnectorBundle}
-                    disabled={!tokenOk || !keyOk}
-                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg font-semibold transition-all"
-                    style={{
-                      fontSize: '12px',
-                      background: !tokenOk || !keyOk ? '#F1F5F9' : 'linear-gradient(135deg,#7C3AED,#5B21B6)',
-                      color:      !tokenOk || !keyOk ? '#94A3B8' : '#fff',
-                      cursor:     !tokenOk || !keyOk ? 'not-allowed' : 'pointer',
-                      border: '1.5px solid transparent',
-                      boxShadow: !tokenOk || !keyOk ? 'none' : '0 4px 14px rgba(124,58,237,0.3)',
-                    }}
-                    title="Download the connector.json config (HC endpoint + token + AES-256 key + IP allowlist).">
-                    <Key size={12} /> Download connector.json
-                  </button>
-                  <button onClick={downloadConnectorSecretsTemplate}
-                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg font-semibold transition-all"
-                    style={{
-                      fontSize: '12px',
-                      background: 'linear-gradient(135deg,#0D9488,#0F766E)',
-                      color: '#fff',
-                      cursor: 'pointer',
-                      border: '1.5px solid transparent',
-                      boxShadow: '0 4px 14px rgba(13,148,136,0.30)',
-                    }}
-                    title="Download a connector-secrets.json template the customer fills with their local SQL + DLP REST API credentials. Pre-filled from this wizard's SQL config + REST API config where available.">
-                    <FileText size={12} /> Download connector-secrets.json
-                  </button>
+                  {/* connector.json — download paired with an inline
+                      "Show" toggle so the operator can sanity-check
+                      values (hcEndpoint, allowedSourceIp, etc.) before
+                      handing the file to the customer. */}
+                  <div className="flex">
+                    <button onClick={downloadConnectorBundle}
+                      disabled={!tokenOk || !keyOk}
+                      className="flex items-center gap-1.5 px-4 py-2 font-semibold transition-all"
+                      style={{
+                        fontSize: '12px',
+                        background: !tokenOk || !keyOk ? '#F1F5F9' : 'linear-gradient(135deg,#7C3AED,#5B21B6)',
+                        color:      !tokenOk || !keyOk ? '#94A3B8' : '#fff',
+                        cursor:     !tokenOk || !keyOk ? 'not-allowed' : 'pointer',
+                        border: '1.5px solid transparent',
+                        borderRadius: '8px 0 0 8px',
+                        boxShadow: !tokenOk || !keyOk ? 'none' : '0 4px 14px rgba(124,58,237,0.3)',
+                      }}
+                      title="Download the connector.json config (HC endpoint + token + AES-256 key + IP allowlist).">
+                      <Key size={12} /> Download connector.json
+                    </button>
+                    <button onClick={() => { setShowingJson((s) => s === 'bundle' ? null : 'bundle'); setJsonCopied(false); }}
+                      disabled={!tokenOk || !keyOk}
+                      className="flex items-center px-2.5 font-semibold transition-all"
+                      style={{
+                        fontSize: '11px',
+                        background: !tokenOk || !keyOk ? '#F1F5F9' : (showingJson === 'bundle' ? '#5B21B6' : 'rgba(124,58,237,0.85)'),
+                        color:      !tokenOk || !keyOk ? '#94A3B8' : '#fff',
+                        cursor:     !tokenOk || !keyOk ? 'not-allowed' : 'pointer',
+                        border: '1.5px solid transparent',
+                        borderRadius: '0 8px 8px 0',
+                        borderLeft: '1px solid rgba(255,255,255,0.18)',
+                      }}
+                      title={showingJson === 'bundle' ? 'Hide the connector.json preview.' : 'Show connector.json inline (preview the values before downloading).'}>
+                      {showingJson === 'bundle' ? <EyeOff size={12} /> : <Eye size={12} />}
+                    </button>
+                  </div>
+
+                  {/* connector-secrets.json — same Download + Show
+                      cluster. Template form, no live credentials
+                      unless the operator already filled in SQL +
+                      DLP-API in the wizard (those get pre-filled in
+                      and ARE visible in the preview). */}
+                  <div className="flex">
+                    <button onClick={downloadConnectorSecretsTemplate}
+                      className="flex items-center gap-1.5 px-4 py-2 font-semibold transition-all"
+                      style={{
+                        fontSize: '12px',
+                        background: 'linear-gradient(135deg,#0D9488,#0F766E)',
+                        color: '#fff',
+                        cursor: 'pointer',
+                        border: '1.5px solid transparent',
+                        borderRadius: '8px 0 0 8px',
+                        boxShadow: '0 4px 14px rgba(13,148,136,0.30)',
+                      }}
+                      title="Download a connector-secrets.json template the customer fills with their local SQL + DLP REST API credentials. Pre-filled from this wizard's SQL config + REST API config where available.">
+                      <FileText size={12} /> Download connector-secrets.json
+                    </button>
+                    <button onClick={() => { setShowingJson((s) => s === 'secrets' ? null : 'secrets'); setJsonCopied(false); }}
+                      className="flex items-center px-2.5 font-semibold transition-all"
+                      style={{
+                        fontSize: '11px',
+                        background: showingJson === 'secrets' ? '#0F766E' : 'rgba(13,148,136,0.85)',
+                        color: '#fff',
+                        cursor: 'pointer',
+                        border: '1.5px solid transparent',
+                        borderRadius: '0 8px 8px 0',
+                        borderLeft: '1px solid rgba(255,255,255,0.18)',
+                      }}
+                      title={showingJson === 'secrets' ? 'Hide the connector-secrets.json preview.' : 'Show connector-secrets.json template inline.'}>
+                      {showingJson === 'secrets' ? <EyeOff size={12} /> : <Eye size={12} />}
+                    </button>
+                  </div>
                   {/* Connector binary download — same origin as the
                       wizard (`/api/connector/agent` on the companion).
                       The companion streams the file straight from the
@@ -2397,6 +2481,97 @@ export function Step3DataCollectors({
                     Customer drops all three in the same folder and starts the service. Once it phones home, the status pill above turns <span style={{ color: '#16A34A', fontWeight: 700 }}>ONLINE</span>.
                   </span>
                 </div>
+
+                {/* Inline JSON preview — same content as the matching
+                    download, rendered as a monospace pre block so the
+                    operator can copy-paste into the customer's host
+                    directly when air-gapped file transfer is awkward.
+                    Header carries Copy-to-clipboard + a quick visual
+                    confirmation; clicking Copy doesn't change focus,
+                    so the operator stays in the wizard flow. */}
+                {showingJson && (() => {
+                  const isBundle = showingJson === 'bundle';
+                  const fileName = isBundle ? 'connector.json' : 'connector-secrets.json';
+                  const obj = isBundle
+                    ? buildConnectorBundle(customerConnector)
+                    : buildConnectorSecretsTemplate({
+                        sqlData: sqlConfig.enabled && sqlConfig.server ? {
+                          server: sqlConfig.server, port: sqlConfig.port,
+                          database: sqlConfig.database || 'wbsn-data-security',
+                          authMode: sqlConfig.authType === 'windows' ? 'windows' as const : 'sql' as const,
+                          username: sqlConfig.username, password: sqlConfig.password,
+                          trustServerCertificate: true,
+                        } : undefined,
+                        dlpApi: apiConnectors.dlpApi.enabled && apiConnectors.dlpApi.url ? {
+                          url: apiConnectors.dlpApi.url,
+                          username: apiConnectors.dlpApi.username,
+                          password: apiConnectors.dlpApi.password,
+                        } : undefined,
+                      });
+                  const jsonStr = JSON.stringify(obj, null, 2);
+                  const accent = isBundle ? '#5B21B6' : '#0F766E';
+                  return (
+                    <div className="rounded-lg overflow-hidden mt-2"
+                      style={{ border: `1px solid ${accent}33` }}>
+                      <div className="flex items-center justify-between px-3 py-2"
+                        style={{ background: accent, color: '#fff' }}>
+                        <span className="font-mono" style={{ fontSize: '11px', letterSpacing: '0.02em' }}>
+                          {fileName}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                await navigator.clipboard.writeText(jsonStr);
+                                setJsonCopied(true);
+                                setTimeout(() => setJsonCopied(false), 1800);
+                              } catch { /* clipboard blocked — ignore */ }
+                            }}
+                            className="flex items-center gap-1.5 px-2 py-1 rounded font-semibold"
+                            style={{
+                              fontSize: '10.5px',
+                              background: 'rgba(255,255,255,0.18)',
+                              color: '#fff',
+                              border: '1px solid rgba(255,255,255,0.28)',
+                              cursor: 'pointer',
+                            }}
+                            title="Copy the JSON to the clipboard.">
+                            {jsonCopied ? <><CheckCircle2 size={11} /> Copied</> : <><Copy size={11} /> Copy</>}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setShowingJson(null)}
+                            className="flex items-center justify-center rounded"
+                            style={{
+                              width: 22, height: 22,
+                              background: 'rgba(255,255,255,0.15)',
+                              color: '#fff',
+                              border: '1px solid rgba(255,255,255,0.25)',
+                              cursor: 'pointer',
+                            }}
+                            title="Hide preview.">
+                            <XIcon size={11} />
+                          </button>
+                        </div>
+                      </div>
+                      <pre className="font-mono"
+                        style={{
+                          margin: 0,
+                          padding: '12px 14px',
+                          fontSize: '11px',
+                          lineHeight: 1.55,
+                          color: '#0F172A',
+                          background: '#F8FAFC',
+                          maxHeight: 360,
+                          overflow: 'auto',
+                          whiteSpace: 'pre',
+                        }}>
+                        {jsonStr}
+                      </pre>
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </div>
@@ -3462,25 +3637,31 @@ export function Step3DataCollectors({
               Running {bulkRunning.current}/{bulkRunning.total}…
             </span>
           )}
-          <button onClick={runAllSelected}
-            disabled={bulkRunning.active || visibleSelectedReports.length === 0 || !sqlConfig.enabled || !sqlConfig.server.trim()}
-            title={!sqlConfig.enabled || !sqlConfig.server.trim()
-              ? 'Enable + configure SQL Server above to run reports'
+          {(() => {
+            const blocker = bulkRunning.active || visibleSelectedReports.length === 0 || !sqlBackendReady;
+            const tooltip = !sqlBackendReady
+              ? sqlBackendBlocker
               : visibleSelectedReports.length === 0
                 ? 'Select at least one report to run'
-                : 'Run every selected report sequentially'}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded font-semibold transition-all"
-            style={{
-              fontSize: '11px',
-              background: bulkRunning.active || visibleSelectedReports.length === 0 || !sqlConfig.enabled || !sqlConfig.server.trim() ? '#F1F5F9' : '#2563EB',
-              color:      bulkRunning.active || visibleSelectedReports.length === 0 || !sqlConfig.enabled || !sqlConfig.server.trim() ? '#94A3B8' : '#fff',
-              border: `1px solid ${bulkRunning.active || visibleSelectedReports.length === 0 || !sqlConfig.enabled || !sqlConfig.server.trim() ? '#E2E8F0' : '#1D4ED8'}`,
-              cursor: bulkRunning.active || visibleSelectedReports.length === 0 || !sqlConfig.enabled || !sqlConfig.server.trim() ? 'not-allowed' : 'pointer',
-              boxShadow: bulkRunning.active || visibleSelectedReports.length === 0 || !sqlConfig.enabled || !sqlConfig.server.trim() ? 'none' : '0 2px 8px rgba(37,99,235,0.3)',
-            }}>
-            {bulkRunning.active ? <Loader size={11} className="animate-spin" /> : <Play size={11} />}
-            {bulkRunning.active ? 'Running…' : `Run ${visibleSelectedReports.length} Selected`}
-          </button>
+                : 'Run every selected report sequentially';
+            return (
+              <button onClick={runAllSelected}
+                disabled={blocker}
+                title={tooltip}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded font-semibold transition-all"
+                style={{
+                  fontSize: '11px',
+                  background: blocker ? '#F1F5F9' : '#2563EB',
+                  color:      blocker ? '#94A3B8' : '#fff',
+                  border: `1px solid ${blocker ? '#E2E8F0' : '#1D4ED8'}`,
+                  cursor:    blocker ? 'not-allowed' : 'pointer',
+                  boxShadow: blocker ? 'none' : '0 2px 8px rgba(37,99,235,0.3)',
+                }}>
+                {bulkRunning.active ? <Loader size={11} className="animate-spin" /> : <Play size={11} />}
+                {bulkRunning.active ? 'Running…' : `Run ${visibleSelectedReports.length} Selected`}
+              </button>
+            );
+          })()}
         </div>
 
         <div className="space-y-3">
@@ -3539,18 +3720,7 @@ export function Step3DataCollectors({
                           windowDays={days}
                           runResult={run}
                           isLast={isLast}
-                          sqlReady={(() => {
-                            /* Run gate depends on transport:
-                                 direct        — SERVER / HOST must be filled (companion needs somewhere to dial).
-                                 via-connector — Customer Connector must be registered + ONLINE; the connector
-                                                 owns the SQL credentials in connector-secrets.json, so the
-                                                 wizard's `sqlConfig.server` is intentionally empty in that mode. */
-                            if (!sqlConfig.enabled) return false;
-                            if ((sqlConfig.transport ?? 'direct') === 'via-connector') {
-                              return customerConnector.enabled && !!customerConnector.token && !!connectorStatus?.online;
-                            }
-                            return !!sqlConfig.server.trim();
-                          })()}
+                          sqlReady={sqlBackendReady}
                           onToggle={() => toggleReport(report.id)}
                           onChangeWindow={(d) => setReportWindows((prev) => ({ ...prev, [report.id]: d }))}
                           onRun={() => runReport(report.sqlKey, days)}
