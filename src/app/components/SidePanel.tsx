@@ -289,7 +289,7 @@ export function SidePanel({ panelType, onClose, onNavigate, onLogout }: SidePane
                 { label: 'Role', value: 'System Engineer' },
                 { label: 'Region', value: 'EMEA' },
                 { label: 'License', value: 'Enterprise' },
-                { label: 'Version', value: 'HC Studio v3.0' },
+                { label: 'Version', value: `${__BUILD_INFO__.productName} ${__BUILD_INFO__.productVersion}` },
               ].map((item) => (
                 <div key={item.label} className="flex justify-between items-center">
                   <span style={{ fontSize: '11px', color: '#94A3B8' }}>{item.label}</span>

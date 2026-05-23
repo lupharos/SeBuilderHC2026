@@ -9,13 +9,22 @@ import react from '@vitejs/plugin-react'
    ───────────────────────────────────────────────────────────────────
    The wizard shows a tiny version chip in the nav rail so the SE can
    tell at a glance which commit is deployed (handy when bug-reporting
-   from customer engagements). Three signals are exposed:
-     • commit  — git short SHA, the canonical "what code is live"
-     • builtAt — UTC ISO timestamp of the build
-     • version — package.json version, for human-readable major bumps
+   from customer engagements). Four signals are exposed:
+     • productName    — UI product name ("HC Studio")
+     • productVersion — Human-facing release label ("v2025.05"). Bump
+                        this on each customer-visible release; the year
+                        / month scheme keeps it readable in screenshots
+                        and customer reports.
+     • commit         — git short SHA, the canonical "what code is live"
+     • builtAt        — UTC ISO timestamp of the build
+     • version        — package.json version, kept for tooling that wants
+                        a strict semver string
    `git rev-parse` runs once at config time. If git isn't available
    (e.g. building from a tarball without .git) we fall back to a
    placeholder so the build doesn't fail. */
+const PRODUCT_NAME = 'HC Studio'
+const PRODUCT_VERSION = 'v2025.05'
+
 function readBuildInfo() {
   let commit = 'nogit'
   try {
@@ -34,6 +43,8 @@ function readBuildInfo() {
     if (typeof pkg.version === 'string') version = pkg.version
   } catch { /* keep placeholder */ }
   return {
+    productName: PRODUCT_NAME,
+    productVersion: PRODUCT_VERSION,
     commit: dirty ? `${commit}-dirty` : commit,
     builtAt: new Date().toISOString(),
     version,

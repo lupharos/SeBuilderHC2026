@@ -83,7 +83,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                 style={{ background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.2)' }}>
                 <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                 <span className="text-blue-300 font-mono" style={{ fontSize: '10.5px', letterSpacing: '0.08em' }}>
-                  HEALTH CHECK PLATFORM v3.0
+                  {__BUILD_INFO__.productName.toUpperCase()} {__BUILD_INFO__.productVersion}
                 </span>
               </div>
               <h1 className="text-white mb-4"

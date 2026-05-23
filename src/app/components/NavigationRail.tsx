@@ -185,7 +185,11 @@ export function NavigationRail({ activeView, onChangeView, onOpenProfile, onStar
 function BuildVersionChip() {
   const info = __BUILD_INFO__;
   /* Built-time defaults; defensive against `define` not running (eg.
-     in a Vitest run that bypasses the vite plugin). */
+     in a Vitest run that bypasses the vite plugin). The chip primarily
+     advertises the customer-facing release label (productVersion), with
+     the commit SHA tucked into the tooltip for build traceability. */
+  const productName = info?.productName ?? 'HC Studio';
+  const productVersion = info?.productVersion ?? 'v0.0';
   const commit = info?.commit ?? 'dev';
   const version = info?.version ?? '0.0.0';
   const builtAt = info?.builtAt ?? '';
@@ -195,23 +199,24 @@ function BuildVersionChip() {
     <div className="relative group mt-3">
       <div
         className="px-2 py-0.5 rounded font-mono text-center"
-        title={`v${version} · ${commit} · built ${builtLocal}`}
+        title={`${productName} ${productVersion} · ${commit} · built ${builtLocal}`}
         style={{
           fontSize: '8.5px',
           letterSpacing: '0.04em',
-          color: 'rgba(255,255,255,0.45)',
+          color: 'rgba(255,255,255,0.55)',
           background: 'rgba(255,255,255,0.03)',
           border: '1px solid rgba(255,255,255,0.06)',
           minWidth: '46px',
+          whiteSpace: 'nowrap',
         }}
       >
-        {commit}
+        {productVersion}
       </div>
       <Tooltip>
         <div style={{ lineHeight: 1.55 }}>
-          <strong style={{ color: '#fff' }}>Build {commit}</strong>
+          <strong style={{ color: '#fff' }}>{productName} {productVersion}</strong>
           <br />
-          <span style={{ color: 'rgba(255,255,255,0.7)' }}>v{version}</span>
+          <span style={{ color: 'rgba(255,255,255,0.7)' }}>build {commit} · v{version}</span>
           {builtLocal && (
             <>
               <br />
