@@ -21,6 +21,8 @@ import cors from 'cors';
 import { Agent } from 'undici';
 import sql from 'mssql';
 import { DLP_QUERIES } from './queries.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
@@ -972,6 +974,51 @@ app.get('/api/connector/status', (req, res) => {
   });
 });
 
+/* GET /api/connector/agent
+   ───────────────────────────────────────────────────────────────────
+   Serves the customer-side connector binary straight from the deploy
+   host's filesystem. The Ubuntu deploy already `git pull`s the repo
+   into /home/student/SeBuilderHC2026, which includes the prebuilt
+   ConnectorAgent/forcepoint-hc-connector.exe — so we don't need to
+   bundle it in the wizard JS or proxy a github.com download. The SE
+   just clicks "Download" in the wizard and the customer's browser
+   pulls it from the same host the wizard runs on.
+
+   Path is hard-coded to the deploy layout; CONNECTOR_AGENT_PATH env
+   var overrides it for local dev / test machines that hold the binary
+   somewhere else. The endpoint is intentionally GET-only and serves
+   nothing else — no path-traversal surface. */
+const CONNECTOR_AGENT_PATH =
+  process.env.CONNECTOR_AGENT_PATH ||
+  '/home/student/SeBuilderHC2026/ConnectorAgent/forcepoint-hc-connector.exe';
+
+app.get('/api/connector/agent', (_req, res) => {
+  try {
+    if (!fs.existsSync(CONNECTOR_AGENT_PATH)) {
+      res.status(404).json({
+        ok: false,
+        message: `Connector binary not found on this host. Expected at ${CONNECTOR_AGENT_PATH}. Set CONNECTOR_AGENT_PATH or run \`git pull\` in the deploy dir.`,
+      });
+      return;
+    }
+    const stat = fs.statSync(CONNECTOR_AGENT_PATH);
+    const fileName = path.basename(CONNECTOR_AGENT_PATH);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Length', stat.size);
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    /* Aggressive cache disable — the operator may rebuild the binary
+       in-place between SE engagements, and we don't want a stale exe
+       cached by the browser or any intermediate proxy. */
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    fs.createReadStream(CONNECTOR_AGENT_PATH).pipe(res);
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
 /* Tiny health probe so the wizard can tell "no server" from "server up
    but SQL refused". GET-only so a curl from the operator is trivial. */
 app.get('/health', (_req, res) => {
@@ -1009,6 +1056,8 @@ app.listen(PORT, HOST, () => {
   console.log('  POST /api/connector/heartbeat  — Customer Connector ping-in');
   // eslint-disable-next-line no-console
   console.log('  GET  /api/connector/status    — Customer Connector liveness');
+  // eslint-disable-next-line no-console
+  console.log(`  GET  /api/connector/agent     — serve connector .exe from ${CONNECTOR_AGENT_PATH}`);
   // eslint-disable-next-line no-console
   console.log('  GET  /health             — liveness probe');
 });

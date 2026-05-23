@@ -8,18 +8,18 @@ import { parseAuditSystemLogs, type AuditSystemLogsReport, type AuditSeverity } 
 import { parseDlpServiceLogs, isServiceLogFilename, type ServiceLogsReport, type ServiceLogSeverity, type ServiceLogFile } from './dlpServiceLogsParser';
 import { fetchDlpPosture, type DlpPostureSummary, type DlpPostureBlockId, type DestinationPatterns, DLP_POSTURE_BLOCKS, ALL_POSTURE_BLOCK_IDS, formatBytes } from './dlpPosture';
 import { type CustomerConnectorConfig, type CustomerConnectorStatus, randomHex256, fetchConnectorStatus, buildConnectorBundle, buildConnectorSecretsTemplate, registerConnectorAllowlist, deregisterConnectorToken } from './customerConnector';
-import { Key, Plug, RefreshCw, Activity, Globe2, Download, ExternalLink } from 'lucide-react';
+import { Key, Plug, RefreshCw, Activity, Globe2, Download } from 'lucide-react';
 
-/* Public URL the customer connector .exe is published at. The binary
-   lives at a fixed path inside the SeBuilderHC2026 repo's `main`
-   branch, so the wizard never has to ship a 15-25 MB exe in its own
-   JS bundle (which would tank SPA load time and blow any cache
-   budget). `/raw/` (not `/blob/`) serves the binary directly so a
-   click triggers a normal browser download from github.com — kept
-   that way so SmartScreen / EDR see a trusted github.com origin,
-   not a synthetic blob from the wizard. Update the path here if the
-   exe is moved or renamed. */
-const CONNECTOR_EXE_URL = 'https://github.com/lupharos/SeBuilderHC2026/raw/main/ConnectorAgent/forcepoint-hc-connector.exe';
+/* Download URL for the customer connector .exe. The Ubuntu deploy
+   host already keeps the binary at
+   `/home/student/SeBuilderHC2026/ConnectorAgent/forcepoint-hc-connector.exe`
+   (refreshed via `git pull` during deploy), so the companion server
+   serves it through `/api/connector/agent`. Relative URL means the
+   wizard, the companion, and the file all stay on the same origin —
+   no cross-origin pre-flight, no public GitHub asset surface, and
+   the SE never has to maintain a parallel release pipeline. nginx
+   in front of the companion proxies the path through unchanged. */
+const CONNECTOR_EXE_URL = '/api/connector/agent';
 
 // ── SQL Server config ────────────────────────────────────────────────────────
 export interface SqlConfig {
@@ -2202,18 +2202,16 @@ export function Step3DataCollectors({
                     title="Download a connector-secrets.json template the customer fills with their local SQL + DLP REST API credentials. Pre-filled from this wizard's SQL config + REST API config where available.">
                     <FileText size={12} /> Download connector-secrets.json
                   </button>
-                  {/* Connector binary download — points at the fixed
-                      `/raw/` path inside the SeBuilderHC2026 repo so a
-                      click triggers a normal browser download from
-                      github.com. Kept as a plain anchor (not a fetch)
-                      so SmartScreen / EDR see a trusted github.com
-                      origin instead of a synthetic blob from the
-                      wizard. The `download` attribute makes Chrome /
-                      Edge save with the original filename rather than
-                      a hashed temp name. */}
+                  {/* Connector binary download — same origin as the
+                      wizard (`/api/connector/agent` on the companion).
+                      The companion streams the file straight from the
+                      deploy host's filesystem, so there's no GitHub
+                      round-trip and the customer doesn't need
+                      internet access beyond the wizard URL. The
+                      `download` attribute makes Chrome / Edge save
+                      with the original filename rather than a hashed
+                      temp name. */}
                   <a href={CONNECTOR_EXE_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
                     download="forcepoint-hc-connector.exe"
                     className="flex items-center gap-1.5 px-4 py-2 rounded-lg font-semibold transition-all"
                     style={{
@@ -2225,9 +2223,8 @@ export function Step3DataCollectors({
                       boxShadow: '0 4px 14px rgba(15,41,82,0.30)',
                       textDecoration: 'none',
                     }}
-                    title="Download forcepoint-hc-connector.exe from the GitHub repo (raw path). Opens in a new tab — SmartScreen treats it as a normal github.com download.">
+                    title="Download forcepoint-hc-connector.exe straight from this HC server. No external network round-trip; the binary is served from the deploy host's ConnectorAgent/ folder.">
                     <Download size={12} /> Download forcepoint-hc-connector.exe
-                    <ExternalLink size={10} style={{ opacity: 0.75 }} />
                   </a>
                   <button onClick={revokeConnectorAccess}
                     disabled={!tokenOk}
@@ -2246,7 +2243,7 @@ export function Step3DataCollectors({
                     Hand the customer all three artifacts:
                     {' '}<span className="font-mono" style={{ color: '#0F2952' }}>connector.json</span> (identity / HC endpoint),
                     {' '}<span className="font-mono" style={{ color: '#0F2952' }}>connector-secrets.json</span> (local SQL + DLP-API creds — they fill / verify the pre-fill),
-                    and{' '}<span className="font-mono" style={{ color: '#0F2952' }}>forcepoint-hc-connector.exe</span> (from the repo).
+                    and{' '}<span className="font-mono" style={{ color: '#0F2952' }}>forcepoint-hc-connector.exe</span> (served from this HC host).
                     Customer drops all three in the same folder and starts the service. Once it phones home, the status pill above turns <span style={{ color: '#16A34A', fontWeight: 700 }}>ONLINE</span>.
                   </span>
                 </div>
