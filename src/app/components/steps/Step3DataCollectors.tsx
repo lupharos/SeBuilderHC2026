@@ -2005,8 +2005,19 @@ export function Step3DataCollectors({
                                 <div style={{ fontSize: '11.5px', fontWeight: 700, color: '#0F172A', marginBottom: 2 }}>
                                   {label}
                                 </div>
+                                {/* OK rows used to render the raw connector
+                                    message — that includes the customer
+                                    SQL host:port/db plus the full SQL
+                                    Server `@@VERSION` banner, which leaks
+                                    infrastructure detail in any screenshot
+                                    of the wizard. The customer doesn't
+                                    want any of that. So we only render a
+                                    generic "Authenticated" for OK, and
+                                    keep the raw error message for FAIL
+                                    where the operator genuinely needs the
+                                    failure context to triage. */}
                                 <div className="font-mono" style={{ fontSize: '10.5px', color: '#475569', lineHeight: 1.5, wordBreak: 'break-word' }}>
-                                  {r.message}
+                                  {ok ? 'Authenticated' : r.message}
                                 </div>
                               </div>
 
