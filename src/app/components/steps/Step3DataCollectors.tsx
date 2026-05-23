@@ -219,7 +219,7 @@ async function runTest(endpoint: string, payload: unknown): Promise<ConnStatus> 
     return { state: 'error', message: e.message || `Server error (${res.status})` };
   } catch (e) {
     const timeout = e instanceof Error && e.name === 'TimeoutError';
-    return { state: 'error', message: timeout ? 'Connection timed out' : 'Local SQL companion not running — start it with `cd server && npm install && npm start`' };
+    return { state: 'error', message: timeout ? 'Connection timed out' : 'Local SQL System API not running — start it with `cd server && npm install && npm start`' };
   }
 }
 
@@ -1822,7 +1822,7 @@ export function Step3DataCollectors({
       const timeout = e instanceof Error && (e.name === 'TimeoutError' || /timed out/i.test(e.message));
       setPostureError(
         e instanceof Error
-          ? (timeout ? 'Posture fetch timed out (companion is reachable but FSM took >75s).' : e.message)
+          ? (timeout ? 'Posture fetch timed out (System API is reachable but FSM took >75s).' : e.message)
           : 'Posture fetch failed.',
       );
     } finally {
@@ -1910,7 +1910,7 @@ export function Step3DataCollectors({
       const timeout = e instanceof Error && e.name === 'TimeoutError';
       setReportRuns((prev) => ({
         ...prev,
-        [id]: { state: 'error', error: timeout ? 'Query timed out (45s)' : 'Local SQL companion not reachable — start it with `cd server && npm start`', windowDays, ranAt: new Date().toISOString() },
+        [id]: { state: 'error', error: timeout ? 'Query timed out (45s)' : 'Local SQL System API not reachable — start it with `cd server && npm start`', windowDays, ranAt: new Date().toISOString() },
       }));
     }
   };
@@ -3396,7 +3396,7 @@ export function Step3DataCollectors({
                             <strong>Routing through connector.</strong>{' '}
                             All DLP REST API calls (test, posture fetch, report runs) will be
                             forwarded as encrypted jobs through the Customer Connector. Customer
-                            credentials never leave their host — companion only sees encrypted payloads.
+                            credentials never leave their host — System API only sees encrypted payloads.
                           </span>
                         </div>
                       )}

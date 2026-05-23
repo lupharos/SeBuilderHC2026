@@ -246,7 +246,7 @@ export async function runJobViaConnector<T = unknown>(
     throw new Error(`Via-Connector: ${msg}`);
   }
   const { jobId } = (await queueRes.json()) as { ok: boolean; jobId: string };
-  if (!jobId) throw new Error('Via-Connector: companion returned no jobId.');
+  if (!jobId) throw new Error('Via-Connector: System API returned no jobId.');
 
   /* Step 2 — short-poll for result. */
   const deadline = Date.now() + overallTimeout;

@@ -187,16 +187,16 @@ export function HelpGuidePage() {
               <H2>Where things run</H2>
               <p>
                 The wizard is a single-page React app served by nginx on an Ubuntu deploy
-                host. A Node companion service (<Code>127.0.0.1:3001</Code>) handles SQL Server
+                host. A Node System API service (<Code>127.0.0.1:3001</Code>) handles SQL Server
                 connections, DLP REST API auth, and the Customer Connector job queue. nginx
-                proxies <Code>/api/*</Code> to the companion.
+                proxies <Code>/api/*</Code> to the System API.
               </p>
               <pre style={{ fontSize: '11px', background: '#0F2952', color: '#A5B4FC', padding: '14px 18px', borderRadius: 8, lineHeight: 1.55, overflow: 'auto' }}>
 {`┌─────────────────────────────────────────────────────────────┐
 │ Deploy host (Ubuntu — /var/www/sebuilderhc/)                │
 │   ├─ nginx        → /             SPA static assets         │
-│   │              → /api/*        proxy → companion          │
-│   ├─ companion    → 127.0.0.1:3001 (Node, systemd-managed)  │
+│   │              → /api/*        proxy → System API         │
+│   ├─ System API   → 127.0.0.1:3001 (Node, systemd-managed)  │
 │   │              SQL Server client, DLP REST API client,    │
 │   │              Customer Connector job broker, AES decrypt │
 │   └─ /var/lib/forcepoint-hc/forcepoint-hc-connector.exe     │
@@ -222,7 +222,7 @@ export function HelpGuidePage() {
             {/* ── 2. NAVIGATION RAIL ────────────────────────────────── */}
             <Section id="navigation" title="2. Navigation rail (left side)">
               <p>
-                Seven main pages, plus the companion health pill, user avatar, and
+                Seven main pages, plus the System API health pill, user avatar, and
                 build version chip at the bottom of the rail.
               </p>
               <NavTable />
@@ -359,8 +359,8 @@ export function HelpGuidePage() {
               </p>
               <H2>Direct vs Via Connector — when to use which</H2>
               <Table headers={['Mode', 'Best when…', 'Picture']} rows={[
-                ['Direct', 'The SE has network reach to the customer FSM (POC / lab / open network).', 'Wizard → companion → customer FSM, all over the SE network.'],
-                ['Via Connector', "The customer's firewall blocks inbound. The SE can ONLY reach the connector's outbound heartbeat.", 'Wizard → companion → enqueue job → connector pulls job → connector hits FSM → encrypted result.'],
+                ['Direct', 'The SE has network reach to the customer FSM (POC / lab / open network).', 'Wizard → System API → customer FSM, all over the SE network.'],
+                ['Via Connector', "The customer's firewall blocks inbound. The SE can ONLY reach the connector's outbound heartbeat.", 'Wizard → System API → enqueue job → connector pulls job → connector hits FSM → encrypted result.'],
               ]} />
               <Warn>
                 Direct fallback is <strong>never automatic</strong>. If you pick Via Connector but
@@ -497,9 +497,9 @@ Closing`}
             {/* ── 8. TROUBLESHOOTING ──────────────────────────────── */}
             <Section id="troubleshoot" title="8. Troubleshooting">
               <Table headers={['Symptom', 'Most likely cause', 'Fix']} rows={[
-                ['Companion health pill RED', 'Companion service down on deploy host', 'sudo systemctl status sebuilderhc-companion then restart'],
+                ['System API health pill RED', 'System API service down on deploy host', 'sudo systemctl status sebuilderhc-companion then restart'],
                 ['Customer Connector OFFLINE despite running', 'Token mismatch (rotation) OR allowlist IP mismatch', 'Compare wizard token with the one in connector.json on customer host'],
-                ['Test Connection (Direct SQL) says "Local SQL companion not running"', 'nginx → companion proxy chain broken', 'curl http://127.0.0.1:3001/health on deploy host'],
+                ['Test Connection (Direct SQL) says "Local SQL System API not running"', 'nginx → System API proxy chain broken', 'curl http://127.0.0.1:3001/health on deploy host'],
                 ['Run buttons grayed out', 'SQL Server card not enabled OR (Via Connector mode) connector not ONLINE', 'Enable the card; for Via Connector, wait until ONLINE pill'],
                 ['Posture fetch times out', 'FSM REST API busy OR creds wrong', 'Test Connection first; if Test passes, raise the timeout'],
                 ['Show JSON button empty in via-connector mode', 'customerConnector state not flushed', 'Hard reload (Ctrl+Shift+R)'],
@@ -509,7 +509,7 @@ Closing`}
 
               <H2>Diagnostic commands (deploy host)</H2>
               <pre style={preStyle}>
-{`# Companion liveness
+{`# System API liveness
 sudo systemctl status sebuilderhc-companion
 sudo journalctl -u sebuilderhc-companion -n 40 --no-pager
 

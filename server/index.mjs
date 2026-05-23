@@ -2003,7 +2003,7 @@ app.post('/api/admin/upgrade', (_req, res) => {
     startedAt: upgradeStartedAt,
     repoPath: repo.path,
     logPath: UPGRADE_LOG_PATH,
-    message: 'Upgrade dispatched. The companion service will restart during deploy — expect a transient connectivity gap.',
+    message: 'Upgrade dispatched. The System API service will restart during deploy — expect a transient connectivity gap.',
   });
 });
 

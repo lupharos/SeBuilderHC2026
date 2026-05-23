@@ -275,10 +275,10 @@ function NavButton({ icon, label, active, onClick }: NavButtonProps) {
 
 function HealthIndicator({ health }: { health: HealthState }) {
   const cfg = health.state === 'ok'
-    ? { color: '#16A34A', glow: 'rgba(34,197,94,0.45)',  label: 'API Online',   pulse: false }
+    ? { color: '#16A34A', glow: 'rgba(34,197,94,0.45)',  label: 'System API Online',   pulse: false }
     : health.state === 'fail'
-      ? { color: '#DC2626', glow: 'rgba(220,38,38,0.45)', label: 'API Offline',  pulse: false }
-      : { color: '#94A3B8', glow: 'rgba(148,163,184,0.4)', label: 'API Checking…', pulse: true };
+      ? { color: '#DC2626', glow: 'rgba(220,38,38,0.45)', label: 'System API Offline',  pulse: false }
+      : { color: '#94A3B8', glow: 'rgba(148,163,184,0.4)', label: 'System API Checking…', pulse: true };
 
   const lastSeen = health.lastCheckAt
     ? `${Math.floor((Date.now() - health.lastCheckAt.getTime()) / 1000)}s ago`

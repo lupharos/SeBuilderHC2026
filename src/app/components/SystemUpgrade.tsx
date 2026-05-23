@@ -45,7 +45,7 @@ export function SystemMaintenanceCard({ info }: { info: UpgradePlatformInfo | nu
   /* When info is null the companion is unreachable — we still render the
      card but disable the button with a meaningful tooltip. */
   const supported = info?.upgradeAvailable === true;
-  const reason = info?.reason || (info === null ? 'Companion is unreachable — start the companion to enable upgrades.' : '');
+  const reason = info?.reason || (info === null ? 'System API is unreachable — start the System API to enable upgrades.' : '');
   return (
     <>
       <div
@@ -120,7 +120,7 @@ function UpgradeModal({ info, onClose }: { info: UpgradePlatformInfo; onClose: (
       const r = await fetch('/api/admin/upgrade', { method: 'POST' });
       const json = await r.json();
       if (!r.ok || !json.ok) {
-        setError(json.error || `Companion returned ${r.status}`);
+        setError(json.error || `System API returned ${r.status}`);
         setPhase('failed');
         return;
       }
@@ -223,7 +223,7 @@ function UpgradeModal({ info, onClose }: { info: UpgradePlatformInfo; onClose: (
             <div style={{ fontSize: '13px', fontWeight: 700, color: '#fff', letterSpacing: '0.01em' }}>
               {phase === 'confirm'   && 'Confirm System Upgrade'}
               {phase === 'running'   && 'Upgrade in Progress'}
-              {phase === 'restarting'&& 'Companion Restarting'}
+              {phase === 'restarting'&& 'System API Restarting'}
               {phase === 'done'      && 'Upgrade Complete'}
               {phase === 'failed'    && 'Upgrade Failed'}
             </div>
@@ -251,7 +251,7 @@ function UpgradeModal({ info, onClose }: { info: UpgradePlatformInfo; onClose: (
                     This will redeploy the application.
                   </div>
                   <div style={{ fontSize: '12px', color: '#475569', lineHeight: 1.6 }}>
-                    The companion service will restart during deploy. Active sessions
+                    The System API service will restart during deploy. Active sessions
                     keep their wizard state, but expect a few seconds of API downtime.
                   </div>
                 </div>
@@ -270,7 +270,7 @@ function UpgradeModal({ info, onClose }: { info: UpgradePlatformInfo; onClose: (
                 <div style={{ fontSize: '10px', color: '#64748B', marginTop: 8, fontFamily: 'monospace' }}>
                   Repo owner: <span style={{ color: '#CBD5E1' }}>{info.repoOwner ?? '—'}</span>
                   {' · '}
-                  Companion uid: <span style={{ color: '#CBD5E1' }}>{info.runningAsRoot ? 'root' : 'non-root'}</span>
+                  System API uid: <span style={{ color: '#CBD5E1' }}>{info.runningAsRoot ? 'root' : 'non-root'}</span>
                 </div>
               </div>
               <div className="flex gap-2">
@@ -299,7 +299,7 @@ function UpgradeModal({ info, onClose }: { info: UpgradePlatformInfo; onClose: (
                   style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
                   <RefreshCw size={12} className="text-amber-600 animate-spin" />
                   <span style={{ fontSize: '11.5px', color: '#92400E', fontWeight: 500 }}>
-                    deploy.sh restarted the companion service. Reconnecting…
+                    deploy.sh restarted the System API service. Reconnecting…
                   </span>
                 </div>
               )}
