@@ -10,6 +10,7 @@ import { VersionDataPage } from './VersionDataPage';
 import { EndpointMatrixPage } from './EndpointMatrixPage';
 import { DestinationPatternsPage } from './DestinationPatternsPage';
 import { VersionUpgradeCatalogPage } from './VersionUpgradeCatalogPage';
+import { HelpGuidePage } from './HelpGuidePage';
 import { CancelSessionModal } from './CancelSessionModal';
 import type { Template } from './types/templates';
 import type { QuestionAnswer, TemplateAnswers } from './rules/ruleEngine';
@@ -270,7 +271,13 @@ function deserializeSessions(raw: unknown[]): HCSession[] {
 }
 
 export function Dashboard({ onLogout }: { onLogout?: () => void }) {
-  const [activeView, setActiveView] = useState<ActiveView>('wizard');
+  /* Default landing view on logon is the Sessions list — operator
+     usually wants to either resume an in-progress engagement or start
+     a fresh one from there, rather than landing on a half-empty
+     wizard. Click "Health Check Wizard" in the nav rail (or the
+     "Start new session" button in the Sessions list) to enter the
+     wizard explicitly. */
+  const [activeView, setActiveView] = useState<ActiveView>('sessions');
 
   /* ── Wizard state ── */
   const [currentStep, setCurrentStep] = useState(1);
@@ -844,6 +851,10 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
           <VersionUpgradeCatalogPage catalog={versionUpgradeCatalog} setCatalog={setVersionUpgradeCatalog} />
         </div>
+      )}
+
+      {activeView === 'help_guide' && (
+        <HelpGuidePage />
       )}
 
       {showProfile && (

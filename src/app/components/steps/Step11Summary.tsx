@@ -1097,6 +1097,312 @@ function buildReportHTML(p: {
   </div>`;
   })() : '';
 
+  /* Security Posture supplemental subsections — only rendered into the
+     Executive Risk Briefing variant under PART 2 · Security Posture, sitting
+     directly under the Posture Telemetry dashboard. The tech-variant copies
+     of these subsections live in their original Sections (Section 03 Board
+     Briefing, Section 07 Endpoint Agents); this hoisted const produces a
+     parallel CxO-facing rollup so the executive report doesn't need to bounce
+     across PARTs to see headline observations + the recommended actions. */
+  const securityPostureExtras: string = isExec ? (() => {
+    const today = Date.now();
+    const day = 24 * 60 * 60 * 1000;
+
+    /* Re-derive the metrics the Quick-Look cards need. infraCritCount /
+       infraHighCount / eosEntries / warnEntries / openActions /
+       supportUpgradeNeeded are already at function scope (see top of
+       buildReportHTML), so we just compute the few licence/hardware
+       counters that previously lived inside the Section 03 IIFE. */
+    const licenseExpiringSoon = (p.sessionData.licenses ?? []).filter((l) => {
+      if (!l.expiry || l.expiry === '—') return false;
+      const d = new Date(l.expiry).getTime();
+      return !Number.isNaN(d) && d > today && d - today < 180 * day;
+    }).length;
+    const licenseExpired = (p.sessionData.licenses ?? []).filter((l) => {
+      if (!l.expiry || l.expiry === '—') return false;
+      const d = new Date(l.expiry).getTime();
+      return !Number.isNaN(d) && d <= today;
+    }).length;
+    const hardwareIssues = (p.sessionData.hardware ?? []).filter((h) => {
+      const ws = (h.warrantyStatus || '').toLowerCase();
+      return ws && ws !== 'active';
+    }).length;
+    const criticalUpgrades = p.versionUpgrades.filter((v) => v.priority === 'critical').length;
+
+    type CheckItem = {
+      icon: string; question: string; count: number;
+      severity: 'critical' | 'warn' | 'ok' | 'neutral'; evidence: string;
+      verdictOverride?: string;
+    };
+    const items: CheckItem[] = [
+      {
+        icon: '🖥', question: 'Server resource issues?',
+        count: infraCritCount + infraHighCount,
+        severity: infraCritCount > 0 ? 'critical' : infraHighCount > 0 ? 'warn' : 'ok',
+        evidence: infraCritCount + infraHighCount === 0
+          ? 'All monitored servers below 70% CPU / RAM / disk thresholds.'
+          : `${infraCritCount} metric${infraCritCount === 1 ? '' : 's'} ≥ 85% · ${infraHighCount} between 70–85%.`,
+      },
+      {
+        icon: '📦', question: 'End-of-Support products in production?',
+        count: eosEntries.length,
+        severity: eosEntries.length > 0 ? 'critical' : 'ok',
+        evidence: eosEntries.length === 0
+          ? 'All components on supported, vendor-maintained releases.'
+          : `${eosEntries.length} component${eosEntries.length === 1 ? '' : 's'} past EoS — no patches, no vendor accountability.`,
+      },
+      {
+        icon: '⬆', question: 'Critical upgrades required?',
+        count: criticalUpgrades,
+        severity: criticalUpgrades > 0 ? 'critical' : warnEntries.length > 0 ? 'warn' : 'ok',
+        evidence: criticalUpgrades > 0
+          ? `${criticalUpgrades} upgrade${criticalUpgrades === 1 ? '' : 's'} flagged CRITICAL by analyst.`
+          : warnEntries.length > 0
+            ? `${warnEntries.length} component${warnEntries.length === 1 ? '' : 's'} have updates available — none flagged critical.`
+            : 'Estate is on current GA releases.',
+      },
+      {
+        icon: '⏳', question: 'License expiry approaching?',
+        count: licenseExpiringSoon + licenseExpired,
+        severity: licenseExpired > 0 ? 'critical' : licenseExpiringSoon > 0 ? 'warn' : 'ok',
+        evidence: licenseExpired > 0
+          ? `${licenseExpired} license${licenseExpired === 1 ? '' : 's'} already expired · ${licenseExpiringSoon} expiring within 6 months.`
+          : licenseExpiringSoon > 0
+            ? `${licenseExpiringSoon} license${licenseExpiringSoon === 1 ? '' : 's'} expiring within 6 months — renewal cycle ahead.`
+            : 'All licenses active beyond the 6-month renewal horizon.',
+      },
+      {
+        icon: '🛠', question: 'Hardware warranty expired or expiring?',
+        count: hardwareIssues,
+        severity: hardwareIssues > 0 ? 'warn' : 'ok',
+        evidence: hardwareIssues > 0
+          ? `${hardwareIssues} appliance${hardwareIssues === 1 ? '' : 's'} with warranty status other than ACTIVE — extension or refresh required.`
+          : 'All Forcepoint appliances under active warranty.',
+      },
+      {
+        icon: '📜', question: 'License extension / gap recommendation?',
+        count: p.licenseGaps?.length ?? 0,
+        severity: (p.licenseGaps?.length ?? 0) > 0 ? 'warn' : 'ok',
+        evidence: (p.licenseGaps?.length ?? 0) > 0
+          ? `${p.licenseGaps!.length} license-gap item${p.licenseGaps!.length === 1 ? '' : 's'} identified — see Recommended License Extension.`
+          : 'No gap between current entitlement and observed deployment scope.',
+      },
+    ];
+    if ((p.selectedProducts.data || p.selectedProducts.web) && p.endpointCompatAssessment) {
+      const cs = p.endpointCompatAssessment.compatibilityStatus;
+      const coverageNarrative =
+        p.selectedProducts.data && p.selectedProducts.web ? 'DLP and Hybrid Web coverage'
+        : p.selectedProducts.data ? 'DLP coverage'
+        : 'Hybrid Web coverage';
+      items.push({
+        icon: '💻', question: 'F1E agent fleet healthy?',
+        count: cs === 'SUPPORTED' ? 0 : 1,
+        severity: cs === 'SUPPORTED' ? 'ok' : cs === 'AT_RISK' ? 'warn' : 'critical',
+        evidence: cs === 'SUPPORTED'
+          ? `Fleet aligned with supported baseline (v${p.endpointCompatAssessment.minimumRequiredAgent}+).`
+          : cs === 'AT_RISK'
+            ? `Some endpoints below v${p.endpointCompatAssessment.minimumRequiredAgent} — see Agent Compatibility.`
+            : `Compatibility gap detected — ${coverageNarrative} at risk on browser channel.`,
+        verdictOverride: cs === 'SUPPORTED' ? 'HEALTHY' : cs === 'AT_RISK' ? 'AT RISK' : 'CRITICAL',
+      });
+    }
+    const tone = (sev: 'critical' | 'warn' | 'ok' | 'neutral') => sev === 'critical'
+      ? { color: '#A30080', bg: '#FDF2F8', border: '#FBCFE8', pillBg: '#A30080', pillTxt: '#fff', verdict: 'YES' }
+      : sev === 'warn'
+        ? { color: '#B58800', bg: '#FFFBEB', border: '#FDE68A', pillBg: '#FBBF24', pillTxt: '#7C2D12', verdict: 'WATCH' }
+        : sev === 'ok'
+          ? { color: '#16A34A', bg: '#F0FDF4', border: '#BBF7D0', pillBg: '#16A34A', pillTxt: '#fff', verdict: 'NO' }
+          : { color: '#64748B', bg: '#F8FAFC', border: '#E2E8F0', pillBg: '#CBD5E1', pillTxt: '#334155', verdict: 'NO' };
+
+    const keyObservations = `
+  <div class="subsection-title" style="margin-top:26px;">Key Observations · Executive Quick-Look</div>
+  <p style="font-size:10.5px;color:var(--fp-ink-faint);margin:-4px 0 10px;font-style:italic;line-height:1.55;">
+    Six yes/no questions answered in one glance — the headline picture across resource health, lifecycle, licensing, and agent fleet.
+  </p>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;page-break-inside:avoid;">
+    ${items.map((it) => {
+      const t = tone(it.severity);
+      const pillText = it.verdictOverride ?? `${t.verdict}${it.count > 0 ? ` · ${it.count}` : ''}`;
+      return `<div style="background:${t.bg};border:1px solid ${t.border};border-left:3px solid ${t.color};border-radius:6px;padding:10px 13px;display:flex;align-items:flex-start;gap:10px;">
+        <span style="font-size:18px;line-height:1;flex-shrink:0;margin-top:1px;">${it.icon}</span>
+        <div style="flex:1;min-width:0;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">
+            <span style="font-size:11.5px;font-weight:700;color:var(--fp-ink);line-height:1.3;flex:1;">${esc(it.question)}</span>
+            <span style="font-size:9px;font-weight:800;letter-spacing:0.08em;color:${t.pillTxt};background:${t.pillBg};border-radius:3px;padding:2px 7px;flex-shrink:0;white-space:nowrap;">${esc(pillText)}</span>
+          </div>
+          <div style="font-size:10.5px;color:#475569;line-height:1.55;">${esc(it.evidence)}</div>
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
+
+    /* High-Level Recommendations — same featured/curated logic as the
+       tech variant's Section 03 block, just rendered in the exec stream. */
+    const highLevelRecs = (() => {
+      if (p.recommendations.length === 0) return '';
+      const featured = p.recommendations.filter((r) => r.featured);
+      const PRIO: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+      const list = (featured.length > 0
+        ? [...featured]
+        : [...p.recommendations]
+      ).sort((a, b) => (PRIO[a.priority] ?? 9) - (PRIO[b.priority] ?? 9)).slice(0, 6);
+      const curatedNote = featured.length > 0
+        ? '<span style="font-size:10px;color:var(--fp-cyan-deep);font-weight:600;margin-left:8px;letter-spacing:0.04em;">★ ANALYST-CURATED</span>'
+        : '';
+      return `
+  <div class="subsection-title" style="margin-top:26px;">High-Level Recommendations${curatedNote}</div>
+  <div class="rec-card-grid">
+    ${list.map(r => `
+      <div class="rec-mini-card rec-mini-card-${r.priority}">
+        <div class="rec-mini-head">
+          <span class="badge badge-${r.priority === 'critical' ? 'critical' : r.priority === 'high' ? 'high' : r.priority === 'medium' ? 'medium' : 'low'}">${esc(r.priority.toUpperCase())}</span>
+          <span class="rec-mini-title">${esc(r.title)}</span>
+        </div>
+        ${r.detail ? `<div class="rec-mini-detail">${esc(r.detail)}</div>` : ''}
+        <div class="rec-mini-foot">
+          ${r.product ? `<span style="color:var(--fp-navy);font-weight:700;">${esc(r.product)}</span>` : ''}
+          ${r.effort ? `<span>· effort ${esc(r.effort)}</span>` : ''}
+          <span style="margin-left:auto;color:var(--fp-cyan-deep);font-weight:700;">${esc(r.category.replace(/_/g, ' '))}</span>
+        </div>
+      </div>`).join('')}
+  </div>
+  <p style="font-size:10px;color:var(--fp-ink-faint);font-style:italic;margin:-2px 0 14px;">
+    Full detail with descriptions, target versions, and release notes is in <em>Part III · Roadmap &amp; Strategy</em>.
+  </p>`;
+    })();
+
+    /* Top Priority Actions — top 3 by priority, or all featured if any. */
+    const topPriorityActions = (() => {
+      if (p.actionItems.length === 0) return '';
+      const PRIO: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+      const featured = p.actionItems.filter((a) => a.featured);
+      const top = featured.length > 0
+        ? [...featured].sort((a, b) => (PRIO[a.priority] ?? 9) - (PRIO[b.priority] ?? 9))
+        : [...p.actionItems].sort((a, b) => (PRIO[a.priority] ?? 9) - (PRIO[b.priority] ?? 9)).slice(0, 3);
+      const remaining = p.actionItems.length - top.length;
+      const curatedNote = featured.length > 0
+        ? '<span style="font-size:10px;color:var(--fp-cyan-deep);font-weight:600;margin-left:8px;letter-spacing:0.04em;">★ ANALYST-CURATED</span>'
+        : '';
+      return `
+  <div class="subsection-title" style="margin-top:26px;">Top Priority Actions${curatedNote}</div>
+  <ul style="list-style:none;padding:0;margin:0 0 10px;">
+    ${top.map((a, i) => `<li style="display:flex;gap:12px;align-items:flex-start;padding:9px 12px;background:var(--fp-surface-alt);border:1px solid var(--fp-rule);border-radius:8px;margin-bottom:6px;">
+      <span style="font-family:'JetBrains Mono','SF Mono',Consolas,monospace;font-weight:700;color:var(--fp-cyan-deep);font-size:13px;min-width:18px;">${i + 1}</span>
+      <span style="flex:1;font-size:12px;color:var(--fp-ink);font-weight:500;line-height:1.5;">${esc(a.task)}</span>
+      <span class="badge" style="${sevStyle(a.priority.toUpperCase())};flex-shrink:0;">${esc(a.priority.toUpperCase())}</span>
+      ${a.dueDate ? `<span style="font-family:'JetBrains Mono','SF Mono',Consolas,monospace;font-size:10.5px;color:var(--fp-ink-muted);flex-shrink:0;">${esc(a.dueDate)}</span>` : ''}
+    </li>`).join('')}
+  </ul>
+  <p style="font-size:10.5px;color:var(--fp-ink-faint);font-style:italic;margin-bottom:0;">
+    ${remaining > 0 ? `+${remaining} additional action${remaining === 1 ? '' : 's'} · ` : ''}Full execution plan with owners, target dates, and status is in <em>Part III · Roadmap &amp; Strategy</em>.
+  </p>`;
+    })();
+
+    /* DLP Activity Snapshot — donut + Incidents by Severity + Actions, the
+       same opening block as Section 03's tech-variant snapshot but trimmed
+       to the headline two cards so the executive page count stays tight. */
+    const dlpActivitySnapshot = (p.dlpDashboardSummary && p.dlpDashboardSummary.totalIncidents > 0) ? (() => {
+      const d = p.dlpDashboardSummary!;
+      const total = d.totalIncidents || 1;
+      const sev = d.severity;
+      const sevHighPct = Math.round((sev.high   / total) * 1000) / 10;
+      const sevMedPct  = Math.round((sev.medium / total) * 1000) / 10;
+      const sevLowPct  = Math.round((sev.low    / total) * 1000) / 10;
+      const segs: { color: string; from: number; to: number }[] = [];
+      let ang = 0;
+      if (sev.high   > 0) { const slice = (sev.high   / total) * 360; segs.push({ color: 'var(--fp-violette)', from: ang, to: ang + slice }); ang += slice; }
+      if (sev.medium > 0) { const slice = (sev.medium / total) * 360; segs.push({ color: 'var(--fp-yellow)',   from: ang, to: ang + slice }); ang += slice; }
+      if (sev.low    > 0) { const slice = (sev.low    / total) * 360; segs.push({ color: 'var(--fp-green)',    from: ang, to: ang + slice }); ang += slice; }
+      const donutGrad = segs.length === 0
+        ? `conic-gradient(#E2E8F0 0deg 360deg)`
+        : `conic-gradient(${segs.map(s => `${s.color} ${s.from}deg ${s.to}deg`).join(', ')})`;
+      const actionColor = (act: string) => /blocked/i.test(act) ? 'var(--fp-violette)'
+        : /quarantin/i.test(act) ? 'var(--fp-red)'
+        : /released/i.test(act) ? 'var(--fp-yellow)'
+        : /encrypted/i.test(act) ? 'var(--fp-cyan)'
+        : /permitted/i.test(act) ? 'var(--fp-green)'
+        : 'var(--fp-ink-muted)';
+      const maxAction = Math.max(...d.actions.map(a => a.count), 1);
+      return `
+  <div class="subsection-title" style="margin-top:26px;">DLP Activity Snapshot · ${esc(d.dateRange)}</div>
+  <div style="font-size:11px;color:var(--fp-ink-muted);margin:-4px 0 12px;line-height:1.55;">
+    Source: <span class="mono" style="color:var(--fp-navy);">${esc(d.fileName)}</span>
+    · Report generated ${esc(d.reportCreatedAt)}
+    · Filter: ${esc(d.ignoredFilter)}
+    · Individual user identifiers from the DLP Manager export have been aggregated to department level.
+  </div>
+  <div style="display:grid;grid-template-columns:230px 1fr;gap:16px;page-break-inside:avoid;">
+    <div style="background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-navy);border-radius:6px;padding:16px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,0.05);">
+      <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);margin-bottom:10px;">Incidents by Severity</div>
+      <div style="width:150px;height:150px;border-radius:50%;background:${donutGrad};margin:0 auto;display:flex;align-items:center;justify-content:center;">
+        <div style="width:96px;height:96px;border-radius:50%;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;">
+          <div style="font-size:22px;font-weight:700;color:var(--fp-navy);font-family:'Inter',sans-serif;line-height:1;letter-spacing:-0.02em;">${total.toLocaleString()}</div>
+          <div style="font-size:8px;color:var(--fp-ink-faint);letter-spacing:0.14em;text-transform:uppercase;margin-top:4px;font-weight:700;">Total</div>
+        </div>
+      </div>
+      <div style="margin-top:12px;display:flex;flex-direction:column;gap:5px;font-size:10.5px;">
+        <div style="display:flex;align-items:center;gap:6px;"><span style="width:9px;height:9px;background:var(--fp-violette);border-radius:2px;"></span><span style="flex:1;text-align:left;color:var(--fp-ink);font-weight:500;">High</span><span class="mono" style="font-weight:700;">${sev.high.toLocaleString()}</span><span class="mono" style="color:var(--fp-ink-faint);">${sevHighPct}%</span></div>
+        <div style="display:flex;align-items:center;gap:6px;"><span style="width:9px;height:9px;background:var(--fp-yellow);border-radius:2px;"></span><span style="flex:1;text-align:left;color:var(--fp-ink);font-weight:500;">Medium</span><span class="mono" style="font-weight:700;">${sev.medium.toLocaleString()}</span><span class="mono" style="color:var(--fp-ink-faint);">${sevMedPct}%</span></div>
+        <div style="display:flex;align-items:center;gap:6px;"><span style="width:9px;height:9px;background:var(--fp-green);border-radius:2px;"></span><span style="flex:1;text-align:left;color:var(--fp-ink);font-weight:500;">Low</span><span class="mono" style="font-weight:700;">${sev.low.toLocaleString()}</span><span class="mono" style="color:var(--fp-ink-faint);">${sevLowPct}%</span></div>
+      </div>
+    </div>
+    <div style="background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-cyan);border-radius:6px;padding:16px 20px;box-shadow:0 2px 8px rgba(0,0,0,0.05);">
+      <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);margin-bottom:10px;">Incidents by Action</div>
+      <div style="display:flex;flex-direction:column;gap:7px;">
+        ${d.actions.map(a => {
+          const w = Math.max(1, Math.round((a.count / maxAction) * 100));
+          const col = actionColor(a.action);
+          return `<div style="display:grid;grid-template-columns:150px 1fr 75px 50px;gap:10px;align-items:center;font-size:11px;">
+            <div style="font-weight:600;color:var(--fp-ink);font-size:10.5px;">${esc(a.action)}</div>
+            <div style="height:14px;background:var(--fp-rule-soft);border-radius:3px;overflow:hidden;"><div style="width:${w}%;height:100%;background:${col};border-radius:3px;"></div></div>
+            <div class="mono" style="text-align:right;font-weight:700;color:var(--fp-ink);">${a.count.toLocaleString()}</div>
+            <div class="mono" style="text-align:right;color:var(--fp-ink-faint);font-size:10.5px;">${a.pct}%</div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+  </div>
+  ${d.topRiskFindings.length > 0 ? `
+  <div style="background:var(--fp-cyan-soft);border:1px solid #BFE3EC;border-left:4px solid var(--fp-cyan);border-radius:6px;padding:12px 16px;margin-top:14px;">
+    <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-cyan-deep);margin-bottom:6px;">DLP Activity Observations</div>
+    <ul style="margin:0;padding-left:18px;">
+      ${d.topRiskFindings.map(f => `<li style="font-size:11px;color:var(--fp-ink);line-height:1.6;margin-bottom:3px;">${esc(f)}</li>`).join('')}
+    </ul>
+  </div>` : ''}
+  `;
+    })() : '';
+
+    /* Endpoint Key Risk Summary — just the topFindings list card from the
+       Endpoint Agent Analysis tech section, hoisted here so executives see
+       the headline endpoint risks without paging into the technical part. */
+    const endpointKeyRisk = (p.endpointAgentSummary && p.endpointAgentSummary.totalRecords > 0 && p.endpointAgentSummary.topFindings.length > 0) ? (() => {
+      const ea = p.endpointAgentSummary!;
+      const riskIcon = (text: string): string => {
+        if (/critical|legacy|outdated|disabled|inactive|imbalance/i.test(text)) return '🔴';
+        if (/stale|sync|rms/i.test(text)) return '🟡';
+        return '🟠';
+      };
+      return `
+  <div class="subsection-title" style="margin-top:26px;">Endpoint Key Risk Summary</div>
+  <p style="font-size:10.5px;color:var(--fp-ink-faint);margin:-4px 0 10px;font-style:italic;line-height:1.55;">
+    Headline risks surfaced from <span class="mono" style="color:var(--fp-navy);">${esc(ea.fileName)}</span> — full version distribution, staleness buckets and client-status breakdown are in <em>Part II · Endpoint Agent Analysis</em>.
+  </p>
+  <div class="ea-risk-card">
+    <div class="ea-risk-title">Key Risk Summary</div>
+    <ul class="ea-risk-list">
+      ${ea.topFindings.map(f => `<li class="ea-risk-item">
+        <span class="ea-risk-item-icon">${riskIcon(f)}</span>
+        <span>${esc(f)}</span>
+      </li>`).join('')}
+    </ul>
+  </div>`;
+    })() : '';
+
+    return [dlpActivitySnapshot, keyObservations, endpointKeyRisk, highLevelRecs, topPriorityActions]
+      .filter(Boolean)
+      .join('\n');
+  })() : '';
+
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -3531,6 +3837,11 @@ ${(() => {
 
 <div class="content">
 ${postureSection}
+
+<!-- ── Security Posture supplementals — hoisted out of Section 03 / Section 07 so
+        the executive variant doesn't need to bounce across PARTs to surface the
+        headline observations, recommendations, and endpoint risks. -->
+${securityPostureExtras}
 </div><!-- /content (executive Posture Telemetry closes here) -->
 <!--VARIANT:EXEC_ONLY:END-->
 

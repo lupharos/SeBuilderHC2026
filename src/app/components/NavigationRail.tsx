@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { FolderOpen, Braces, Layers, ClipboardCheck, MonitorSmartphone, Sparkles, Activity, ArrowUpCircle } from 'lucide-react';
+import { FolderOpen, Braces, Layers, ClipboardCheck, MonitorSmartphone, Sparkles, Activity, ArrowUpCircle, BookOpen } from 'lucide-react';
 
-export type ActiveView = 'wizard' | 'templates' | 'sessions' | 'versions' | 'endpoint_matrix' | 'destination_patterns' | 'version_upgrade_catalog';
+export type ActiveView = 'wizard' | 'templates' | 'sessions' | 'versions' | 'endpoint_matrix' | 'destination_patterns' | 'version_upgrade_catalog' | 'help_guide';
 
 interface NavigationRailProps {
   activeView: ActiveView;
@@ -94,12 +94,21 @@ export function NavigationRail({ activeView, onChangeView, onOpenProfile, onStar
       {/* Divider */}
       <div className="w-8 h-px mb-3" style={{ background: 'rgba(255,255,255,0.06)' }} />
 
-      {/* Nav buttons */}
+      {/* Nav buttons — order matters. Operator lands on HC Sessions
+          by default; HC Wizard sits in slot 2 so a "start new" is one
+          click away. Settings pages (Rule Engine, Product Lifecycle,
+          etc.) follow; Help Guide is last, just above the divider. */}
       <NavButton
         icon={<FolderOpen size={16} />}
         label="HC Sessions"
         active={activeView === 'sessions'}
         onClick={() => onChangeView('sessions')}
+      />
+      <NavButton
+        icon={<ClipboardCheck size={16} />}
+        label="Health Check Wizard — starts a new session"
+        active={activeView === 'wizard'}
+        onClick={onStartWizardSession}
       />
       <NavButton
         icon={<Braces size={16} />}
@@ -132,10 +141,10 @@ export function NavigationRail({ activeView, onChangeView, onOpenProfile, onStar
         onClick={() => onChangeView('version_upgrade_catalog')}
       />
       <NavButton
-        icon={<ClipboardCheck size={16} />}
-        label="Health Check Wizard — starts a new session"
-        active={activeView === 'wizard'}
-        onClick={onStartWizardSession}
+        icon={<BookOpen size={16} />}
+        label="Help Guide — usage instructions, workflows, troubleshooting"
+        active={activeView === 'help_guide'}
+        onClick={() => onChangeView('help_guide')}
       />
 
       <div className="flex-1" />
