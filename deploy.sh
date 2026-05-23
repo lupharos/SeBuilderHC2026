@@ -86,10 +86,17 @@ cd $APP_DIR
 # 3. Build frontend (Vite)
 # --------------------------------------------------
 echo "📦 Installing frontend npm packages..."
-npm install
+# --include=dev is mandatory: the systemd unit running the self-upgrade
+# exports NODE_ENV=production, which would otherwise cause npm to skip
+# devDependencies — and `vite` lives in devDependencies. Without this
+# flag the next `npm run build` fails with `sh: vite: not found`.
+npm install --include=dev
 
 echo "🏗️ Building project..."
-npm run build
+# Force NODE_ENV=production at build time so vite emits an optimised
+# bundle, but only for this command — we don't want to pollute the
+# install above. (Vite itself reads NODE_ENV at build, not install.)
+NODE_ENV=production npm run build
 
 if [ ! -d "$APP_DIR/dist" ]; then
   echo "❌ ERROR: build failed (dist not found)"

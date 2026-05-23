@@ -2062,10 +2062,20 @@ app.post('/api/admin/upgrade', (_req, res) => {
   } catch (err) {
     return res.status(500).json({ ok: false, error: `Cannot open log fd: ${err.message}` });
   }
+  /* Strip NODE_ENV from the child env before spawning deploy.sh.
+     systemd sets NODE_ENV=production on the unit so the running
+     companion uses a production-tuned Node; but if that env leaks
+     into `npm install` inside deploy.sh, npm silently skips
+     devDependencies — and `vite` is a devDependency, so the next
+     `npm run build` dies with "sh: vite: not found". Removing the
+     variable here lets deploy.sh resolve its own NODE_ENV per-step
+     (install with dev deps, build with production). */
+  const childEnv = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' };
+  delete childEnv.NODE_ENV;
   const child = spawn('bash', ['-c', cmd], {
     detached: true,
     stdio: ['ignore', logFd, logFd],
-    env: { ...process.env, DEBIAN_FRONTEND: 'noninteractive' },
+    env: childEnv,
   });
   child.on('error', (err) => {
     try { fs.appendFileSync(UPGRADE_LOG_PATH, `\n[spawn error] ${err.message}\n`); } catch { /* noop */ }
