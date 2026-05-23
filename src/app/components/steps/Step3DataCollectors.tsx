@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { Database, CheckCircle2, XCircle, Loader, ChevronDown, ChevronRight, Check, Shield, Globe, Network, FolderOpen, Upload, Trash2, Server, FileText, Play, X as XIcon, Clock } from 'lucide-react';
+import { Database, CheckCircle2, XCircle, Loader, ChevronDown, ChevronRight, Check, Shield, Globe, Network, FolderOpen, Upload, Trash2, Server, FileText, Play, X as XIcon, Clock, Star } from 'lucide-react';
 import { REPORT_GROUPS, type ReportRunResult, type ReportDef } from '../../constants/reportDefinitions';
 import { parseDlpBundle, formatMemoryGB, memoryUsagePct, statusColor, type DlpServerBundle, type UploadedFile } from './dlpServerInfoParser';
 import { parseDlpDashboardPdf, type DlpDashboardSummary } from './dlpDashboardParser';
+import { parseDlpAllLog, type DlpAllLogReport, type LogSeverity } from './dlpAllLogParser';
+import { parseAuditSystemLogs, type AuditSystemLogsReport, type AuditSeverity } from './auditSystemLogsParser';
+import { parseDlpServiceLogs, isServiceLogFilename, type ServiceLogsReport, type ServiceLogSeverity, type ServiceLogFile } from './dlpServiceLogsParser';
 import { fetchDlpPosture, type DlpPostureSummary, type DlpPostureBlockId, type DestinationPatterns, DLP_POSTURE_BLOCKS, ALL_POSTURE_BLOCK_IDS, formatBytes } from './dlpPosture';
 import { type CustomerConnectorConfig, type CustomerConnectorStatus, randomHex256, fetchConnectorStatus, buildConnectorBundle, registerConnectorAllowlist, deregisterConnectorToken } from './customerConnector';
 import { Key, Plug, RefreshCw, Activity, Globe2 } from 'lucide-react';
@@ -99,6 +102,39 @@ interface Props {
      fingerprint used by the connector binary. */
   customerConnector: CustomerConnectorConfig;
   setCustomerConnector: React.Dispatch<React.SetStateAction<CustomerConnectorConfig>>;
+  /* Forcepoint DLP Tomcat application log analysis result —
+     `\Data Security\tomcat\logs\dlp\dlp-all.log`. null until the
+     operator drops the file into the DLP Server Info card. */
+  dlpAllLogReport: DlpAllLogReport | null;
+  setDlpAllLogReport: React.Dispatch<React.SetStateAction<DlpAllLogReport | null>>;
+  /* DLP audit-system CSV analysis result — exported from the
+     `\SQL queries\AUDIT_SYSTEM_LOGS.csv` query bundled in
+     DLPServerInfo. */
+  auditLogReport: AuditSystemLogsReport | null;
+  setAuditLogReport: React.Dispatch<React.SetStateAction<AuditSystemLogsReport | null>>;
+  /* Cross-correlated analyzer for `\Data Security\Logs\` — handles
+     FPR/EndPointServer/PolicyEngine[.Client]/mgmtd (C++) +
+     HealthCheck/WorkScheduler/CleanupAndArchive (Python). One report
+     spans all eight files; same root cause across files collapses into
+     one issue with a multi-file log_sources list. */
+  serviceLogsReport: ServiceLogsReport | null;
+  setServiceLogsReport: React.Dispatch<React.SetStateAction<ServiceLogsReport | null>>;
+  /* Star + dismiss state for log-analyzer findings. Keyed by
+     `${parserScope}:${issueId}` so the same string survives a re-parse.
+     parserScope ∈ {'dlp','audit','services'}; issueId is the per-parser
+     stable id field. Starred issues are the only ones that flow into
+     the HTML report AND auto-spawn an Urgent Action; dismissed issues
+     are hidden from the wizard UI entirely. */
+  starredLogIssues: Record<string, true>;
+  setStarredLogIssues: React.Dispatch<React.SetStateAction<Record<string, true>>>;
+  dismissedLogIssues: Record<string, true>;
+  setDismissedLogIssues: React.Dispatch<React.SetStateAction<Record<string, true>>>;
+  /* Star callback wired up at the Dashboard level — when the operator
+     stars a finding for the first time, this hook spawns a matching
+     Urgent Action item carrying the issue's recommendation. Decoupled
+     from setStarredLogIssues so the side effect can be omitted in
+     contexts where Step 9 isn't reachable. */
+  onStarLogIssue: (key: string, issue: { title: string; recommendation: string; severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW'; component: string }) => void;
 }
 
 const IS: React.CSSProperties = {
@@ -697,8 +733,438 @@ function BundleCard({ bundle: b, expanded, onToggle, onRemove }: { bundle: DlpSe
 
           {/* Diagnostic footer */}
           <div style={{ marginTop: '10px', paddingTop: '8px', borderTop: '1px dashed #E2E8F0', fontSize: '9.5px', color: '#94a3b8' }}>
-            Bundle: <span style={{ fontFamily: 'monospace' }}>{b.bundleName}</span> · Parsed {b.parsedFiles.length} of {b.fileCount} files
+            DLP Telemetry: <span style={{ fontFamily: 'monospace' }}>{b.bundleName}</span> · Parsed {b.parsedFiles.length} of {b.fileCount} files
             {b.unrecognizedFiles.length > 0 && <> · {b.unrecognizedFiles.length} unrecognized</>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Colour map shared by the three log-analyzer panels — keeps the severity
+   pill style in sync with the report HTML. CRITICAL / HIGH dominate;
+   MEDIUM / LOW are advisory. */
+type AnyLogSeverity = LogSeverity | AuditSeverity | ServiceLogSeverity;
+
+const SEVERITY_STYLE: Record<AnyLogSeverity, { bg: string; color: string; border: string }> = {
+  CRITICAL: { bg: '#FEE2E2', color: '#991B1B', border: 'rgba(220,38,38,0.35)' },
+  HIGH:     { bg: '#FEF3C7', color: '#92400E', border: 'rgba(217,119,6,0.35)' },
+  MEDIUM:   { bg: '#FEF9C3', color: '#854D0E', border: 'rgba(202,138,4,0.30)' },
+  LOW:      { bg: '#F1F5F9', color: '#475569', border: 'rgba(100,116,139,0.30)' },
+};
+
+function severityCount(issues: ReadonlyArray<{ severity: AnyLogSeverity }>): { critical: number; high: number; medium: number; low: number } {
+  const out = { critical: 0, high: 0, medium: 0, low: 0 };
+  for (const i of issues) {
+    if (i.severity === 'CRITICAL') out.critical++;
+    else if (i.severity === 'HIGH') out.high++;
+    else if (i.severity === 'MEDIUM') out.medium++;
+    else out.low++;
+  }
+  return out;
+}
+
+function IssuePill({ severity }: { severity: AnyLogSeverity }) {
+  const s = SEVERITY_STYLE[severity];
+  return (
+    <span className="px-1.5 py-0.5 rounded font-mono font-bold"
+      style={{ fontSize: '9px', background: s.bg, color: s.color, border: `1px solid ${s.border}` }}>
+      {severity}
+    </span>
+  );
+}
+
+function DlpAllLogPanel({ report, busy, error, onPick, onDrop, onClear, isStarred, isDismissed, onToggleStar, onDismiss }: {
+  report: DlpAllLogReport | null;
+  busy: boolean;
+  error: string;
+  onPick: () => void;
+  onDrop: (file: File | undefined) => void;
+  onClear: () => void;
+  isStarred: (issueId: string) => boolean;
+  isDismissed: (issueId: string) => boolean;
+  onToggleStar: (issueId: string, iss: { title: string; recommendation: string; severity: AnyLogSeverity; component: string }) => void;
+  onDismiss: (issueId: string) => void;
+}) {
+  const counts = report ? severityCount(report.issues) : { critical: 0, high: 0, medium: 0, low: 0 };
+  return (
+    <div className="rounded-lg overflow-hidden"
+      style={{ border: report ? '1.5px solid rgba(220,38,38,0.30)' : '1.5px dashed #FCD34D', background: report ? '#FFF1F2' : 'rgba(254,243,199,0.30)' }}>
+      <div className="flex items-center gap-3 px-3 py-2.5">
+        <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
+          style={{ background: 'rgba(220,38,38,0.10)' }}>
+          <FileText size={13} style={{ color: '#DC2626' }} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div style={{ fontSize: '12px', fontWeight: 700, color: '#0F172A' }}>
+            DLP Tomcat App Log <span style={{ fontFamily: 'monospace', fontWeight: 400, color: '#94A3B8' }}>(dlp-all.log)</span>
+          </div>
+          <div style={{ fontSize: '10.5px', color: '#64748B', marginTop: '1px' }}>
+            {report
+              ? <>Parsed <strong>{report.recordCount.toLocaleString()}</strong> records · {report.errorCount} ERROR · {report.warnCount} WARN · {report.spanFirst} → {report.spanLast}{(report.staleDropped + report.lowVolumeDropped) > 0 && <> · <span style={{ color: '#94A3B8' }}>filtered {report.staleDropped} stale + {report.lowVolumeDropped} low-volume</span></>}</>
+              : <>From <span style={{ fontFamily: 'monospace' }}>\Data Security\tomcat\logs\dlp\dlp-all.log</span> — auto-detected on DLP Telemetry drop, or upload directly. Findings shown only if ≥10 occurrences in last 30 days.</>}
+          </div>
+        </div>
+        {report && (
+          <div className="flex items-center gap-1">
+            {counts.critical > 0 && <span className="px-1.5 py-0.5 rounded font-mono font-bold" style={{ fontSize: '9.5px', background: '#FEE2E2', color: '#991B1B' }}>{counts.critical} CRIT</span>}
+            {counts.high > 0     && <span className="px-1.5 py-0.5 rounded font-mono font-bold" style={{ fontSize: '9.5px', background: '#FEF3C7', color: '#92400E' }}>{counts.high} HIGH</span>}
+            {counts.medium > 0   && <span className="px-1.5 py-0.5 rounded font-mono font-bold" style={{ fontSize: '9.5px', background: '#FEF9C3', color: '#854D0E' }}>{counts.medium} MED</span>}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={onPick}
+          disabled={busy}
+          className="px-2.5 py-1 rounded-lg font-semibold"
+          style={{ fontSize: '10.5px', background: busy ? '#FECACA' : '#DC2626', color: '#fff', border: 'none', cursor: busy ? 'not-allowed' : 'pointer' }}>
+          {busy
+            ? <><Loader size={10} className="animate-spin" style={{ display: 'inline', marginRight: '4px' }} />Parsing…</>
+            : <><Upload size={10} style={{ display: 'inline', marginRight: '4px' }} />{report ? 'Replace' : 'Upload'}</>}
+        </button>
+        {report && (
+          <button
+            type="button"
+            onClick={onClear}
+            className="flex items-center justify-center rounded"
+            style={{ width: '24px', height: '24px', background: 'transparent', border: '1px solid #FECACA', color: '#DC2626', cursor: 'pointer' }}>
+            <Trash2 size={11} />
+          </button>
+        )}
+      </div>
+
+      <div onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+        onDrop={(e) => { e.preventDefault(); e.stopPropagation(); onDrop(e.dataTransfer.files?.[0]); }}>
+        {error && (
+          <div className="flex items-center gap-2 mx-3 mb-2 px-3 py-2 rounded-lg"
+            style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}>
+            <XCircle size={13} style={{ color: '#DC2626' }} />
+            <span style={{ fontSize: '11px', color: '#991B1B' }}>{error}</span>
+          </div>
+        )}
+        {report && (() => {
+          const visible = report.issues.filter((iss) => !isDismissed(iss.id));
+          if (visible.length === 0) return null;
+          return (
+            <div className="px-3 pb-3 space-y-1.5">
+              {visible.map((iss) => (
+                <LogIssueRow
+                  key={`dlp-${iss.id}`}
+                  title={iss.title}
+                  severity={iss.severity}
+                  component={iss.component}
+                  description={iss.description}
+                  occurrences={iss.occurrences}
+                  firstSeen={iss.first_seen}
+                  lastSeen={iss.last_seen}
+                  recommendation={iss.recommendation}
+                  starred={isStarred(iss.id)}
+                  onToggleStar={() => onToggleStar(iss.id, iss)}
+                  onDismiss={() => onDismiss(iss.id)}
+                />
+              ))}
+            </div>
+          );
+        })()}
+        {report && report.issues.length === 0 && (
+          <div className="px-3 pb-3" style={{ fontSize: '11px', color: '#64748B' }}>
+            {(report.staleDropped + report.lowVolumeDropped) > 0
+              ? <>No reportable findings — {report.staleDropped} stale and {report.lowVolumeDropped} low-volume pattern(s) filtered out (under the ≥10 occurrences / last 30 days bar).</>
+              : <>No matching error / warning patterns — log shows a clean run.</>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AuditLogPanel({ report, busy, error, onPick, onDrop, onClear, isStarred, isDismissed, onToggleStar, onDismiss }: {
+  report: AuditSystemLogsReport | null;
+  busy: boolean;
+  error: string;
+  onPick: () => void;
+  onDrop: (file: File | undefined) => void;
+  onClear: () => void;
+  isStarred: (issueId: string) => boolean;
+  isDismissed: (issueId: string) => boolean;
+  onToggleStar: (issueId: string, iss: { title: string; recommendation: string; severity: AnyLogSeverity; component: string }) => void;
+  onDismiss: (issueId: string) => void;
+}) {
+  const counts = report ? severityCount(report.issues) : { critical: 0, high: 0, medium: 0, low: 0 };
+  return (
+    <div className="rounded-lg overflow-hidden"
+      style={{ border: report ? '1.5px solid rgba(124,58,237,0.30)' : '1.5px dashed #DDD6FE', background: report ? '#F5F3FF' : 'rgba(245,243,255,0.40)' }}>
+      <div className="flex items-center gap-3 px-3 py-2.5">
+        <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
+          style={{ background: 'rgba(124,58,237,0.10)' }}>
+          <FileText size={13} style={{ color: '#7C3AED' }} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div style={{ fontSize: '12px', fontWeight: 700, color: '#0F172A' }}>
+            DLP Audit System Logs <span style={{ fontFamily: 'monospace', fontWeight: 400, color: '#94A3B8' }}>(AUDIT_SYSTEM_LOGS.csv)</span>
+          </div>
+          <div style={{ fontSize: '10.5px', color: '#64748B', marginTop: '1px' }}>
+            {report
+              ? <>Parsed <strong>{report.totalRows.toLocaleString()}</strong> rows · {report.errorRows} ERROR · {report.warningRows} WARN · {report.spanFirst} → {report.spanLast}{(report.staleDropped + report.lowVolumeDropped) > 0 && <> · <span style={{ color: '#94A3B8' }}>filtered {report.staleDropped} stale + {report.lowVolumeDropped} low-volume</span></>}</>
+              : <>From <span style={{ fontFamily: 'monospace' }}>\SQL queries\AUDIT_SYSTEM_LOGS.csv</span> — auto-detected on DLP Telemetry drop, or upload directly. Findings shown only if ≥10 occurrences in last 30 days.</>}
+          </div>
+        </div>
+        {report && (
+          <div className="flex items-center gap-1">
+            {counts.critical > 0 && <span className="px-1.5 py-0.5 rounded font-mono font-bold" style={{ fontSize: '9.5px', background: '#FEE2E2', color: '#991B1B' }}>{counts.critical} CRIT</span>}
+            {counts.high > 0     && <span className="px-1.5 py-0.5 rounded font-mono font-bold" style={{ fontSize: '9.5px', background: '#FEF3C7', color: '#92400E' }}>{counts.high} HIGH</span>}
+            {counts.medium > 0   && <span className="px-1.5 py-0.5 rounded font-mono font-bold" style={{ fontSize: '9.5px', background: '#FEF9C3', color: '#854D0E' }}>{counts.medium} MED</span>}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={onPick}
+          disabled={busy}
+          className="px-2.5 py-1 rounded-lg font-semibold"
+          style={{ fontSize: '10.5px', background: busy ? '#DDD6FE' : '#7C3AED', color: '#fff', border: 'none', cursor: busy ? 'not-allowed' : 'pointer' }}>
+          {busy
+            ? <><Loader size={10} className="animate-spin" style={{ display: 'inline', marginRight: '4px' }} />Parsing…</>
+            : <><Upload size={10} style={{ display: 'inline', marginRight: '4px' }} />{report ? 'Replace' : 'Upload'}</>}
+        </button>
+        {report && (
+          <button
+            type="button"
+            onClick={onClear}
+            className="flex items-center justify-center rounded"
+            style={{ width: '24px', height: '24px', background: 'transparent', border: '1px solid #DDD6FE', color: '#7C3AED', cursor: 'pointer' }}>
+            <Trash2 size={11} />
+          </button>
+        )}
+      </div>
+
+      <div onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+        onDrop={(e) => { e.preventDefault(); e.stopPropagation(); onDrop(e.dataTransfer.files?.[0]); }}>
+        {error && (
+          <div className="flex items-center gap-2 mx-3 mb-2 px-3 py-2 rounded-lg"
+            style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}>
+            <XCircle size={13} style={{ color: '#DC2626' }} />
+            <span style={{ fontSize: '11px', color: '#991B1B' }}>{error}</span>
+          </div>
+        )}
+        {report && (() => {
+          const visible = report.issues.filter((iss) => !isDismissed(iss.id));
+          if (visible.length === 0) return null;
+          return (
+            <div className="px-3 pb-3 space-y-1.5">
+              {visible.map((iss) => (
+                <LogIssueRow
+                  key={`audit-${iss.id}`}
+                  title={iss.title}
+                  severity={iss.severity}
+                  component={iss.source}
+                  description={iss.description}
+                  occurrences={iss.occurrences}
+                  firstSeen={iss.first_seen}
+                  lastSeen={iss.last_seen}
+                  recommendation={iss.recommendation}
+                  starred={isStarred(iss.id)}
+                  onToggleStar={() => onToggleStar(iss.id, { ...iss, component: iss.source })}
+                  onDismiss={() => onDismiss(iss.id)}
+                />
+              ))}
+            </div>
+          );
+        })()}
+        {report && report.issues.length === 0 && (
+          <div className="px-3 pb-3" style={{ fontSize: '11px', color: '#64748B' }}>
+            {(report.staleDropped + report.lowVolumeDropped) > 0
+              ? <>No reportable findings — {report.staleDropped} stale and {report.lowVolumeDropped} low-volume pattern(s) filtered out (under the ≥10 occurrences / last 30 days bar).</>
+              : <>No matching audit patterns — CSV shows a clean run.</>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ServiceLogsPanel({ report, busy, error, onPick, onDropFiles, onClear, isStarred, isDismissed, onToggleStar, onDismiss }: {
+  report: ServiceLogsReport | null;
+  busy: boolean;
+  error: string;
+  onPick: () => void;
+  onDropFiles: (files: FileList | undefined) => void;
+  onClear: () => void;
+  isStarred: (issueId: string) => boolean;
+  isDismissed: (issueId: string) => boolean;
+  onToggleStar: (issueId: string, iss: { title: string; recommendation: string; severity: AnyLogSeverity; component: string }) => void;
+  onDismiss: (issueId: string) => void;
+}) {
+  const counts = report ? severityCount(report.issues) : { critical: 0, high: 0, medium: 0, low: 0 };
+  const recognisedFiles = report ? report.files.filter((f) => f.family !== 'unknown') : [];
+  return (
+    <div className="rounded-lg overflow-hidden"
+      style={{ border: report ? '1.5px solid rgba(20,184,166,0.35)' : '1.5px dashed #99F6E4', background: report ? '#F0FDFA' : 'rgba(240,253,250,0.40)' }}>
+      <div className="flex items-center gap-3 px-3 py-2.5">
+        <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
+          style={{ background: 'rgba(20,184,166,0.10)' }}>
+          <FileText size={13} style={{ color: '#0D9488' }} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div style={{ fontSize: '12px', fontWeight: 700, color: '#0F172A' }}>
+            DLP Service Logs <span style={{ fontFamily: 'monospace', fontWeight: 400, color: '#94A3B8' }}>(FPR / EndPointServer / PolicyEngine / mgmtd / HealthCheck / WorkScheduler / CleanupAndArchive)</span>
+          </div>
+          <div style={{ fontSize: '10.5px', color: '#64748B', marginTop: '1px' }}>
+            {report
+              ? <>{recognisedFiles.length} file{recognisedFiles.length !== 1 ? 's' : ''} · Parsed <strong>{report.totalLines.toLocaleString()}</strong> lines · {report.totalErrors} ERROR · {report.spanFirst} → {report.spanLast}{(report.staleDropped + report.lowVolumeDropped) > 0 && <> · <span style={{ color: '#94A3B8' }}>filtered {report.staleDropped} stale + {report.lowVolumeDropped} low-volume</span></>}</>
+              : <>From <span style={{ fontFamily: 'monospace' }}>\Data Security\Logs\</span> — auto-detected on DLP Telemetry drop, or select the *.log files directly. Findings shown only if ≥10 occurrences in last 30 days.</>}
+          </div>
+        </div>
+        {report && (
+          <div className="flex items-center gap-1">
+            {counts.critical > 0 && <span className="px-1.5 py-0.5 rounded font-mono font-bold" style={{ fontSize: '9.5px', background: '#FEE2E2', color: '#991B1B' }}>{counts.critical} CRIT</span>}
+            {counts.high > 0     && <span className="px-1.5 py-0.5 rounded font-mono font-bold" style={{ fontSize: '9.5px', background: '#FEF3C7', color: '#92400E' }}>{counts.high} HIGH</span>}
+            {counts.medium > 0   && <span className="px-1.5 py-0.5 rounded font-mono font-bold" style={{ fontSize: '9.5px', background: '#FEF9C3', color: '#854D0E' }}>{counts.medium} MED</span>}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={onPick}
+          disabled={busy}
+          className="px-2.5 py-1 rounded-lg font-semibold"
+          style={{ fontSize: '10.5px', background: busy ? '#99F6E4' : '#0D9488', color: '#fff', border: 'none', cursor: busy ? 'not-allowed' : 'pointer' }}>
+          {busy
+            ? <><Loader size={10} className="animate-spin" style={{ display: 'inline', marginRight: '4px' }} />Parsing…</>
+            : <><Upload size={10} style={{ display: 'inline', marginRight: '4px' }} />{report ? 'Replace' : 'Upload'}</>}
+        </button>
+        {report && (
+          <button
+            type="button"
+            onClick={onClear}
+            className="flex items-center justify-center rounded"
+            style={{ width: '24px', height: '24px', background: 'transparent', border: '1px solid #99F6E4', color: '#0D9488', cursor: 'pointer' }}>
+            <Trash2 size={11} />
+          </button>
+        )}
+      </div>
+
+      <div onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+        onDrop={(e) => { e.preventDefault(); e.stopPropagation(); onDropFiles(e.dataTransfer.files ?? undefined); }}>
+        {error && (
+          <div className="flex items-center gap-2 mx-3 mb-2 px-3 py-2 rounded-lg"
+            style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}>
+            <XCircle size={13} style={{ color: '#DC2626' }} />
+            <span style={{ fontSize: '11px', color: '#991B1B' }}>{error}</span>
+          </div>
+        )}
+        {report && recognisedFiles.length > 0 && (
+          <div className="mx-3 mb-2 px-2.5 py-1.5 rounded" style={{ background: '#fff', border: '1px solid #CCFBF1', fontSize: '10px', color: '#0F766E', fontFamily: 'monospace' }}>
+            {recognisedFiles.map((f) => `${f.name} (${f.errorCount} errs)`).join(' · ')}
+          </div>
+        )}
+        {report && (() => {
+          const visible = report.issues.filter((iss) => !isDismissed(iss.id));
+          if (visible.length === 0) return null;
+          return (
+            <div className="px-3 pb-3 space-y-1.5">
+              {visible.map((iss) => (
+                <LogIssueRow
+                  key={`svc-${iss.id}`}
+                  title={iss.title}
+                  severity={iss.severity}
+                  component={iss.component}
+                  description={iss.description}
+                  occurrences={iss.occurrences}
+                  firstSeen={iss.first_seen}
+                  lastSeen={iss.last_seen}
+                  recommendation={iss.recommendation}
+                  logSources={iss.log_sources}
+                  starred={isStarred(iss.id)}
+                  onToggleStar={() => onToggleStar(iss.id, iss)}
+                  onDismiss={() => onDismiss(iss.id)}
+                />
+              ))}
+            </div>
+          );
+        })()}
+        {report && report.issues.length === 0 && (
+          <div className="px-3 pb-3" style={{ fontSize: '11px', color: '#64748B' }}>
+            {(report.staleDropped + report.lowVolumeDropped) > 0
+              ? <>No reportable findings — {report.staleDropped} stale and {report.lowVolumeDropped} low-volume pattern(s) filtered out (under the ≥10 occurrences / last 30 days bar).</>
+              : <>No matching error patterns across the service logs — services show a clean run.</>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* Single issue row shared by all three log-analyzer panels.
+   Collapsible — first line carries the severity + title + count; the body
+   (description + recommendation) is revealed on click so the panel header
+   stays scannable.
+
+   Star toggle = "include this finding in the HC report AND auto-spawn a
+                 matching Urgent Action item". Sticky between sessions.
+   Dismiss (X)  = "hide from the wizard UI". Doesn't affect already-spawned
+                 action items — those have their own delete control. */
+function LogIssueRow({
+  title, severity, component, description, occurrences, firstSeen, lastSeen, recommendation,
+  starred, onToggleStar, onDismiss, logSources,
+}: {
+  title: string;
+  severity: AnyLogSeverity;
+  component: string;
+  description: string;
+  occurrences: number;
+  firstSeen: string;
+  lastSeen: string;
+  recommendation: string;
+  starred: boolean;
+  onToggleStar: () => void;
+  onDismiss: () => void;
+  logSources?: string[];
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-md" style={{ border: starred ? '1.5px solid #FACC15' : '1px solid #E2E8F0', background: starred ? '#FFFBEB' : '#fff' }}>
+      <div className="flex items-center gap-2 px-2.5 py-1.5 cursor-pointer" onClick={() => setOpen((v) => !v)}>
+        <IssuePill severity={severity} />
+        <div className="flex-1 min-w-0">
+          <div style={{ fontSize: '11.5px', fontWeight: 600, color: '#0F172A', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</div>
+          <div style={{ fontSize: '10px', color: '#94A3B8', fontFamily: 'monospace' }}>{component}{logSources && logSources.length > 0 ? ` · ${logSources.join(', ')}` : ''}</div>
+        </div>
+        <span className="px-1.5 py-0.5 rounded font-mono" style={{ fontSize: '9.5px', background: '#F1F5F9', color: '#475569', fontWeight: 700 }}>
+          ×{occurrences.toLocaleString()}
+        </span>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onToggleStar(); }}
+          title={starred ? 'Unstar — remove from report and unlink Urgent Action.' : 'Star — include in report and spawn an Urgent Action item.'}
+          className="flex items-center justify-center rounded"
+          style={{ width: '22px', height: '22px', background: starred ? '#FEF3C7' : 'transparent', border: '1px solid', borderColor: starred ? '#FACC15' : '#E2E8F0', color: starred ? '#B45309' : '#94A3B8', cursor: 'pointer' }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = starred ? '#FEF3C7' : '#FEF9C3'; e.currentTarget.style.color = '#B45309'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = starred ? '#FEF3C7' : 'transparent'; e.currentTarget.style.color = starred ? '#B45309' : '#94A3B8'; }}>
+          <Star size={11} fill={starred ? '#F59E0B' : 'none'} />
+        </button>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onDismiss(); }}
+          title="Hide this finding from the wizard. (Won't delete the spawned Urgent Action, if any.)"
+          className="flex items-center justify-center rounded"
+          style={{ width: '22px', height: '22px', background: 'transparent', border: '1px solid #E2E8F0', color: '#94A3B8', cursor: 'pointer' }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = '#FEE2E2'; e.currentTarget.style.color = '#DC2626'; e.currentTarget.style.borderColor = '#FECACA'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#94A3B8'; e.currentTarget.style.borderColor = '#E2E8F0'; }}>
+          <Trash2 size={11} />
+        </button>
+        {open
+          ? <ChevronDown size={12} style={{ color: '#94A3B8' }} />
+          : <ChevronRight size={12} style={{ color: '#94A3B8' }} />}
+      </div>
+      {open && (
+        <div className="px-2.5 pb-2 pt-1" style={{ borderTop: '1px dashed #E2E8F0' }}>
+          <div style={{ fontSize: '10.5px', color: '#334155', lineHeight: 1.5, marginTop: '4px' }}>{description}</div>
+          <div className="flex items-center gap-3 mt-2" style={{ fontSize: '10px', color: '#64748B' }}>
+            <span><Clock size={10} style={{ display: 'inline', marginRight: '3px' }} />First {firstSeen}</span>
+            <span><Clock size={10} style={{ display: 'inline', marginRight: '3px' }} />Last {lastSeen}</span>
+          </div>
+          <div className="mt-2 px-2 py-1.5 rounded" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', fontSize: '10.5px', color: '#0F172A' }}>
+            <strong style={{ color: '#0F2952' }}>Recommendation:</strong> {recommendation}
           </div>
         </div>
       )}
@@ -720,6 +1186,12 @@ export function Step3DataCollectors({
   dlpPostureSections, setDlpPostureSections,
   destinationPatterns,
   customerConnector, setCustomerConnector,
+  dlpAllLogReport, setDlpAllLogReport,
+  auditLogReport, setAuditLogReport,
+  serviceLogsReport, setServiceLogsReport,
+  starredLogIssues, setStarredLogIssues,
+  dismissedLogIssues, setDismissedLogIssues,
+  onStarLogIssue,
 }: Props) {
   const [sqlStatus,  setSqlStatus]  = useState<ConnStatus>({ state: 'idle' });
   const [apiStatus,  setApiStatus]  = useState<Partial<Record<keyof ApiConnectorsConfig, ConnStatus>>>({});
@@ -748,6 +1220,15 @@ export function Step3DataCollectors({
   const folderInputRef = useRef<HTMLInputElement>(null);
   const filesInputRef = useRef<HTMLInputElement>(null);
   const dashboardInputRef = useRef<HTMLInputElement>(null);
+  const dlpLogInputRef = useRef<HTMLInputElement>(null);
+  const auditCsvInputRef = useRef<HTMLInputElement>(null);
+  const serviceLogsInputRef = useRef<HTMLInputElement>(null);
+  const [dlpLogBusy, setDlpLogBusy] = useState(false);
+  const [dlpLogError, setDlpLogError] = useState<string>('');
+  const [auditBusy, setAuditBusy] = useState(false);
+  const [auditError, setAuditError] = useState<string>('');
+  const [serviceLogsBusy, setServiceLogsBusy] = useState(false);
+  const [serviceLogsError, setServiceLogsError] = useState<string>('');
 
   /* ── Customer Connector ── */
   const [connectorStatus, setConnectorStatus] = useState<CustomerConnectorStatus | null>(null);
@@ -911,6 +1392,121 @@ export function Step3DataCollectors({
     }
   };
 
+  const handleDlpLogFile = async (file: File | undefined | null) => {
+    if (!file) return;
+    setDlpLogError('');
+    if (!/\.(log|txt)$/i.test(file.name)) {
+      setDlpLogError('Please choose a .log or .txt file (Forcepoint DLP Tomcat application log — dlp-all.log).');
+      return;
+    }
+    if (file.size > 64 * 1024 * 1024) {
+      setDlpLogError(`Log is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Limit is 64 MB.`);
+      return;
+    }
+    setDlpLogBusy(true);
+    try {
+      const text = await file.text();
+      const report = parseDlpAllLog(text, file.name);
+      if (report.recordCount === 0) {
+        setDlpLogError('Could not parse any log records. Expected Forcepoint DLP Tomcat format with `YYYY-MM-DD HH:MM:SS,ms [thread] LEVEL logger - message` headers.');
+        return;
+      }
+      setDlpAllLogReport(report);
+    } catch (err) {
+      setDlpLogError(err instanceof Error ? `Parse failed: ${err.message}` : 'Failed to parse log file.');
+    } finally {
+      setDlpLogBusy(false);
+    }
+  };
+
+  const handleAuditCsvFile = async (file: File | undefined | null) => {
+    if (!file) return;
+    setAuditError('');
+    if (!/\.csv$/i.test(file.name)) {
+      setAuditError('Please choose a .csv file (AUDIT_SYSTEM_LOGS.csv from the DLP Server Telemetry SQL queries folder).');
+      return;
+    }
+    if (file.size > 64 * 1024 * 1024) {
+      setAuditError(`CSV is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Limit is 64 MB.`);
+      return;
+    }
+    setAuditBusy(true);
+    try {
+      const text = await file.text();
+      const report = parseAuditSystemLogs(text, file.name);
+      if (report.totalRows === 0) {
+        setAuditError('CSV had no parsable rows. Expected header `ID,SEVERITY,STATUS,GENERATION_TIME_TS,SOURCE_NAME,SOURCE_SUB_TYPE,MESSAGE`.');
+        return;
+      }
+      setAuditLogReport(report);
+    } catch (err) {
+      setAuditError(err instanceof Error ? `Parse failed: ${err.message}` : 'Failed to parse CSV.');
+    } finally {
+      setAuditBusy(false);
+    }
+  };
+
+  /* Star/dismiss helpers — wired up to all three log panels. Star
+     mutation is bracketed by the `onStarLogIssue` Dashboard hook so
+     toggling ON spawns an Urgent Action (if one isn't already linked);
+     toggling OFF leaves the action alone (operator manages it manually
+     from Step 9). Dismiss just hides from the wizard UI. */
+  const toggleStar = (
+    scope: 'dlp' | 'audit' | 'services',
+    issueId: string,
+    iss: { title: string; recommendation: string; severity: AnyLogSeverity; component: string },
+  ) => {
+    const key = `${scope}:${issueId}`;
+    setStarredLogIssues((prev) => {
+      const next = { ...prev };
+      if (next[key]) {
+        delete next[key];
+        return next;
+      }
+      next[key] = true;
+      // Side effect: spawn the matching Urgent Action item.
+      const severity = (iss.severity === 'CRITICAL' || iss.severity === 'HIGH' || iss.severity === 'MEDIUM' || iss.severity === 'LOW')
+        ? iss.severity
+        : 'MEDIUM';
+      onStarLogIssue(key, { title: iss.title, recommendation: iss.recommendation, severity, component: iss.component });
+      return next;
+    });
+  };
+
+  const toggleDismiss = (scope: 'dlp' | 'audit' | 'services', issueId: string) => {
+    const key = `${scope}:${issueId}`;
+    setDismissedLogIssues((prev) => {
+      const next = { ...prev };
+      if (next[key]) delete next[key];
+      else next[key] = true;
+      return next;
+    });
+  };
+
+  const handleServiceLogsFiles = async (files: FileList | undefined | null) => {
+    if (!files || files.length === 0) return;
+    setServiceLogsError('');
+    setServiceLogsBusy(true);
+    try {
+      const collected: ServiceLogFile[] = [];
+      for (const file of Array.from(files)) {
+        if (!isServiceLogFilename(file.name)) continue;
+        if (file.size > 64 * 1024 * 1024) continue;
+        try { collected.push({ name: file.name, text: await file.text() }); } catch { /* skip */ }
+      }
+      if (collected.length === 0) {
+        setServiceLogsError('No recognised service log filenames in the selection — expected one or more of FPR.log, EndPointServer.log, PolicyEngine.log, PolicyEngineClient.log, mgmtd.log, HealthCheck.log, WorkScheduler.log, CleanupAndArchive.log.');
+        return;
+      }
+      const report = parseDlpServiceLogs(collected);
+      setServiceLogsReport(report);
+    } catch (err) {
+      setServiceLogsError(err instanceof Error ? `Parse failed: ${err.message}` : 'Failed to parse service logs.');
+    } finally {
+      setServiceLogsBusy(false);
+    }
+  };
+
   const TEXT_EXT_RE = /\.(txt|csv|cer|pem|crt)$/i;
 
   const handleFiles = async (files: FileList | null) => {
@@ -919,23 +1515,72 @@ export function Step3DataCollectors({
     setParseBusy(true);
     try {
       const uploaded: UploadedFile[] = [];
+      /* Carry-on parses for the two files that live inside the bundle but
+         aren't part of the DLPServerInfo grammar: dlp-all.log + the
+         AUDIT_SYSTEM_LOGS.csv produced by the SQL queries dump. We hit
+         them in the same drop so the operator doesn't have to find and
+         drag them individually. */
+      let dlpLogHit: { name: string; text: string } | null = null;
+      let auditHit: { name: string; text: string } | null = null;
+      const serviceHits: ServiceLogFile[] = [];
       for (const file of Array.from(files)) {
-        if (!TEXT_EXT_RE.test(file.name)) continue;
         const relativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+        const lowerName = file.name.toLowerCase();
+        const lowerPath = relativePath.toLowerCase();
+        if (/dlp-all\.log$/i.test(lowerName)) {
+          if (file.size <= 64 * 1024 * 1024) {
+            try { dlpLogHit = { name: file.name, text: await file.text() }; } catch { /* ignore */ }
+          }
+          continue;
+        }
+        if (/audit_system_logs\.csv$/i.test(lowerName) || /\/audit_system_logs\.csv$/i.test(lowerPath)) {
+          if (file.size <= 64 * 1024 * 1024) {
+            try { auditHit = { name: file.name, text: await file.text() }; } catch { /* ignore */ }
+          }
+          // Don't `continue` — also include in bundle parser, which has
+          // its own AUDIT_SYSTEM_LOGS handling for the SQL-server-tab view.
+        }
+        /* Service logs live under `\Data Security\Logs\` in the bundle.
+           Pick them up by basename here so the operator gets full
+           cross-correlation without a separate drag. */
+        if (isServiceLogFilename(file.name) && file.size <= 64 * 1024 * 1024) {
+          try { serviceHits.push({ name: file.name, text: await file.text() }); } catch { /* ignore */ }
+        }
+        if (!TEXT_EXT_RE.test(file.name)) continue;
         let text = '';
         try { text = await file.text(); } catch { continue; }
         uploaded.push({ name: file.name, relativePath, text });
       }
-      if (uploaded.length === 0) {
-        setParseError('No .txt or .csv files found in the selection. Make sure to point at a DLPServerInfo bundle folder.');
+      if (uploaded.length === 0 && !dlpLogHit && !auditHit && serviceHits.length === 0) {
+        setParseError('No .txt or .csv files found in the selection. Make sure to point at a DLP Telemetry folder (DLPServerInfo_* export).');
         return;
       }
-      const bundle = parseDlpBundle(uploaded);
-      setDlpBundles(prev => {
-        const others = prev.filter(b => b.bundleName !== bundle.bundleName);
-        return [...others, bundle];
-      });
-      setExpandedBundles(prev => { const n = new Set(prev); n.add(bundle.bundleId); return n; });
+      if (uploaded.length > 0) {
+        const bundle = parseDlpBundle(uploaded);
+        setDlpBundles(prev => {
+          const others = prev.filter(b => b.bundleName !== bundle.bundleName);
+          return [...others, bundle];
+        });
+        setExpandedBundles(prev => { const n = new Set(prev); n.add(bundle.bundleId); return n; });
+      }
+      if (dlpLogHit) {
+        try {
+          const r = parseDlpAllLog(dlpLogHit.text, dlpLogHit.name);
+          if (r.recordCount > 0) setDlpAllLogReport(r);
+        } catch { /* surfaced only on direct upload */ }
+      }
+      if (auditHit) {
+        try {
+          const r = parseAuditSystemLogs(auditHit.text, auditHit.name);
+          if (r.totalRows > 0) setAuditLogReport(r);
+        } catch { /* surfaced only on direct upload */ }
+      }
+      if (serviceHits.length > 0) {
+        try {
+          const r = parseDlpServiceLogs(serviceHits);
+          if (r.totalLines > 0) setServiceLogsReport(r);
+        } catch { /* surfaced only on direct upload */ }
+      }
     } finally {
       setParseBusy(false);
     }
@@ -1528,9 +2173,9 @@ export function Step3DataCollectors({
             <FolderOpen size={14} style={{ color: '#D97706' }} />
           </div>
           <div className="flex-1">
-            <div style={{ fontSize: '13px', fontWeight: 700, color: '#0F172A' }}>DLP Server Info</div>
+            <div style={{ fontSize: '13px', fontWeight: 700, color: '#0F172A' }}>DLP Server Telemetry</div>
             <div style={{ fontSize: '11px', color: '#94A3B8' }}>
-              Upload a Forcepoint <span style={{ fontFamily: 'monospace' }}>DLPServerInfo_*</span> bundle folder — parses systeminfo, hardware, hotfixes, services, SQL Server, DB, policies, endpoint clients & more into the report
+              Upload a Forcepoint <span style={{ fontFamily: 'monospace' }}>DLPServerInfo_*</span> folder (the "DLP Server Info" diagnostic export) — parses systeminfo, hardware, hotfixes, services, SQL Server, DB, policies, endpoint clients & more into the report
             </div>
           </div>
           {dlpBundles.length > 0 && (
@@ -1556,10 +2201,10 @@ export function Step3DataCollectors({
                 ? <Loader size={20} className="animate-spin" style={{ color: '#D97706' }} />
                 : <Upload size={20} style={{ color: '#D97706' }} />}
               <div style={{ fontSize: '12.5px', fontWeight: 600, color: '#92400E' }}>
-                {parseBusy ? 'Parsing bundle…' : 'Drop a DLPServerInfo folder here, or use the buttons below'}
+                {parseBusy ? 'Parsing telemetry…' : 'Drop a DLP Telemetry folder here, or use the buttons below'}
               </div>
               <div style={{ fontSize: '10.5px', color: '#A16207', textAlign: 'center', maxWidth: '420px' }}>
-                Generated by Forcepoint's DLPServerInfo diagnostic tool. We parse{' '}
+                Generated by Forcepoint's DLP Server Info diagnostic tool (<span style={{ fontFamily: 'monospace' }}>DLPServerInfo_*</span>). We parse{' '}
                 <span style={{ fontFamily: 'monospace' }}>systeminfo.txt</span>, <span style={{ fontFamily: 'monospace' }}>mem_cpu_hdd.txt</span>, <span style={{ fontFamily: 'monospace' }}>services_info.txt</span>, the <span style={{ fontFamily: 'monospace' }}>SQL queries/*</span> CSVs and more.
               </div>
               <div className="flex gap-2 mt-1">
@@ -1612,6 +2257,74 @@ export function Step3DataCollectors({
                 {dlpBundles.map(b => <BundleCard key={b.bundleId} bundle={b} expanded={expandedBundles.has(b.bundleId)} onToggle={() => toggleBundle(b.bundleId)} onRemove={() => removeBundle(b.bundleId)} />)}
               </div>
             )}
+
+            {/* Inline analyzers for the three log-evidence sources that
+                live inside the bundle but aren't part of the
+                DLPServerInfo grammar: dlp-all.log (Tomcat app log),
+                AUDIT_SYSTEM_LOGS.csv (DLP audit query export), and the
+                eight files under \Data Security\Logs (service logs).
+                Auto-populated when the bundle folder is dropped; each
+                panel also accepts direct upload. */}
+            <DlpAllLogPanel
+              report={dlpAllLogReport}
+              busy={dlpLogBusy}
+              error={dlpLogError}
+              onPick={() => dlpLogInputRef.current?.click()}
+              onDrop={(f) => handleDlpLogFile(f)}
+              onClear={() => { setDlpAllLogReport(null); setDlpLogError(''); }}
+              isStarred={(id) => !!starredLogIssues[`dlp:${id}`]}
+              isDismissed={(id) => !!dismissedLogIssues[`dlp:${id}`]}
+              onToggleStar={(id, iss) => toggleStar('dlp', id, iss)}
+              onDismiss={(id) => toggleDismiss('dlp', id)}
+            />
+            <input
+              ref={dlpLogInputRef}
+              type="file"
+              accept=".log,.txt"
+              style={{ display: 'none' }}
+              onChange={(e) => { handleDlpLogFile(e.target.files?.[0]); if (dlpLogInputRef.current) dlpLogInputRef.current.value = ''; }}
+            />
+
+            <AuditLogPanel
+              report={auditLogReport}
+              busy={auditBusy}
+              error={auditError}
+              onPick={() => auditCsvInputRef.current?.click()}
+              onDrop={(f) => handleAuditCsvFile(f)}
+              onClear={() => { setAuditLogReport(null); setAuditError(''); }}
+              isStarred={(id) => !!starredLogIssues[`audit:${id}`]}
+              isDismissed={(id) => !!dismissedLogIssues[`audit:${id}`]}
+              onToggleStar={(id, iss) => toggleStar('audit', id, iss)}
+              onDismiss={(id) => toggleDismiss('audit', id)}
+            />
+            <input
+              ref={auditCsvInputRef}
+              type="file"
+              accept=".csv"
+              style={{ display: 'none' }}
+              onChange={(e) => { handleAuditCsvFile(e.target.files?.[0]); if (auditCsvInputRef.current) auditCsvInputRef.current.value = ''; }}
+            />
+
+            <ServiceLogsPanel
+              report={serviceLogsReport}
+              busy={serviceLogsBusy}
+              error={serviceLogsError}
+              onPick={() => serviceLogsInputRef.current?.click()}
+              onDropFiles={(fs) => handleServiceLogsFiles(fs)}
+              onClear={() => { setServiceLogsReport(null); setServiceLogsError(''); }}
+              isStarred={(id) => !!starredLogIssues[`services:${id}`]}
+              isDismissed={(id) => !!dismissedLogIssues[`services:${id}`]}
+              onToggleStar={(id, iss) => toggleStar('services', id, iss)}
+              onDismiss={(id) => toggleDismiss('services', id)}
+            />
+            <input
+              ref={serviceLogsInputRef}
+              type="file"
+              accept=".log"
+              multiple
+              style={{ display: 'none' }}
+              onChange={(e) => { handleServiceLogsFiles(e.target.files ?? undefined); if (serviceLogsInputRef.current) serviceLogsInputRef.current.value = ''; }}
+            />
           </div>
         )}
       </div>

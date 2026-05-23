@@ -392,7 +392,7 @@ export function Step4VersionCheck({ selectedProducts, versionData, versionEntrie
           ...(existing ?? { id, ...def, installedVersion: '', status: 'unknown' as VersionStatus, notes: '' }),
           installedVersion: fsmVersion,
           status,
-          notes: notes || `Auto-filled from DLPServerInfo bundle: ${fsmBundle?.bundleName ?? ''}`,
+          notes: notes || `Auto-filled from DLP Server Telemetry: ${fsmBundle?.bundleName ?? ''}`,
         };
         fsmFilled++;
       }
@@ -405,7 +405,7 @@ export function Step4VersionCheck({ selectedProducts, versionData, versionEntrie
           ...(existing ?? { id, ...def, installedVersion: '', status: 'unknown' as VersionStatus, notes: '' }),
           installedVersion: sqlVersion,
           status,
-          notes: notes || `Auto-filled from DLPServerInfo bundle: ${sqlBundle?.bundleName ?? ''}`,
+          notes: notes || `Auto-filled from DLP Server Telemetry: ${sqlBundle?.bundleName ?? ''}`,
         };
         sqlFilled++;
       }
@@ -416,7 +416,7 @@ export function Step4VersionCheck({ selectedProducts, versionData, versionEntrie
     if (fsmFilled > 0) parts.push(`FSM Server (${fsmVersion}) → ${fsmFilled} row${fsmFilled === 1 ? '' : 's'}`);
     if (sqlFilled > 0) parts.push(`SQL Server (${sqlVersion}) → ${sqlFilled} row${sqlFilled === 1 ? '' : 's'}`);
     if (parts.length > 0) {
-      setAutoFillNotice(`${parts.join(' · ')}. Auto-filled from DLPServerInfo. Edit any value to override.`);
+      setAutoFillNotice(`${parts.join(' · ')}. Auto-filled from DLP Server Telemetry. Edit any value to override.`);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dlpBundles, selectedProducts]);

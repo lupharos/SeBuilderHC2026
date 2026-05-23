@@ -33,6 +33,9 @@ import type { DlpServerBundle } from './steps/dlpServerInfoParser';
 import type { ParsedCertificate } from './steps/certificateParser';
 import type { EndpointAgentSummary } from './steps/endpointAgentParser';
 import type { DlpDashboardSummary } from './steps/dlpDashboardParser';
+import type { DlpAllLogReport } from './steps/dlpAllLogParser';
+import type { AuditSystemLogsReport } from './steps/auditSystemLogsParser';
+import type { ServiceLogsReport } from './steps/dlpServiceLogsParser';
 import type { DlpPostureSummary, DlpPostureBlockId, DestinationPatterns } from './steps/dlpPosture';
 import type { CustomerConnectorConfig } from './steps/customerConnector';
 
@@ -78,6 +81,17 @@ interface MainContentProps {
   setEndpointAgentSummary: React.Dispatch<React.SetStateAction<EndpointAgentSummary | null>>;
   dlpDashboardSummary: DlpDashboardSummary | null;
   setDlpDashboardSummary: React.Dispatch<React.SetStateAction<DlpDashboardSummary | null>>;
+  dlpAllLogReport: DlpAllLogReport | null;
+  setDlpAllLogReport: React.Dispatch<React.SetStateAction<DlpAllLogReport | null>>;
+  auditLogReport: AuditSystemLogsReport | null;
+  setAuditLogReport: React.Dispatch<React.SetStateAction<AuditSystemLogsReport | null>>;
+  serviceLogsReport: ServiceLogsReport | null;
+  setServiceLogsReport: React.Dispatch<React.SetStateAction<ServiceLogsReport | null>>;
+  starredLogIssues: Record<string, true>;
+  setStarredLogIssues: React.Dispatch<React.SetStateAction<Record<string, true>>>;
+  dismissedLogIssues: Record<string, true>;
+  setDismissedLogIssues: React.Dispatch<React.SetStateAction<Record<string, true>>>;
+  onStarLogIssue: (key: string, issue: { title: string; recommendation: string; severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW'; component: string }) => void;
   dlpPostureSummary: DlpPostureSummary | null;
   setDlpPostureSummary: React.Dispatch<React.SetStateAction<DlpPostureSummary | null>>;
   dlpPostureSections: Record<DlpPostureBlockId, boolean>;
@@ -126,6 +140,12 @@ export function MainContent({
   licenseGaps, setLicenseGaps,
   endpointAgentSummary, setEndpointAgentSummary,
   dlpDashboardSummary, setDlpDashboardSummary,
+  dlpAllLogReport, setDlpAllLogReport,
+  auditLogReport, setAuditLogReport,
+  serviceLogsReport, setServiceLogsReport,
+  starredLogIssues, setStarredLogIssues,
+  dismissedLogIssues, setDismissedLogIssues,
+  onStarLogIssue,
   dlpPostureSummary, setDlpPostureSummary,
   dlpPostureSections, setDlpPostureSections,
   destinationPatterns,
@@ -146,7 +166,7 @@ export function MainContent({
         <div className="px-8 py-6 pb-10 w-full">
           {currentStep === 1  && <Step1CustomerInfo sessionData={sessionData} updateSessionData={updateSessionData} versionData={versionData} complianceFrameworks={complianceFrameworks} setComplianceFrameworks={setComplianceFrameworks} />}
           {currentStep === 2  && <Step2ProductScope selectedProducts={selectedProducts} setSelectedProducts={setSelectedProducts} />}
-          {currentStep === 3  && <Step3DataCollectors sqlConfig={sqlConfig} setSqlConfig={setSqlConfig} apiConnectors={apiConnectors} setApiConnectors={setApiConnectors} selectedReports={selectedReports} setSelectedReports={setSelectedReports} reportWindows={reportWindows} setReportWindows={setReportWindows} reportRuns={reportRuns} setReportRuns={setReportRuns} selectedProducts={selectedProducts} dlpBundles={dlpBundles} setDlpBundles={setDlpBundles} dlpDashboardSummary={dlpDashboardSummary} setDlpDashboardSummary={setDlpDashboardSummary} dlpPostureSummary={dlpPostureSummary} setDlpPostureSummary={setDlpPostureSummary} dlpPostureSections={dlpPostureSections} setDlpPostureSections={setDlpPostureSections} destinationPatterns={destinationPatterns} customerConnector={customerConnector} setCustomerConnector={setCustomerConnector} />}
+          {currentStep === 3  && <Step3DataCollectors sqlConfig={sqlConfig} setSqlConfig={setSqlConfig} apiConnectors={apiConnectors} setApiConnectors={setApiConnectors} selectedReports={selectedReports} setSelectedReports={setSelectedReports} reportWindows={reportWindows} setReportWindows={setReportWindows} reportRuns={reportRuns} setReportRuns={setReportRuns} selectedProducts={selectedProducts} dlpBundles={dlpBundles} setDlpBundles={setDlpBundles} dlpDashboardSummary={dlpDashboardSummary} setDlpDashboardSummary={setDlpDashboardSummary} dlpPostureSummary={dlpPostureSummary} setDlpPostureSummary={setDlpPostureSummary} dlpPostureSections={dlpPostureSections} setDlpPostureSections={setDlpPostureSections} destinationPatterns={destinationPatterns} customerConnector={customerConnector} setCustomerConnector={setCustomerConnector} dlpAllLogReport={dlpAllLogReport} setDlpAllLogReport={setDlpAllLogReport} auditLogReport={auditLogReport} setAuditLogReport={setAuditLogReport} serviceLogsReport={serviceLogsReport} setServiceLogsReport={setServiceLogsReport} starredLogIssues={starredLogIssues} setStarredLogIssues={setStarredLogIssues} dismissedLogIssues={dismissedLogIssues} setDismissedLogIssues={setDismissedLogIssues} onStarLogIssue={onStarLogIssue} />}
           {currentStep === 4  && <Step4VersionCheck selectedProducts={selectedProducts} versionData={versionData} versionEntries={versionEntries} onVersionEntriesChange={onVersionEntriesChange} dlpBundles={dlpBundles} />}
           {currentStep === 5  && <StepServerDetails servers={serverDetails} setServers={setServerDetails} dlpBundles={dlpBundles} />}
           {currentStep === 6  && <StepEndpointAgentAnalysis summary={endpointAgentSummary} setSummary={setEndpointAgentSummary} />}
@@ -234,6 +254,10 @@ export function MainContent({
               licenseGaps={licenseGaps}
               endpointAgentSummary={endpointAgentSummary}
               dlpDashboardSummary={dlpDashboardSummary}
+              dlpAllLogReport={dlpAllLogReport}
+              auditLogReport={auditLogReport}
+              serviceLogsReport={serviceLogsReport}
+              starredLogIssues={starredLogIssues}
               dlpPostureSummary={dlpPostureSummary}
               dlpPostureSections={dlpPostureSections}
               customerLogo={customerLogo}

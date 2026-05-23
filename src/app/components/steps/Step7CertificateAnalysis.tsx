@@ -80,7 +80,7 @@ export function Step7CertificateAnalysis({ certificates, setCertificates }: Prop
       <div>
         <div style={{ fontSize: '17px', fontWeight: 700, color: '#0F2952' }}>Certificate Analysis</div>
         <div style={{ fontSize: '12px', color: '#64748B', marginTop: '3px' }}>
-          Import the customer's <span style={{ fontFamily: 'monospace' }}>.cer</span> / <span style={{ fontFamily: 'monospace' }}>.pem</span> files (typically <span style={{ fontFamily: 'monospace' }}>allcerts.cer</span> and <span style={{ fontFamily: 'monospace' }}>ca.cer</span> from the DLP Server Info bundle). The wizard parses subject, issuer, validity, key length, algorithm, and CA flag automatically.
+          Import the customer's <span style={{ fontFamily: 'monospace' }}>.cer</span> / <span style={{ fontFamily: 'monospace' }}>.pem</span> files (typically <span style={{ fontFamily: 'monospace' }}>allcerts.cer</span> and <span style={{ fontFamily: 'monospace' }}>ca.cer</span> from the DLP Server Telemetry export). The wizard parses subject, issuer, validity, key length, algorithm, and CA flag automatically.
         </div>
       </div>
 

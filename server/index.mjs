@@ -712,7 +712,7 @@ app.post('/api/dlp/posture', async (req, res) => {
    connector will phone home again within its heartbeat interval.
 ───────────────────────────────────────────────────────────────── */
 
-/** @type {Map<string, {firstSeen: string, lastSeen: string, lastIp: string|null, total: number, version: string|null, rejected: number, lastRejectedAt: string|null, lastRejectedIp: string|null, selftest: {sql: object|null, dlpApi: object|null}|null}>} */
+/** @type {Map<string, {firstSeen: string, lastSeen: string, lastIp: string|null, total: number, version: string|null, rejected: number, lastRejectedAt: string|null, lastRejectedIp: string|null, selftest: {sqlData: object|null, sqlWeb: object|null, sqlEmail: object|null, sql: object|null, dlpApi: object|null}|null}>} */
 const connectorState = new Map();
 
 /* Per-token IP allowlist — populated by the wizard's
@@ -891,16 +891,24 @@ app.post('/api/connector/heartbeat', (req, res) => {
   const nowIso = new Date().toISOString();
   const prev = connectorState.get(token);
   /* Capture the selftest snapshot the connector includes with every
-     heartbeat. Shape:
-       { sql: {status, message, latencyMs, checkedAt} | null,
-         dlpApi: {status, message, latencyMs, checkedAt} | null }
+     heartbeat. Shape (v2 schema — three discrete SQL probes + DLP API):
+       { sqlData:  {status, message, latencyMs, checkedAt} | null,
+         sqlWeb:   ... | null,
+         sqlEmail: ... | null,
+         dlpApi:   ... | null,
+         sql:      ... | null  (legacy v1 field, kept for back-compat) }
      The connector re-runs selftests every 5 minutes, so the freshest
-     state always lands here within 30s + 5m of any change. */
+     state always lands here within 30s + 5m of any change. We pass
+     through every known field verbatim — adding `sqlData/sqlWeb/sqlEmail`
+     here is what makes the wizard see all three SQL DBs. */
   const incomingSelftest = (req.body ?? {}).selftest;
   const selftest = (incomingSelftest && typeof incomingSelftest === 'object')
     ? {
-        sql:    incomingSelftest.sql    ?? null,
-        dlpApi: incomingSelftest.dlpApi ?? null,
+        sqlData:  incomingSelftest.sqlData  ?? null,
+        sqlWeb:   incomingSelftest.sqlWeb   ?? null,
+        sqlEmail: incomingSelftest.sqlEmail ?? null,
+        sql:      incomingSelftest.sql      ?? null,
+        dlpApi:   incomingSelftest.dlpApi   ?? null,
       }
     : (prev?.selftest ?? null);
 

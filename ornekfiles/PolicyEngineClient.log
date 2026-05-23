@@ -1,0 +1,7 @@
+2026-05-19 10:31:37,507 [0x00001e0c] f:\pais\util\filesystem\utils.cpp:429 ERROR Exception - apr_socket_connect, error code 730061: No connection could be made because the target machine actively refused it.  
+2026-05-19 11:45:34,019 [0x00001e08] f:\pais\util\filesystem\utils.cpp:429 ERROR Exception - apr_socket_connect, error code 730061: No connection could be made because the target machine actively refused it.  
+2026-05-19 12:40:31,955 [0x00001d7c] f:\pais\util\filesystem\utils.cpp:429 ERROR Exception - apr_socket_connect, error code 730061: No connection could be made because the target machine actively refused it.  
+2026-05-19 13:05:01,696 [0x00001e48] f:\pais\util\filesystem\utils.cpp:429 ERROR Exception - apr_socket_connect, error code 730061: No connection could be made because the target machine actively refused it.  
+2026-05-19 14:02:50,537 [0x00001e84] f:\pais\util\filesystem\utils.cpp:429 ERROR Exception - apr_socket_connect, error code 730061: No connection could be made because the target machine actively refused it.  
+2026-05-19 14:37:23,045 [0x00002ee4] f:\pais\util\filesystem\utils.cpp:429 ERROR Exception - apr_socket_connect, error code 730061: No connection could be made because the target machine actively refused it.  
+2026-05-19 17:25:10,505 [0x00001db8] f:\pais\util\filesystem\utils.cpp:429 ERROR Exception - apr_socket_connect, error code 730061: No connection could be made because the target machine actively refused it.  

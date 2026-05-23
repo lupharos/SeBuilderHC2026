@@ -14,6 +14,9 @@ import { formatMemoryGB, memoryUsagePct, statusColor as statusColorDlp, type Dlp
 import { formatRemaining, certStatusColor, certStatusIcon, type ParsedCertificate } from './certificateParser';
 import type { EndpointAgentSummary } from './endpointAgentParser';
 import type { DlpDashboardSummary } from './dlpDashboardParser';
+import type { DlpAllLogReport } from './dlpAllLogParser';
+import type { AuditSystemLogsReport } from './auditSystemLogsParser';
+import type { ServiceLogsReport } from './dlpServiceLogsParser';
 import { type DlpPostureSummary, type DlpPostureBlockId, DEFAULT_POSTURE_SECTIONS, formatBytes } from './dlpPosture';
 import type { ComplianceFrameworkItem, EnhancementOverride } from '../Dashboard';
 import type { VersionUpgradeProposal } from './StepVersionUpgrades';
@@ -46,6 +49,18 @@ interface Step11Props {
   licenseGaps: LicenseGapItem[];
   endpointAgentSummary: EndpointAgentSummary | null;
   dlpDashboardSummary: DlpDashboardSummary | null;
+  /* Optional Tomcat application log analysis (dlp-all.log). Renders as an
+     evidence block in Part II if present. */
+  dlpAllLogReport: DlpAllLogReport | null;
+  /* Optional DLP audit-system CSV analysis (AUDIT_SYSTEM_LOGS.csv). */
+  auditLogReport: AuditSystemLogsReport | null;
+  /* Optional cross-correlated analyzer for `\Data Security\Logs\` —
+     8 service log files folded into one issue list. */
+  serviceLogsReport: ServiceLogsReport | null;
+  /* Star/dismiss state for log findings — only STARRED issues flow
+     into the report's "DLP Log Evidence" section. Dismissed entries
+     are honored in Step 3 only; they're not relevant to the report. */
+  starredLogIssues: Record<string, true>;
   dlpPostureSummary: DlpPostureSummary | null;
   dlpPostureSections: Record<DlpPostureBlockId, boolean>;
   customerLogo: string | null;
@@ -79,6 +94,10 @@ function buildReportHTML(p: {
   licenseGaps: LicenseGapItem[];
   endpointAgentSummary: EndpointAgentSummary | null;
   dlpDashboardSummary: DlpDashboardSummary | null;
+  dlpAllLogReport: DlpAllLogReport | null;
+  auditLogReport: AuditSystemLogsReport | null;
+  serviceLogsReport: ServiceLogsReport | null;
+  starredLogIssues: Record<string, true>;
   dlpPostureSummary: DlpPostureSummary | null;
   dlpPostureSections: Record<DlpPostureBlockId, boolean>;
   customerLogo: string | null;
@@ -511,11 +530,16 @@ function buildReportHTML(p: {
       { kind: 'item' as const, label: 'Infrastructure &amp; Version Review' },
       ...(activeServers.length > 0 ? [{ kind: 'item' as const, label: 'Server Infrastructure' }] : []),
       ...(p.dlpBundles.length > 0 ? [{ kind: 'item' as const, label: 'DLP Telemetry File Analysis' }] : []),
+      ...(((p.dlpAllLogReport && p.dlpAllLogReport.issues.some((i) => (p.starredLogIssues ?? {})[`dlp:${i.id}`])) ||
+           (p.auditLogReport  && p.auditLogReport.issues.some((i)  => (p.starredLogIssues ?? {})[`audit:${i.id}`])) ||
+           (p.serviceLogsReport && p.serviceLogsReport.issues.some((i) => (p.starredLogIssues ?? {})[`services:${i.id}`])))
+        ? [{ kind: 'item' as const, label: 'DLP Log &amp; Audit Findings' }] : []),
       ...(p.endpointAgentSummary && p.endpointAgentSummary.totalRecords > 0 ? [{ kind: 'item' as const, label: 'Endpoint Agent Analysis' }] : []),
+      ...((p.selectedProducts.data || p.selectedProducts.web) && p.endpointCompatAssessment ? [{ kind: 'item' as const, label: 'Agent Compatibility' }] : []),
       ...((p.dlpPostureSummary && Object.values(p.dlpPostureSections).some(Boolean)) ? [{ kind: 'item' as const, label: 'Information Security Posture Dashboard' }] : []),
       ...(p.certificates.length > 0 ? [{ kind: 'item' as const, label: 'Certificate Analysis' }] : []),
       ...(p.selectedTemplates.length > 0 ? [{ kind: 'item' as const, label: 'Per-Product Security Assessment' }] : []),
-      ...(p.allFindings.length > 0 ? [{ kind: 'item' as const, label: 'Checklist Findings' }] : []),
+      ...(p.allFindings.length > 0 ? [{ kind: 'item' as const, label: 'Feature Posture Control' }] : []),
       ...(hasWeb                    ? [{ kind: 'item' as const, label: 'Web Security Usage' }] : []),
       ...(hasDLP && !dlpSqlSuppressed ? [{ kind: 'item' as const, label: 'Data Security Usage' }] : []),
       ...(hasEmail                  ? [{ kind: 'item' as const, label: 'Email Security Usage' }] : []),
@@ -524,12 +548,12 @@ function buildReportHTML(p: {
     { kind: 'part', label: roadmapPartLabel },
     ...(isTech && p.recommendations.length > 0 ? [{ kind: 'item' as const, label: 'Recommendations' }] : []),
     ...(isTech && p.versionUpgrades.length > 0 ? [{ kind: 'item' as const, label: 'Version Upgrade Proposals' }] : []),
-    /* Agent Compatibility section renders when DLP or Web is in scope AND
-       we have either a customer assessment or a non-empty matrix to fall
-       back on. TOC stays in sync with what actually gets emitted further
-       down. */
-    ...(isTech && (p.selectedProducts.data || p.selectedProducts.web) && (p.endpointCompatAssessment || !isMatrixEmpty(p.endpointMatrix))
-      ? [{ kind: 'item' as const, label: 'Agent Compatibility' }] : []),
+    /* Agent Compatibility moved into Part II (under Endpoint Agents) —
+       Part III TOC entry retained only for the legacy raw-matrix
+       fallback, which fires when DLP/Web is in scope and the matrix is
+       imported but no customer assessment exists yet. */
+    ...(isTech && (p.selectedProducts.data || p.selectedProducts.web) && !p.endpointCompatAssessment && !isMatrixEmpty(p.endpointMatrix)
+      ? [{ kind: 'item' as const, label: 'OS &amp; Browser Support Matrix' }] : []),
     ...(isTech && p.actionItems.length > 0 ? [{ kind: 'item' as const, label: 'Action Items &amp; Next Steps' }] : []),
     ...(isTech && p.featureRequests.length > 0 ? [{ kind: 'item' as const, label: 'Customer Feature Requests' }] : []),
     ...((p.licenseGaps?.length ?? 0) > 0 ? [{ kind: 'item' as const, label: 'Recommended License Extension' }] : []),
@@ -1841,7 +1865,7 @@ tr:last-child td{border-bottom:none;}
   <div style="background:#FFFFFF;border:1px solid var(--fp-rule);border-radius:8px;padding:12px 16px;margin-bottom:12px;page-break-inside:avoid;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
       <div style="font-size:11.5px;font-weight:700;color:var(--fp-navy);">DLP Estate Pulse</div>
-      <div style="font-size:10px;color:#94A3B8;">Telemetry aggregated from ${p.dlpBundles.length} bundle${p.dlpBundles.length === 1 ? '' : 's'}</div>
+      <div style="font-size:10px;color:#94A3B8;">Telemetry aggregated from ${p.dlpBundles.length} DLP Telemetry export${p.dlpBundles.length === 1 ? '' : 's'}</div>
     </div>
     <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:7px;">
       ${tiles.map((t) => `
@@ -2419,7 +2443,7 @@ ${(() => {
       const totalDeducted = hb.questionPenalty + hb.versionPenalty + hb.infraPenalty;
       if (totalDeducted === 0) return '';
       const pills: { label: string; count: number; pts: number; color: string }[] = [];
-      if (hb.questionPenalty > 0) pills.push({ label: 'Checklist Findings', count: hb.questionPenalty, pts: 0, color: 'var(--fp-violette)' });
+      if (hb.questionPenalty > 0) pills.push({ label: 'Feature Posture Control', count: hb.questionPenalty, pts: 0, color: 'var(--fp-violette)' });
       if (hb.eosCount > 0) pills.push({ label: 'EoS / EoL Versions', count: hb.eosCount, pts: hb.eosCount * 4, color: 'var(--fp-red)' });
       if (hb.warnVersionCount > 0) pills.push({ label: 'Outdated Versions', count: hb.warnVersionCount, pts: hb.warnVersionCount, color: 'var(--fp-yellow)' });
       if (hb.infraCritical > 0) pills.push({ label: 'Infra Critical (≥85%)', count: hb.infraCritical, pts: hb.infraCritical * 3, color: 'var(--fp-red)' });
@@ -2919,7 +2943,7 @@ ${(() => {
 <div class="chapter">
   <div class="chapter-part">PART II</div>
   <div class="chapter-title">Technical Assessment</div>
-  <div class="chapter-sub">The supporting evidence behind the verdict — infrastructure inventory, software version &amp; end-of-life posture, server health, DLP bundle telemetry, certificate validity, and per-product checklist findings.</div>
+  <div class="chapter-sub">The supporting evidence behind the verdict — infrastructure inventory, software version &amp; end-of-life posture, server health, DLP Server Telemetry, certificate validity, and per-product checklist findings.</div>
 </div>
 
 <div class="content">
@@ -3228,7 +3252,7 @@ ${p.dlpBundles.length > 0 ? `
           <div style="font-size:10.5px;color:#475569;margin-bottom:8px;padding:7px 10px;background:#fef2f2;border:1px solid #fecaca;border-radius:5px;">
             <div style="font-weight:700;color:#A30080;margin-bottom:3px;">⚠ Services not running:</div>
             <ul style="margin-left:18px;list-style:disc;">${svc.notRunning.map(n => `<li>${esc(n)}</li>`).join('')}</ul>
-          </div>` : `<div style="font-size:10.5px;color:#69BC00;margin-bottom:8px;">✓ All ${svc.totalWebsenseServices} services parsed from the bundle were reporting Running state.</div>`}
+          </div>` : `<div style="font-size:10.5px;color:#69BC00;margin-bottom:8px;">✓ All ${svc.totalWebsenseServices} services parsed from the DLP Telemetry were reporting Running state.</div>`}
 
         <!-- Per-service detail table — Run-As account intentionally redacted (service-account secrets are sensitive) -->
         <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;border-radius:5px;font-size:9.5px;">
@@ -3446,6 +3470,120 @@ ${p.dlpBundles.length > 0 ? `
     </div>`;
   }).join('')}
 </div>` : ''}
+
+<!-- ══════════════════════════════════════
+     DLP LOG EVIDENCE (Part II — section 6.5)
+     Deterministic root-cause analysis of two files extracted from the
+     DLP Server Telemetry: the Tomcat application log (dlp-all.log),
+     the AUDIT_SYSTEM_LOGS CSV, and the cross-correlated \Data Security\Logs\
+     service logs. Operator-starred (★) findings only — clean logs never
+     reach this section. Tech-only — not part of the CISO Executive Briefing.
+══════════════════════════════════════ -->
+<!--VARIANT:TECH_ONLY:BEGIN-->
+${(() => {
+  const dlpLog = p.dlpAllLogReport;
+  const auditLog = p.auditLogReport;
+  const serviceLog = p.serviceLogsReport;
+  const starred = p.starredLogIssues ?? {};
+  const dlpStarred     = dlpLog     ? dlpLog.issues.filter((i)     => starred[`dlp:${i.id}`])     : [];
+  const auditStarred   = auditLog   ? auditLog.issues.filter((i)   => starred[`audit:${i.id}`])   : [];
+  const serviceStarred = serviceLog ? serviceLog.issues.filter((i) => starred[`services:${i.id}`]) : [];
+  const dlpHasIssues     = dlpStarred.length     > 0;
+  const auditHasIssues   = auditStarred.length   > 0;
+  const serviceHasIssues = serviceStarred.length > 0;
+  if (!dlpHasIssues && !auditHasIssues && !serviceHasIssues) return '';
+
+  const sevPill = (sev: string) => {
+    const cfg: Record<string, { bg: string; color: string }> = {
+      CRITICAL: { bg: '#FEE2E2', color: '#991B1B' },
+      HIGH:     { bg: '#FEF3C7', color: '#92400E' },
+      MEDIUM:   { bg: '#FEF9C3', color: '#854D0E' },
+      LOW:      { bg: '#F1F5F9', color: '#475569' },
+    };
+    const c = cfg[sev] ?? cfg.LOW;
+    return `<span style="font-size:9px;font-weight:800;letter-spacing:0.08em;background:${c.bg};color:${c.color};padding:2px 6px;border-radius:3px;font-family:'JetBrains Mono',monospace;">${esc(sev)}</span>`;
+  };
+
+  const renderIssue = (iss: { title: string; severity: string; component?: string; source?: string; description: string; occurrences: number; first_seen: string; last_seen: string; recommendation: string; log_sources?: string[] }) => {
+    const tag = iss.component ?? iss.source ?? '';
+    const sources = iss.log_sources && iss.log_sources.length > 0 ? iss.log_sources.join(', ') : '';
+    return `
+    <div style="background:#fff;border:1px solid var(--fp-rule);border-radius:6px;padding:10px 12px;margin-bottom:8px;page-break-inside:avoid;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+        ${sevPill(iss.severity)}
+        <span style="font-weight:700;font-size:12px;color:var(--fp-navy);flex:1;">${esc(iss.title)}</span>
+        <span class="mono" style="font-size:10px;color:var(--fp-ink-faint);">×${iss.occurrences.toLocaleString()}</span>
+      </div>
+      ${tag ? `<div class="mono" style="font-size:9.5px;color:var(--fp-ink-muted);margin-bottom:5px;">${esc(tag)}${sources ? ` · ${esc(sources)}` : ''}</div>` : ''}
+      <div style="font-size:11px;color:var(--fp-ink);line-height:1.55;margin-bottom:6px;">${esc(iss.description)}</div>
+      <div style="display:flex;gap:14px;font-size:10px;color:var(--fp-ink-faint);font-family:'JetBrains Mono',monospace;margin-bottom:6px;">
+        <span>First: <span style="color:var(--fp-ink-muted);">${esc(iss.first_seen)}</span></span>
+        <span>Last: <span style="color:var(--fp-ink-muted);">${esc(iss.last_seen)}</span></span>
+      </div>
+      <div style="padding:7px 10px;background:var(--fp-surface-alt);border:1px solid var(--fp-rule);border-radius:4px;font-size:10.5px;color:var(--fp-ink);line-height:1.55;">
+        <strong style="color:var(--fp-navy);">Recommendation:</strong> ${esc(iss.recommendation)}
+      </div>
+    </div>`;
+  };
+
+  return `
+<div class="section">
+  <div class="section-eyebrow">Section 6.5 · Part II · DLP Log Evidence</div>
+  <div class="section-title">DLP Log &amp; Audit Findings</div>
+  <p class="section-lead">
+    Operator-selected findings (★) from the diagnostic exports inside the DLP Server Telemetry (<span class="mono" style="color:var(--fp-ink-faint);">DLPServerInfo_*</span>).
+    Sources: <strong>dlp-all.log</strong> (Tomcat application log), <strong>AUDIT_SYSTEM_LOGS.csv</strong> (DLP audit
+    queries), and the <strong>\\Data Security\\Logs\\</strong> service logs (FPR, EndPointServer,
+    PolicyEngine[Client], mgmtd, HealthCheck, WorkScheduler, CleanupAndArchive). Cross-file
+    correlation collapses the same root cause into one finding.
+    <br/><span style="color:var(--fp-ink-faint);font-size:11px;">Inclusion criteria: pattern must
+    have fired at least <strong>10 times</strong>, have a most-recent occurrence within the
+    <strong>last 30 days</strong>, AND have been ★-starred by the analyst on Step 3. Stale and
+    low-volume matches are counted but not detailed below.</span>
+  </p>
+
+  ${dlpHasIssues ? `
+  <div class="subsection-title" style="margin-top:18px;">Tomcat Application Log · <span class="mono" style="font-weight:400;color:var(--fp-ink-faint);">${esc(dlpLog!.fileName)}</span></div>
+  <div style="font-size:10.5px;color:var(--fp-ink-muted);margin:-4px 0 10px;line-height:1.55;">
+    Parsed <strong>${dlpLog!.recordCount.toLocaleString()}</strong> logical records
+    · <span style="color:#991B1B;font-weight:700;">${dlpLog!.errorCount}</span> ERROR
+    · <span style="color:#92400E;font-weight:700;">${dlpLog!.warnCount}</span> WARN
+    · Window <span class="mono">${esc(dlpLog!.spanFirst ?? '—')}</span> → <span class="mono">${esc(dlpLog!.spanLast ?? '—')}</span>
+    ${(dlpLog!.staleDropped + dlpLog!.lowVolumeDropped) > 0 ? `<br/><span style="color:var(--fp-ink-faint);">Filtered: ${dlpLog!.staleDropped} stale (last seen >30 days ago) · ${dlpLog!.lowVolumeDropped} low-volume (&lt;10 occurrences).</span>` : ''}
+    · <strong style="color:var(--fp-ink);">${dlpStarred.length}</strong> starred for report.
+  </div>
+  ${dlpStarred.map(renderIssue).join('')}
+  ` : ''}
+
+  ${auditHasIssues ? `
+  <div class="subsection-title" style="margin-top:${dlpHasIssues ? '22px' : '18px'};">Audit System Logs · <span class="mono" style="font-weight:400;color:var(--fp-ink-faint);">${esc(auditLog!.fileName)}</span></div>
+  <div style="font-size:10.5px;color:var(--fp-ink-muted);margin:-4px 0 10px;line-height:1.55;">
+    Parsed <strong>${auditLog!.totalRows.toLocaleString()}</strong> audit rows
+    · <span style="color:#991B1B;font-weight:700;">${auditLog!.errorRows}</span> ERROR
+    · <span style="color:#92400E;font-weight:700;">${auditLog!.warningRows}</span> WARNING
+    · <span style="color:#475569;font-weight:700;">${auditLog!.infoRows}</span> INFO
+    · Window <span class="mono">${esc(auditLog!.spanFirst ?? '—')}</span> → <span class="mono">${esc(auditLog!.spanLast ?? '—')}</span>
+    ${(auditLog!.staleDropped + auditLog!.lowVolumeDropped) > 0 ? `<br/><span style="color:var(--fp-ink-faint);">Filtered: ${auditLog!.staleDropped} stale (last seen >30 days ago) · ${auditLog!.lowVolumeDropped} low-volume (&lt;10 occurrences).</span>` : ''}
+    · <strong style="color:var(--fp-ink);">${auditStarred.length}</strong> starred for report.
+  </div>
+  ${auditStarred.map((iss) => renderIssue({ ...iss, component: iss.source })).join('')}
+  ` : ''}
+
+  ${serviceHasIssues ? `
+  <div class="subsection-title" style="margin-top:${(dlpHasIssues || auditHasIssues) ? '22px' : '18px'};">Service Logs · <span class="mono" style="font-weight:400;color:var(--fp-ink-faint);">\\Data Security\\Logs\\</span></div>
+  <div style="font-size:10.5px;color:var(--fp-ink-muted);margin:-4px 0 10px;line-height:1.55;">
+    ${serviceLog!.files.filter((f) => f.family !== 'unknown').length} files parsed
+    · <strong>${serviceLog!.totalLines.toLocaleString()}</strong> lines
+    · <span style="color:#991B1B;font-weight:700;">${serviceLog!.totalErrors}</span> ERROR
+    · Window <span class="mono">${esc(serviceLog!.spanFirst ?? '—')}</span> → <span class="mono">${esc(serviceLog!.spanLast ?? '—')}</span>
+    ${(serviceLog!.staleDropped + serviceLog!.lowVolumeDropped) > 0 ? `<br/><span style="color:var(--fp-ink-faint);">Filtered: ${serviceLog!.staleDropped} stale (last seen >30 days ago) · ${serviceLog!.lowVolumeDropped} low-volume (&lt;10 occurrences).</span>` : ''}
+    · <strong style="color:var(--fp-ink);">${serviceStarred.length}</strong> starred for report.
+  </div>
+  ${serviceStarred.map(renderIssue).join('')}
+  ` : ''}
+</div>`;
+})()}
+<!--VARIANT:TECH_ONLY:END-->
 
 <!-- ══════════════════════════════════════
      ENDPOINT AGENT ANALYSIS
@@ -3684,6 +3822,185 @@ ${p.endpointAgentSummary && p.endpointAgentSummary.totalRecords > 0 ? (() => {
 })() : ''}
 
 <!-- ══════════════════════════════════════
+     F1E ENDPOINT COMPATIBILITY ASSESSMENT
+     Customer-specific assessment produced by Step 7 against the imported
+     OS / Browser Support Matrix. Renders only what the operator generated —
+     status banner, findings, OS/browser compatibility, opted-in critical
+     notes, and the upgrade recommendation. Falls back silently when no
+     assessment has been generated, so reports never ship with empty cards.
+══════════════════════════════════════ -->
+${(p.selectedProducts.data || p.selectedProducts.web) && p.endpointCompatAssessment ? (() => {
+  const a = p.endpointCompatAssessment!;
+  const STATUS_CFG: Record<string, { color: string; bg: string; border: string; label: string }> = {
+    SUPPORTED: { color: '#16A34A', bg: '#F0FDF4', border: '#BBF7D0', label: 'Supported' },
+    AT_RISK:   { color: '#B58800', bg: '#FFFBEB', border: '#FDE68A', label: 'At Risk' },
+    CRITICAL:  { color: '#A30080', bg: '#FDF2F8', border: '#FBCFE8', label: 'Critical' },
+  };
+  const SEV_CFG: Record<string, { color: string; bg: string; border: string }> = {
+    CRITICAL: { color: '#A30080', bg: '#FDF2F8', border: '#FBCFE8' },
+    HIGH:     { color: '#DC2626', bg: '#FEF2F2', border: '#FECACA' },
+    MEDIUM:   { color: '#B58800', bg: '#FFFBEB', border: '#FDE68A' },
+    LOW:      { color: '#0284C7', bg: '#F0F9FF', border: '#BAE6FD' },
+  };
+  const URG_CFG: Record<string, { color: string; bg: string; label: string }> = {
+    IMMEDIATE:  { color: '#A30080', bg: '#FDF2F8', label: 'Immediate' },
+    SHORT_TERM: { color: '#DC2626', bg: '#FEF2F2', label: 'Short Term' },
+    PLANNED:    { color: '#0284C7', bg: '#F0F9FF', label: 'Planned' },
+  };
+  /* Generic agent label — the F1E binary on the endpoint can service DLP,
+     Hybrid Web, or both, so the report names whichever modules are in
+     scope rather than hard-coding "DLP". */
+  const epScopeLabel =
+    p.selectedProducts.data && p.selectedProducts.web ? 'DLP + Hybrid Web'
+    : p.selectedProducts.data ? 'DLP'
+    : p.selectedProducts.web  ? 'Hybrid Web'
+    : 'Endpoint';
+  const epCoverageNarrative =
+    p.selectedProducts.data && p.selectedProducts.web ? 'DLP and Hybrid Web coverage'
+    : p.selectedProducts.data ? 'DLP coverage'
+    : p.selectedProducts.web  ? 'Hybrid Web coverage'
+    : 'endpoint coverage';
+  const sc = STATUS_CFG[a.compatibilityStatus] ?? STATUS_CFG.SUPPORTED;
+  const includedNotes = a.criticalNotes.filter((n) => n.includeInReport);
+  return `
+<div class="section">
+  <div class="section-eyebrow">Section 7.5 · Part II · Agent Compatibility</div>
+  <div class="section-title">Agent Compatibility</div>
+  <p class="section-lead">
+    Customer fleet measured against the imported Forcepoint endpoint support matrix. Identifies operating-system, browser, and agent-version gaps that affect ${esc(epCoverageNarrative)} on the endpoint.
+  </p>
+
+  <!-- Status banner -->
+  <div style="background:${sc.bg};border:1px solid ${sc.border};border-left:4px solid ${sc.color};border-radius:8px;padding:14px 18px;margin-bottom:14px;page-break-inside:avoid;">
+    <div style="display:flex;align-items:center;gap:14px;">
+      <div style="font-size:22px;font-weight:800;color:${sc.color};letter-spacing:-0.01em;">${esc(sc.label)}</div>
+      <span style="font-size:9.5px;font-weight:700;color:${sc.color};background:#fff;border:1px solid ${sc.border};padding:2px 8px;border-radius:5px;letter-spacing:0.06em;">COMPATIBILITY · ${esc(a.compatibilityStatus)}</span>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:12px;">
+      <div>
+        <div style="font-size:9px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:0.08em;">Customer Agent (${esc(epScopeLabel)})</div>
+        <div style="font-size:13px;font-weight:700;color:#0F2952;font-family:'JetBrains Mono',monospace;margin-top:2px;">${esc(a.customerAgentVersion || '—')}</div>
+      </div>
+      <div>
+        <div style="font-size:9px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:0.08em;">Minimum Required</div>
+        <div style="font-size:13px;font-weight:700;color:#0F2952;font-family:'JetBrains Mono',monospace;margin-top:2px;">v${esc(a.minimumRequiredAgent)}</div>
+      </div>
+      <div>
+        <div style="font-size:9px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:0.08em;">Findings</div>
+        <div style="font-size:13px;font-weight:700;color:#0F2952;font-family:'JetBrains Mono',monospace;margin-top:2px;">${a.findings.length}</div>
+      </div>
+      <div>
+        <div style="font-size:9px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:0.08em;">Upgrade Required</div>
+        <div style="font-size:13px;font-weight:700;color:${a.upgradeRequired ? '#B58800' : '#16A34A'};font-family:'JetBrains Mono',monospace;margin-top:2px;">${a.upgradeRequired ? 'Yes' : 'No'}</div>
+      </div>
+    </div>
+  </div>
+
+  ${a.findings.length > 0 ? `
+  <div style="background:#FFFFFF;border:1px solid var(--fp-rule);border-radius:8px;padding:14px 18px;margin-bottom:14px;">
+    <div style="font-size:11.5px;font-weight:800;color:#0F2952;letter-spacing:0.02em;margin-bottom:10px;text-transform:uppercase;">Findings (${a.findings.length})</div>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      ${a.findings.map((f) => {
+        const fc = SEV_CFG[f.severity] ?? SEV_CFG.MEDIUM;
+        return `<div style="background:${fc.bg};border:1px solid ${fc.border};border-left:3px solid ${fc.color};border-radius:6px;padding:10px 12px;page-break-inside:avoid;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+            <span style="font-size:8.5px;font-weight:800;color:${fc.color};background:#fff;border:1px solid ${fc.border};padding:1px 6px;border-radius:4px;letter-spacing:0.06em;">${esc(f.severity)}</span>
+            <span style="font-size:11.5px;font-weight:700;color:#1D252C;">${esc(f.title)}</span>
+          </div>
+          <div style="font-size:10.5px;color:#475569;line-height:1.6;">${esc(f.description)}</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:5px;flex-wrap:wrap;">
+            ${f.affectedComponents.map((c) => `<span style="font-size:9px;font-weight:600;color:#475569;background:#fff;border:1px solid #E2E8F0;padding:1px 6px;border-radius:3px;font-family:monospace;">${esc(c)}</span>`).join('')}
+            <span style="font-size:9.5px;color:#64748B;font-family:monospace;">${f.affectedEndpoints.toLocaleString()} endpoints (${esc(f.affectedPct)})</span>
+          </div>
+          <div style="font-size:10.5px;color:${fc.color};margin-top:5px;line-height:1.55;"><strong>Recommended action:</strong> ${esc(f.recommendation)}</div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>` : ''}
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;page-break-inside:avoid;">
+    ${a.osCompatibility.length > 0 ? `
+    <div style="background:#FFFFFF;border:1px solid var(--fp-rule);border-radius:8px;padding:12px 14px;">
+      <div style="font-size:10.5px;font-weight:800;color:#0F2952;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">OS Compatibility</div>
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        ${a.osCompatibility.map((r) => {
+          const bad = !r.customerAgentCompatible;
+          const bg = bad ? '#FEF2F2' : '#F0FDF4';
+          const bd = bad ? '#FECACA' : '#BBF7D0';
+          const co = bad ? '#A30080' : '#16A34A';
+          return `<div style="background:${bg};border:1px solid ${bd};border-radius:5px;padding:6px 9px;">
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span style="font-size:11px;font-weight:700;color:${co};flex-shrink:0;">${bad ? '⨯' : '✓'}</span>
+              <span style="font-size:10.5px;font-weight:600;color:#1D252C;flex:1;">${esc(r.os)}</span>
+              <span style="font-size:8.5px;font-weight:700;color:${co};letter-spacing:0.05em;">${esc(r.status)}</span>
+            </div>
+            <div style="font-size:9.5px;color:#64748B;font-family:monospace;margin-left:17px;">min: ${esc(r.minAgentRequired)}</div>
+            ${r.note ? `<div style="font-size:9.5px;color:#64748B;margin-left:17px;margin-top:2px;line-height:1.45;">${esc(r.note)}</div>` : ''}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>` : ''}
+
+    ${a.browserCompatibility.length > 0 ? `
+    <div style="background:#FFFFFF;border:1px solid var(--fp-rule);border-radius:8px;padding:12px 14px;">
+      <div style="font-size:10.5px;font-weight:800;color:#0F2952;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">Browser Compatibility</div>
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        ${a.browserCompatibility.map((r) => {
+          const bad = !r.customerAgentCompatible;
+          const bg = bad ? '#FEF2F2' : '#F0FDF4';
+          const bd = bad ? '#FECACA' : '#BBF7D0';
+          const co = bad ? '#A30080' : '#16A34A';
+          return `<div style="background:${bg};border:1px solid ${bd};border-radius:5px;padding:6px 9px;">
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span style="font-size:11px;font-weight:700;color:${co};flex-shrink:0;">${bad ? '⨯' : '✓'}</span>
+              <span style="font-size:10.5px;font-weight:600;color:#1D252C;flex:1;">${esc(r.browser)} · ${esc(r.platform)}</span>
+              ${r.mv3Required ? '<span style="font-size:8px;font-weight:700;color:#7C3AED;background:#F5F3FF;border:1px solid #DDD6FE;padding:1px 5px;border-radius:3px;letter-spacing:0.04em;">MV3</span>' : ''}
+              <span style="font-size:8.5px;font-weight:700;color:${co};letter-spacing:0.05em;">${esc(r.status)}</span>
+            </div>
+            <div style="font-size:9.5px;color:#64748B;font-family:monospace;margin-left:17px;">min: ${esc(r.minAgentRequired)}</div>
+            ${r.note ? `<div style="font-size:9.5px;color:#64748B;margin-left:17px;margin-top:2px;line-height:1.45;">${esc(r.note)}</div>` : ''}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>` : ''}
+  </div>
+
+  ${includedNotes.length > 0 ? `
+  <div style="margin-top:14px;page-break-inside:avoid;">
+    <div style="font-size:10.5px;font-weight:800;color:#0F2952;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">Critical Compatibility Notes</div>
+    <div style="display:flex;flex-direction:column;gap:6px;">
+      ${includedNotes.map((n) => {
+        const nc = SEV_CFG[n.severity] ?? SEV_CFG.MEDIUM;
+        return `<div style="background:${nc.bg};border:1px solid ${nc.border};border-left:3px solid ${nc.color};border-radius:5px;padding:8px 11px;">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
+            <span style="font-size:8.5px;font-weight:800;color:${nc.color};background:#fff;border:1px solid ${nc.border};padding:1px 5px;border-radius:3px;letter-spacing:0.05em;">${esc(n.severity)}</span>
+            <span style="font-size:11px;font-weight:700;color:#1D252C;">⚠ ${esc(n.title)}</span>
+          </div>
+          <div style="font-size:10.5px;color:#475569;line-height:1.55;">${esc(n.description)}</div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>` : ''}
+
+  ${a.upgradeRecommendation ? (() => {
+    const u = URG_CFG[a.upgradeRecommendation.urgency] ?? URG_CFG.PLANNED;
+    return `
+    <div style="margin-top:14px;background:#FFFFFF;border:1px solid var(--fp-rule);border-top:3px solid ${u.color};border-radius:8px;padding:14px 16px;page-break-inside:avoid;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+        <span style="font-size:13px;font-weight:800;color:#0F2952;">Upgrade Recommendation</span>
+        <span style="font-size:9px;font-weight:700;color:${u.color};background:${u.bg};border:1px solid ${u.color}33;padding:2px 8px;border-radius:4px;letter-spacing:0.06em;">${esc(u.label.toUpperCase())}</span>
+        <span style="font-size:10.5px;color:#475569;font-family:monospace;">Target: <strong>v${esc(a.upgradeRecommendation.targetVersion)}</strong></span>
+      </div>
+      <div style="font-size:11px;color:#475569;line-height:1.65;margin-bottom:8px;">${esc(a.upgradeRecommendation.rationale)}</div>
+      <div style="font-size:10.5px;color:#475569;line-height:1.55;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:5px;padding:7px 9px;">
+        <strong style="color:#0F2952;">Deployment note:</strong> ${esc(a.upgradeRecommendation.deploymentNote)}
+      </div>
+    </div>`;
+  })() : ''}
+</div>`;
+})() : ''}
+
+<!-- ══════════════════════════════════════
      PER-PRODUCT SECURITY ASSESSMENT
 ══════════════════════════════════════ -->
 ${p.selectedTemplates.length > 0 ? `
@@ -3711,7 +4028,7 @@ ${p.selectedTemplates.length > 0 ? `
 ══════════════════════════════════════ -->
 <div class="section">
   <div class="section-eyebrow">Section 10 · Part II · Findings Detail</div>
-  <div class="section-title">Checklist Findings (${p.allFindings.length})</div>
+  <div class="section-title">Feature Posture Control (${p.allFindings.length})</div>
   ${p.allFindings.length === 0
     ? '<p style="color:#69BC00;font-weight:600;padding:10px 0;">✓ No findings — all checklist items passed.</p>'
     : p.allFindings.map(f => `
@@ -3790,7 +4107,7 @@ ${p.certificates.length > 0 ? `
   <div class="section-eyebrow">Section 08 · Part II · Certificate Trust</div>
   <div class="section-title">Certificate Analysis</div>
   <p style="margin-bottom:14px;color:#475569;line-height:1.65;font-size:11px;">
-    The following X.509 certificates were imported from the customer's environment (typically <span style="font-family:monospace;background:#f1f5f9;padding:1px 5px;border-radius:3px;">allcerts.cer</span> and <span style="font-family:monospace;background:#f1f5f9;padding:1px 5px;border-radius:3px;">ca.cer</span> from the DLP Server Info bundle). Subject, issuer, validity dates, key length, signature algorithm, and CA constraint were parsed directly from the DER-encoded certificate bodies.
+    The following X.509 certificates were imported from the customer's environment (typically <span style="font-family:monospace;background:#f1f5f9;padding:1px 5px;border-radius:3px;">allcerts.cer</span> and <span style="font-family:monospace;background:#f1f5f9;padding:1px 5px;border-radius:3px;">ca.cer</span> from the DLP Server Telemetry export). Subject, issuer, validity dates, key length, signature algorithm, and CA constraint were parsed directly from the DER-encoded certificate bodies.
   </p>
 
   ${(() => {
@@ -4381,185 +4698,6 @@ ${(p.dlpPostureSummary && Object.values(p.dlpPostureSections).some(Boolean)) ? (
 </div>`;
 })() : ''}
 
-<!-- ══════════════════════════════════════
-     F1E ENDPOINT COMPATIBILITY ASSESSMENT
-     Customer-specific assessment produced by Step 7 against the imported
-     OS / Browser Support Matrix. Renders only what the operator generated —
-     status banner, findings, OS/browser compatibility, opted-in critical
-     notes, and the upgrade recommendation. Falls back silently when no
-     assessment has been generated, so reports never ship with empty cards.
-══════════════════════════════════════ -->
-${(p.selectedProducts.data || p.selectedProducts.web) && p.endpointCompatAssessment ? (() => {
-  const a = p.endpointCompatAssessment!;
-  const STATUS_CFG: Record<string, { color: string; bg: string; border: string; label: string }> = {
-    SUPPORTED: { color: '#16A34A', bg: '#F0FDF4', border: '#BBF7D0', label: 'Supported' },
-    AT_RISK:   { color: '#B58800', bg: '#FFFBEB', border: '#FDE68A', label: 'At Risk' },
-    CRITICAL:  { color: '#A30080', bg: '#FDF2F8', border: '#FBCFE8', label: 'Critical' },
-  };
-  const SEV_CFG: Record<string, { color: string; bg: string; border: string }> = {
-    CRITICAL: { color: '#A30080', bg: '#FDF2F8', border: '#FBCFE8' },
-    HIGH:     { color: '#DC2626', bg: '#FEF2F2', border: '#FECACA' },
-    MEDIUM:   { color: '#B58800', bg: '#FFFBEB', border: '#FDE68A' },
-    LOW:      { color: '#0284C7', bg: '#F0F9FF', border: '#BAE6FD' },
-  };
-  const URG_CFG: Record<string, { color: string; bg: string; label: string }> = {
-    IMMEDIATE:  { color: '#A30080', bg: '#FDF2F8', label: 'Immediate' },
-    SHORT_TERM: { color: '#DC2626', bg: '#FEF2F2', label: 'Short Term' },
-    PLANNED:    { color: '#0284C7', bg: '#F0F9FF', label: 'Planned' },
-  };
-  /* Generic agent label — the F1E binary on the endpoint can service DLP,
-     Hybrid Web, or both, so the report names whichever modules are in
-     scope rather than hard-coding "DLP". */
-  const epScopeLabel =
-    p.selectedProducts.data && p.selectedProducts.web ? 'DLP + Hybrid Web'
-    : p.selectedProducts.data ? 'DLP'
-    : p.selectedProducts.web  ? 'Hybrid Web'
-    : 'Endpoint';
-  const epCoverageNarrative =
-    p.selectedProducts.data && p.selectedProducts.web ? 'DLP and Hybrid Web coverage'
-    : p.selectedProducts.data ? 'DLP coverage'
-    : p.selectedProducts.web  ? 'Hybrid Web coverage'
-    : 'endpoint coverage';
-  const sc = STATUS_CFG[a.compatibilityStatus] ?? STATUS_CFG.SUPPORTED;
-  const includedNotes = a.criticalNotes.filter((n) => n.includeInReport);
-  return `
-<div class="section">
-  <div class="section-eyebrow">Section 14 · Part III · Agent Compatibility</div>
-  <div class="section-title">Agent Compatibility</div>
-  <p class="section-lead">
-    Customer fleet measured against the imported Forcepoint endpoint support matrix. Identifies operating-system, browser, and agent-version gaps that affect ${esc(epCoverageNarrative)} on the endpoint.
-  </p>
-
-  <!-- Status banner -->
-  <div style="background:${sc.bg};border:1px solid ${sc.border};border-left:4px solid ${sc.color};border-radius:8px;padding:14px 18px;margin-bottom:14px;page-break-inside:avoid;">
-    <div style="display:flex;align-items:center;gap:14px;">
-      <div style="font-size:22px;font-weight:800;color:${sc.color};letter-spacing:-0.01em;">${esc(sc.label)}</div>
-      <span style="font-size:9.5px;font-weight:700;color:${sc.color};background:#fff;border:1px solid ${sc.border};padding:2px 8px;border-radius:5px;letter-spacing:0.06em;">COMPATIBILITY · ${esc(a.compatibilityStatus)}</span>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:12px;">
-      <div>
-        <div style="font-size:9px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:0.08em;">Customer Agent (${esc(epScopeLabel)})</div>
-        <div style="font-size:13px;font-weight:700;color:#0F2952;font-family:'JetBrains Mono',monospace;margin-top:2px;">${esc(a.customerAgentVersion || '—')}</div>
-      </div>
-      <div>
-        <div style="font-size:9px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:0.08em;">Minimum Required</div>
-        <div style="font-size:13px;font-weight:700;color:#0F2952;font-family:'JetBrains Mono',monospace;margin-top:2px;">v${esc(a.minimumRequiredAgent)}</div>
-      </div>
-      <div>
-        <div style="font-size:9px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:0.08em;">Findings</div>
-        <div style="font-size:13px;font-weight:700;color:#0F2952;font-family:'JetBrains Mono',monospace;margin-top:2px;">${a.findings.length}</div>
-      </div>
-      <div>
-        <div style="font-size:9px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:0.08em;">Upgrade Required</div>
-        <div style="font-size:13px;font-weight:700;color:${a.upgradeRequired ? '#B58800' : '#16A34A'};font-family:'JetBrains Mono',monospace;margin-top:2px;">${a.upgradeRequired ? 'Yes' : 'No'}</div>
-      </div>
-    </div>
-  </div>
-
-  ${a.findings.length > 0 ? `
-  <div style="background:#FFFFFF;border:1px solid var(--fp-rule);border-radius:8px;padding:14px 18px;margin-bottom:14px;">
-    <div style="font-size:11.5px;font-weight:800;color:#0F2952;letter-spacing:0.02em;margin-bottom:10px;text-transform:uppercase;">Findings (${a.findings.length})</div>
-    <div style="display:flex;flex-direction:column;gap:8px;">
-      ${a.findings.map((f) => {
-        const fc = SEV_CFG[f.severity] ?? SEV_CFG.MEDIUM;
-        return `<div style="background:${fc.bg};border:1px solid ${fc.border};border-left:3px solid ${fc.color};border-radius:6px;padding:10px 12px;page-break-inside:avoid;">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
-            <span style="font-size:8.5px;font-weight:800;color:${fc.color};background:#fff;border:1px solid ${fc.border};padding:1px 6px;border-radius:4px;letter-spacing:0.06em;">${esc(f.severity)}</span>
-            <span style="font-size:11.5px;font-weight:700;color:#1D252C;">${esc(f.title)}</span>
-          </div>
-          <div style="font-size:10.5px;color:#475569;line-height:1.6;">${esc(f.description)}</div>
-          <div style="display:flex;align-items:center;gap:8px;margin-top:5px;flex-wrap:wrap;">
-            ${f.affectedComponents.map((c) => `<span style="font-size:9px;font-weight:600;color:#475569;background:#fff;border:1px solid #E2E8F0;padding:1px 6px;border-radius:3px;font-family:monospace;">${esc(c)}</span>`).join('')}
-            <span style="font-size:9.5px;color:#64748B;font-family:monospace;">${f.affectedEndpoints.toLocaleString()} endpoints (${esc(f.affectedPct)})</span>
-          </div>
-          <div style="font-size:10.5px;color:${fc.color};margin-top:5px;line-height:1.55;"><strong>Recommended action:</strong> ${esc(f.recommendation)}</div>
-        </div>`;
-      }).join('')}
-    </div>
-  </div>` : ''}
-
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;page-break-inside:avoid;">
-    ${a.osCompatibility.length > 0 ? `
-    <div style="background:#FFFFFF;border:1px solid var(--fp-rule);border-radius:8px;padding:12px 14px;">
-      <div style="font-size:10.5px;font-weight:800;color:#0F2952;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">OS Compatibility</div>
-      <div style="display:flex;flex-direction:column;gap:4px;">
-        ${a.osCompatibility.map((r) => {
-          const bad = !r.customerAgentCompatible;
-          const bg = bad ? '#FEF2F2' : '#F0FDF4';
-          const bd = bad ? '#FECACA' : '#BBF7D0';
-          const co = bad ? '#A30080' : '#16A34A';
-          return `<div style="background:${bg};border:1px solid ${bd};border-radius:5px;padding:6px 9px;">
-            <div style="display:flex;align-items:center;gap:6px;">
-              <span style="font-size:11px;font-weight:700;color:${co};flex-shrink:0;">${bad ? '⨯' : '✓'}</span>
-              <span style="font-size:10.5px;font-weight:600;color:#1D252C;flex:1;">${esc(r.os)}</span>
-              <span style="font-size:8.5px;font-weight:700;color:${co};letter-spacing:0.05em;">${esc(r.status)}</span>
-            </div>
-            <div style="font-size:9.5px;color:#64748B;font-family:monospace;margin-left:17px;">min: ${esc(r.minAgentRequired)}</div>
-            ${r.note ? `<div style="font-size:9.5px;color:#64748B;margin-left:17px;margin-top:2px;line-height:1.45;">${esc(r.note)}</div>` : ''}
-          </div>`;
-        }).join('')}
-      </div>
-    </div>` : ''}
-
-    ${a.browserCompatibility.length > 0 ? `
-    <div style="background:#FFFFFF;border:1px solid var(--fp-rule);border-radius:8px;padding:12px 14px;">
-      <div style="font-size:10.5px;font-weight:800;color:#0F2952;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">Browser Compatibility</div>
-      <div style="display:flex;flex-direction:column;gap:4px;">
-        ${a.browserCompatibility.map((r) => {
-          const bad = !r.customerAgentCompatible;
-          const bg = bad ? '#FEF2F2' : '#F0FDF4';
-          const bd = bad ? '#FECACA' : '#BBF7D0';
-          const co = bad ? '#A30080' : '#16A34A';
-          return `<div style="background:${bg};border:1px solid ${bd};border-radius:5px;padding:6px 9px;">
-            <div style="display:flex;align-items:center;gap:6px;">
-              <span style="font-size:11px;font-weight:700;color:${co};flex-shrink:0;">${bad ? '⨯' : '✓'}</span>
-              <span style="font-size:10.5px;font-weight:600;color:#1D252C;flex:1;">${esc(r.browser)} · ${esc(r.platform)}</span>
-              ${r.mv3Required ? '<span style="font-size:8px;font-weight:700;color:#7C3AED;background:#F5F3FF;border:1px solid #DDD6FE;padding:1px 5px;border-radius:3px;letter-spacing:0.04em;">MV3</span>' : ''}
-              <span style="font-size:8.5px;font-weight:700;color:${co};letter-spacing:0.05em;">${esc(r.status)}</span>
-            </div>
-            <div style="font-size:9.5px;color:#64748B;font-family:monospace;margin-left:17px;">min: ${esc(r.minAgentRequired)}</div>
-            ${r.note ? `<div style="font-size:9.5px;color:#64748B;margin-left:17px;margin-top:2px;line-height:1.45;">${esc(r.note)}</div>` : ''}
-          </div>`;
-        }).join('')}
-      </div>
-    </div>` : ''}
-  </div>
-
-  ${includedNotes.length > 0 ? `
-  <div style="margin-top:14px;page-break-inside:avoid;">
-    <div style="font-size:10.5px;font-weight:800;color:#0F2952;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">Critical Compatibility Notes</div>
-    <div style="display:flex;flex-direction:column;gap:6px;">
-      ${includedNotes.map((n) => {
-        const nc = SEV_CFG[n.severity] ?? SEV_CFG.MEDIUM;
-        return `<div style="background:${nc.bg};border:1px solid ${nc.border};border-left:3px solid ${nc.color};border-radius:5px;padding:8px 11px;">
-          <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
-            <span style="font-size:8.5px;font-weight:800;color:${nc.color};background:#fff;border:1px solid ${nc.border};padding:1px 5px;border-radius:3px;letter-spacing:0.05em;">${esc(n.severity)}</span>
-            <span style="font-size:11px;font-weight:700;color:#1D252C;">⚠ ${esc(n.title)}</span>
-          </div>
-          <div style="font-size:10.5px;color:#475569;line-height:1.55;">${esc(n.description)}</div>
-        </div>`;
-      }).join('')}
-    </div>
-  </div>` : ''}
-
-  ${a.upgradeRecommendation ? (() => {
-    const u = URG_CFG[a.upgradeRecommendation.urgency] ?? URG_CFG.PLANNED;
-    return `
-    <div style="margin-top:14px;background:#FFFFFF;border:1px solid var(--fp-rule);border-top:3px solid ${u.color};border-radius:8px;padding:14px 16px;page-break-inside:avoid;">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
-        <span style="font-size:13px;font-weight:800;color:#0F2952;">Upgrade Recommendation</span>
-        <span style="font-size:9px;font-weight:700;color:${u.color};background:${u.bg};border:1px solid ${u.color}33;padding:2px 8px;border-radius:4px;letter-spacing:0.06em;">${esc(u.label.toUpperCase())}</span>
-        <span style="font-size:10.5px;color:#475569;font-family:monospace;">Target: <strong>v${esc(a.upgradeRecommendation.targetVersion)}</strong></span>
-      </div>
-      <div style="font-size:11px;color:#475569;line-height:1.65;margin-bottom:8px;">${esc(a.upgradeRecommendation.rationale)}</div>
-      <div style="font-size:10.5px;color:#475569;line-height:1.55;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:5px;padding:7px 9px;">
-        <strong style="color:#0F2952;">Deployment note:</strong> ${esc(a.upgradeRecommendation.deploymentNote)}
-      </div>
-    </div>`;
-  })() : ''}
-</div>`;
-})() : ''}
-
 <!-- Legacy raw-matrix dump retained as a hidden fallback only when an
      assessment hasn't been produced yet but the operator did import the
      matrix. This stops the report from being empty during a partial fill,
@@ -4572,7 +4710,7 @@ ${(p.selectedProducts.data || p.selectedProducts.web) && !p.endpointCompatAssess
     : 'Endpoint';
   return `
 <div class="section">
-  <div class="section-eyebrow">Section 14 · Part III · Endpoint Compatibility</div>
+  <div class="section-eyebrow">Section 14 · Part III · OS &amp; Browser Support Matrix</div>
   <div class="section-title">F1E ${esc(epScopeLabel)} Endpoint — OS &amp; Browser Support Matrix</div>
   <p class="section-lead">
     Reference: minimum agent versions for current Windows, macOS, virtual desktop, and browser platforms — used to confirm endpoint compatibility ahead of any upgrade or new-deployment decision.
@@ -5010,7 +5148,7 @@ ${p.selectedEnhancements.length > 0 ? `
   return stripVariantBlocks(html);
 }
 
-export function Step11Summary({ sessionData, templates, selectedProducts, checklistAnswers, versionEntries, versionData, recommendations, actionItems, featureRequests, serverDetails, selectedReports, dlpBundles, certificates, selectedEnhancements, licenseGaps, endpointAgentSummary, dlpDashboardSummary, dlpPostureSummary, dlpPostureSections, customerLogo, setCustomerLogo, complianceFrameworks, enhancementOverrides, versionUpgrades, endpointMatrix, endpointCompatAssessment, reportRuns, onComplete, isComplete }: Step11Props) {
+export function Step11Summary({ sessionData, templates, selectedProducts, checklistAnswers, versionEntries, versionData, recommendations, actionItems, featureRequests, serverDetails, selectedReports, dlpBundles, certificates, selectedEnhancements, licenseGaps, endpointAgentSummary, dlpDashboardSummary, dlpAllLogReport, auditLogReport, serviceLogsReport, starredLogIssues, dlpPostureSummary, dlpPostureSections, customerLogo, setCustomerLogo, complianceFrameworks, enhancementOverrides, versionUpgrades, endpointMatrix, endpointCompatAssessment, reportRuns, onComplete, isComplete }: Step11Props) {
   /* Tracks which report variant is mid-generation so only that card's
      button switches to "Generating…". null when idle. */
   const [isExporting, setIsExporting] = useState<'executive' | 'healthcheck' | null>(null);
@@ -5086,7 +5224,7 @@ export function Step11Summary({ sessionData, templates, selectedProducts, checkl
           sessionData, selectedTemplates, selectedProducts, checklistAnswers, allFindings,
           versionEntries, versionData, serverDetails, recommendations, actionItems, featureRequests,
           totalAnswered, totalQuestions, healthScore, date, selectedReports, dlpBundles, certificates, selectedEnhancements,
-          licenseGaps, endpointAgentSummary, dlpDashboardSummary, dlpPostureSummary, dlpPostureSections, customerLogo,
+          licenseGaps, endpointAgentSummary, dlpDashboardSummary, dlpAllLogReport, auditLogReport, serviceLogsReport, starredLogIssues, dlpPostureSummary, dlpPostureSections, customerLogo,
           complianceFrameworks, enhancementOverrides, versionUpgrades, endpointMatrix, endpointCompatAssessment,
           reportRuns: reportRuns ?? {},
           healthBreakdown,
@@ -5114,13 +5252,13 @@ export function Step11Summary({ sessionData, templates, selectedProducts, checkl
   const reportItems = [
     { icon: '📋', label: 'Customer Information', detail: sessionData.customerName || 'Not set', ok: !!sessionData.customerName },
     { icon: '🎯', label: 'Per-Product Assessment', detail: `${selectedTemplates.length} product${selectedTemplates.length !== 1 ? 's' : ''} in scope`, ok: selectedTemplates.length > 0 },
-    { icon: '🗂', label: 'Data Collection',       detail: `${dlpBundles.length} DLP bundle${dlpBundles.length !== 1 ? 's' : ''} · ${selectedReports.length} report${selectedReports.length !== 1 ? 's' : ''} selected`, ok: dlpBundles.length > 0 || selectedReports.length > 0 },
+    { icon: '🗂', label: 'Data Collection',       detail: `${dlpBundles.length} DLP Telemetry export${dlpBundles.length !== 1 ? 's' : ''} · ${selectedReports.length} report${selectedReports.length !== 1 ? 's' : ''} selected`, ok: dlpBundles.length > 0 || selectedReports.length > 0 },
     { icon: '🔢', label: 'Version & EoS Status',  detail: `${checkData.versionCount} components tracked`, ok: checkData.versionCount > 0 },
     { icon: '🖥',  label: 'Server Infrastructure', detail: `${checkData.serverCount} server${checkData.serverCount !== 1 ? 's' : ''} configured`, ok: checkData.serverCount > 0 },
     { icon: '💻', label: 'Endpoint Agent Analysis', detail: endpointAgentSummary
         ? `${endpointAgentSummary.totalRecords.toLocaleString()} endpoints${endpointAgentSummary.outdatedCount > 0 ? ` (${endpointAgentSummary.outdatedCount} outdated)` : ''}`
         : 'Not imported', ok: !!endpointAgentSummary && endpointAgentSummary.totalRecords > 0 },
-    { icon: '🔍', label: 'Checklist Findings',    detail: `${allFindings.length} findings from ${totalAnswered} checks`, ok: totalAnswered > 0 },
+    { icon: '🔍', label: 'Feature Posture Control', detail: `${allFindings.length} findings from ${totalAnswered} checks`, ok: totalAnswered > 0 },
     { icon: '🔐', label: 'Certificate Analysis',  detail: `${certificates.length} certificate${certificates.length !== 1 ? 's' : ''}${certificates.filter(c => c.status !== 'VALID').length > 0 ? ` (${certificates.filter(c => c.status !== 'VALID').length} need attention)` : ''}`, ok: certificates.length > 0 },
     { icon: '💡', label: 'Recommendations',       detail: `${recommendations.length} defined`, ok: recommendations.length > 0 },
     { icon: '⬆️', label: 'Version Upgrade Proposals', detail: `${versionUpgrades.length} proposal${versionUpgrades.length === 1 ? '' : 's'}`, ok: versionUpgrades.length > 0 },

@@ -18,6 +18,10 @@ export interface ActionItem {
   /** When true, this action appears in the report's "Top Priority Actions" block AND in
       "Key Observations". When false (or unset), it only appears in the full Next Steps table. */
   featured?: boolean;
+  /** Set by the log-analyzer "star" flow when the action was auto-spawned from a starred
+      finding. Carries `${scope}:${issueId}` so re-starring the same finding doesn't create
+      a duplicate action. The operator can still edit / delete the action manually. */
+  linkedLogIssueKey?: string;
 }
 
 const P_CFG: Record<Priority, { label: string; text: string; bg: string; border: string }> = {

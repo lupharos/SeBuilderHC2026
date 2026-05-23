@@ -142,7 +142,7 @@ export function StepServerDetails({
         osVersion: s.osVersion || info.osVersion || '',
         notes: s.notes
           ? s.notes
-          : `Auto-filled from DLPServerInfo bundle: ${bundle.bundleName}`,
+          : `Auto-filled from DLP Server Telemetry: ${bundle.bundleName}`,
       };
     }));
     if (didFill) {

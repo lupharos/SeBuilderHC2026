@@ -27,6 +27,9 @@ import type { DlpServerBundle } from './steps/dlpServerInfoParser';
 import type { ParsedCertificate } from './steps/certificateParser';
 import type { EndpointAgentSummary } from './steps/endpointAgentParser';
 import type { DlpDashboardSummary } from './steps/dlpDashboardParser';
+import type { DlpAllLogReport } from './steps/dlpAllLogParser';
+import type { AuditSystemLogsReport } from './steps/auditSystemLogsParser';
+import type { ServiceLogsReport } from './steps/dlpServiceLogsParser';
 import { type DlpPostureSummary, type DlpPostureBlockId, type DestinationPatterns, DEFAULT_POSTURE_SECTIONS, DEFAULT_DESTINATION_PATTERNS } from './steps/dlpPosture';
 import { type CustomerConnectorConfig, DEFAULT_CUSTOMER_CONNECTOR } from './steps/customerConnector';
 import type { VersionUpgradeProposal } from './steps/StepVersionUpgrades';
@@ -179,6 +182,17 @@ export interface HCSession {
   licenseGaps: LicenseGapItem[];
   endpointAgentSummary: EndpointAgentSummary | null;
   dlpDashboardSummary: DlpDashboardSummary | null;
+  /* Parsed result of `\Data Security\tomcat\logs\dlp\dlp-all.log`
+     analyzer (Step 3 → DLP Server Info card). */
+  dlpAllLogReport: DlpAllLogReport | null;
+  /* Parsed result of `\SQL queries\AUDIT_SYSTEM_LOGS.csv` analyzer. */
+  auditLogReport: AuditSystemLogsReport | null;
+  /* Cross-correlated analyzer over `\Data Security\Logs\` service logs
+     (FPR/EndPointServer/PolicyEngine/mgmtd/HealthCheck/WorkScheduler/...). */
+  serviceLogsReport: ServiceLogsReport | null;
+  /* Star + dismiss state for log findings — keys are `${scope}:${id}`. */
+  starredLogIssues: Record<string, true>;
+  dismissedLogIssues: Record<string, true>;
   dlpPostureSummary: DlpPostureSummary | null;
   /* Per-block visibility map driving which posture cards make it into
      the report. Replaces the old `includeDlpPostureInReport` master
@@ -230,6 +244,11 @@ function deserializeSessions(raw: unknown[]): HCSession[] {
       licenseGaps: session.licenseGaps ?? [],
       endpointAgentSummary: session.endpointAgentSummary ?? null,
       dlpDashboardSummary: session.dlpDashboardSummary ?? null,
+      dlpAllLogReport: session.dlpAllLogReport ?? null,
+      auditLogReport: session.auditLogReport ?? null,
+      serviceLogsReport: session.serviceLogsReport ?? null,
+      starredLogIssues: session.starredLogIssues ?? {},
+      dismissedLogIssues: session.dismissedLogIssues ?? {},
       dlpPostureSummary: session.dlpPostureSummary ?? null,
       /* Merge with defaults so old sessions get the full block set; if the
          legacy `includeDlpPostureInReport` flag was false, leave the
@@ -288,6 +307,14 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
   const [licenseGaps, setLicenseGaps] = useLocalStorage<LicenseGapItem[]>('hc_license_gaps', []);
   const [endpointAgentSummary, setEndpointAgentSummary] = useLocalStorage<EndpointAgentSummary | null>('hc_endpoint_agents', null);
   const [dlpDashboardSummary, setDlpDashboardSummary] = useLocalStorage<DlpDashboardSummary | null>('hc_dlp_dashboard', null);
+  const [dlpAllLogReport, setDlpAllLogReport] = useLocalStorage<DlpAllLogReport | null>('hc_dlp_log_issues', null);
+  const [auditLogReport, setAuditLogReport] = useLocalStorage<AuditSystemLogsReport | null>('hc_audit_log_issues', null);
+  const [serviceLogsReport, setServiceLogsReport] = useLocalStorage<ServiceLogsReport | null>('hc_service_logs_report', null);
+  /* Star/dismiss tracking for log findings. Both are keyed by
+     `${scope}:${issueId}` so the same id survives a re-parse — the
+     parser emits stable bucket ids by design. */
+  const [starredLogIssues, setStarredLogIssues] = useLocalStorage<Record<string, true>>('hc_log_starred', {});
+  const [dismissedLogIssues, setDismissedLogIssues] = useLocalStorage<Record<string, true>>('hc_log_dismissed', {});
   const [dlpPostureSummary, setDlpPostureSummary] = useLocalStorage<DlpPostureSummary | null>('hc_dlp_posture', null);
   const [dlpPostureSections, setDlpPostureSections] = useLocalStorage<Record<DlpPostureBlockId, boolean>>('hc_dlp_posture_sections', { ...DEFAULT_POSTURE_SECTIONS });
   /* Destination patterns are GLOBAL (catalogue-style): the operator
@@ -419,6 +446,11 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
         licenseGaps: [...licenseGaps],
         endpointAgentSummary: endpointAgentSummary ? { ...endpointAgentSummary } : null,
         dlpDashboardSummary: dlpDashboardSummary ? { ...dlpDashboardSummary } : null,
+        dlpAllLogReport: dlpAllLogReport ? { ...dlpAllLogReport } : null,
+        auditLogReport: auditLogReport ? { ...auditLogReport } : null,
+        serviceLogsReport: serviceLogsReport ? { ...serviceLogsReport } : null,
+        starredLogIssues: { ...starredLogIssues },
+        dismissedLogIssues: { ...dismissedLogIssues },
         dlpPostureSummary: dlpPostureSummary ? { ...dlpPostureSummary } : null,
         dlpPostureSections: { ...dlpPostureSections },
         customerConnector: { ...customerConnector },
@@ -477,6 +509,11 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
     setLicenseGaps(session.licenseGaps ?? []);
     setEndpointAgentSummary(session.endpointAgentSummary ?? null);
     setDlpDashboardSummary(session.dlpDashboardSummary ?? null);
+    setDlpAllLogReport(session.dlpAllLogReport ?? null);
+    setAuditLogReport(session.auditLogReport ?? null);
+    setServiceLogsReport(session.serviceLogsReport ?? null);
+    setStarredLogIssues(session.starredLogIssues ?? {});
+    setDismissedLogIssues(session.dismissedLogIssues ?? {});
     setDlpPostureSummary(session.dlpPostureSummary ?? null);
     setDlpPostureSections(session.dlpPostureSections ?? { ...DEFAULT_POSTURE_SECTIONS });
     setCustomerConnector(session.customerConnector ?? { ...DEFAULT_CUSTOMER_CONNECTOR });
@@ -509,6 +546,11 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
     setLicenseGaps([]);
     setEndpointAgentSummary(null);
     setDlpDashboardSummary(null);
+    setDlpAllLogReport(null);
+    setAuditLogReport(null);
+    setServiceLogsReport(null);
+    setStarredLogIssues({});
+    setDismissedLogIssues({});
     setDlpPostureSummary(null);
     setDlpPostureSections({ ...DEFAULT_POSTURE_SECTIONS });
     setCustomerConnector({ ...DEFAULT_CUSTOMER_CONNECTOR });
@@ -544,6 +586,11 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
     setLicenseGaps([]);
     setEndpointAgentSummary(null);
     setDlpDashboardSummary(null);
+    setDlpAllLogReport(null);
+    setAuditLogReport(null);
+    setServiceLogsReport(null);
+    setStarredLogIssues({});
+    setDismissedLogIssues({});
     setDlpPostureSummary(null);
     setDlpPostureSections({ ...DEFAULT_POSTURE_SECTIONS });
     setCustomerConnector({ ...DEFAULT_CUSTOMER_CONNECTOR });
@@ -556,6 +603,39 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
     setActiveSessionId(undefined);
     setActiveView('sessions');
   };
+
+  /* Star-side-effect bridge: when the operator stars a log finding for
+     the first time, this hook spawns a matching Urgent Action item so
+     Step 9 already lists "fix this issue" without a manual add. We use
+     `linkedLogIssueKey` as a one-to-one bond so re-starring doesn't
+     create duplicates. Unstarring intentionally does NOT remove the
+     action — the operator may have edited/resolved it independently. */
+  const handleStarLogIssue = useCallback(
+    (key: string, issue: { title: string; recommendation: string; severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW'; component: string }) => {
+      setActionItems((prev) => {
+        if (prev.some((a) => a.linkedLogIssueKey === key)) return prev;
+        const priority: 'critical' | 'high' | 'medium' | 'low' =
+          issue.severity === 'CRITICAL' ? 'critical'
+          : issue.severity === 'HIGH'   ? 'high'
+          : issue.severity === 'MEDIUM' ? 'medium'
+          : 'low';
+        const newAction = {
+          id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          task: issue.title,
+          owner: '',
+          dueDate: '',
+          priority,
+          status: 'not_started' as const,
+          product: 'data',
+          details: issue.recommendation,
+          featured: priority === 'critical' || priority === 'high',
+          linkedLogIssueKey: key,
+        };
+        return [...prev, newAction];
+      });
+    },
+    [setActionItems],
+  );
 
   /* Rough "how much will be lost" count for the modal warning */
   const filledFieldCount = (() => {
@@ -656,6 +736,17 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
               setEndpointAgentSummary={setEndpointAgentSummary}
               dlpDashboardSummary={dlpDashboardSummary}
               setDlpDashboardSummary={setDlpDashboardSummary}
+              dlpAllLogReport={dlpAllLogReport}
+              setDlpAllLogReport={setDlpAllLogReport}
+              auditLogReport={auditLogReport}
+              setAuditLogReport={setAuditLogReport}
+              serviceLogsReport={serviceLogsReport}
+              setServiceLogsReport={setServiceLogsReport}
+              starredLogIssues={starredLogIssues}
+              setStarredLogIssues={setStarredLogIssues}
+              dismissedLogIssues={dismissedLogIssues}
+              setDismissedLogIssues={setDismissedLogIssues}
+              onStarLogIssue={handleStarLogIssue}
               dlpPostureSummary={dlpPostureSummary}
               setDlpPostureSummary={setDlpPostureSummary}
               dlpPostureSections={dlpPostureSections}
