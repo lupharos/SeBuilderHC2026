@@ -162,6 +162,55 @@ export function NavigationRail({ activeView, onChangeView, onOpenProfile, onStar
         </button>
         <Tooltip>Profile & Settings</Tooltip>
       </div>
+
+      {/* Build version chip — short SHA changes on every commit, so
+          SE can tell which code is live just by glancing at the rail.
+          Hover reveals full version + ISO build timestamp. The whole
+          chip is wrapped in `.group` so the Tooltip helper used above
+          can re-attach without bespoke styling. */}
+      <BuildVersionChip />
+    </div>
+  );
+}
+
+function BuildVersionChip() {
+  const info = __BUILD_INFO__;
+  /* Built-time defaults; defensive against `define` not running (eg.
+     in a Vitest run that bypasses the vite plugin). */
+  const commit = info?.commit ?? 'dev';
+  const version = info?.version ?? '0.0.0';
+  const builtAt = info?.builtAt ?? '';
+  let builtLocal = '';
+  try { builtLocal = new Date(builtAt).toLocaleString(); } catch { builtLocal = builtAt; }
+  return (
+    <div className="relative group mt-3">
+      <div
+        className="px-2 py-0.5 rounded font-mono text-center"
+        title={`v${version} · ${commit} · built ${builtLocal}`}
+        style={{
+          fontSize: '8.5px',
+          letterSpacing: '0.04em',
+          color: 'rgba(255,255,255,0.45)',
+          background: 'rgba(255,255,255,0.03)',
+          border: '1px solid rgba(255,255,255,0.06)',
+          minWidth: '46px',
+        }}
+      >
+        {commit}
+      </div>
+      <Tooltip>
+        <div style={{ lineHeight: 1.55 }}>
+          <strong style={{ color: '#fff' }}>Build {commit}</strong>
+          <br />
+          <span style={{ color: 'rgba(255,255,255,0.7)' }}>v{version}</span>
+          {builtLocal && (
+            <>
+              <br />
+              <span style={{ color: 'rgba(255,255,255,0.55)' }}>built {builtLocal}</span>
+            </>
+          )}
+        </div>
+      </Tooltip>
     </div>
   );
 }

@@ -1,8 +1,46 @@
 import { defineConfig } from 'vite'
 import path from 'path'
+import { execSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 
+/* Build-time metadata baked into the bundle.
+   ───────────────────────────────────────────────────────────────────
+   The wizard shows a tiny version chip in the nav rail so the SE can
+   tell at a glance which commit is deployed (handy when bug-reporting
+   from customer engagements). Three signals are exposed:
+     • commit  — git short SHA, the canonical "what code is live"
+     • builtAt — UTC ISO timestamp of the build
+     • version — package.json version, for human-readable major bumps
+   `git rev-parse` runs once at config time. If git isn't available
+   (e.g. building from a tarball without .git) we fall back to a
+   placeholder so the build doesn't fail. */
+function readBuildInfo() {
+  let commit = 'nogit'
+  try {
+    commit = execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString().trim() || 'nogit'
+  } catch { /* keep placeholder */ }
+  let dirty = false
+  try {
+    const status = execSync('git status --porcelain', { stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString().trim()
+    dirty = status.length > 0
+  } catch { /* keep clean */ }
+  let version = '0.0.0'
+  try {
+    const pkg = JSON.parse(readFileSync(path.resolve(__dirname, 'package.json'), 'utf8'))
+    if (typeof pkg.version === 'string') version = pkg.version
+  } catch { /* keep placeholder */ }
+  return {
+    commit: dirty ? `${commit}-dirty` : commit,
+    builtAt: new Date().toISOString(),
+    version,
+  }
+}
+
+const BUILD_INFO = readBuildInfo()
 
 function figmaAssetResolver() {
   return {
@@ -41,6 +79,14 @@ export default defineConfig({
       '/api':    { target: 'http://localhost:3001', changeOrigin: true },
       '/health': { target: 'http://localhost:3001', changeOrigin: true },
     },
+  },
+
+  /* Expose the build-time metadata to the bundle. JSON.stringify so the
+     value is inlined as a literal object — no runtime cost, no extra
+     module. Frontend reads it via the global `__BUILD_INFO__` (typed
+     in `src/app/types/build.d.ts`). */
+  define: {
+    __BUILD_INFO__: JSON.stringify(BUILD_INFO),
   },
 
   // File types to support raw imports. Never add .css, .tsx, or .ts files to this.

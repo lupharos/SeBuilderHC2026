@@ -838,11 +838,185 @@ def handle_dlp_fetch(params: dict, secrets: dict | None, insecure: bool) -> dict
     }
 
 
+_SQL_SECRET_KEY = {
+    "data":  "sql_Data",
+    "dlp":   "sql_Data",   # alias — wizard / report defs use 'dlp' for the same DB
+    "web":   "sql_Web",
+    "email": "sql_Email",
+}
+
+
+def _resolve_sql_cfg(secrets: dict | None, product: str) -> tuple[dict | None, str]:
+    """Map a wizard product token ('data' | 'dlp' | 'web' | 'email')
+    to the matching `sql_*` block in connector-secrets.json. Returns
+    (cfg, secrets_key). cfg is None when the customer hasn't filled
+    in that block."""
+    if not product or not isinstance(product, str):
+        return None, ""
+    key = _SQL_SECRET_KEY.get(product.lower())
+    if not key:
+        return None, ""
+    cfg = (secrets or {}).get(key) or None
+    return cfg, key
+
+
+def handle_sql_test(params: dict, secrets: dict | None, insecure: bool) -> dict:
+    """Run the SQL auth probe against a single product's SQL block.
+    Same shape as the companion's /api/sql/test response so the
+    wizard can render it through the existing ConnStatus handling.
+    Params: { product: 'data' | 'web' | 'email' }. Returns
+    { ok, message, latencyMs, server? } — `server` carries the
+    @@VERSION row and SQL Server metadata when ok=true."""
+    del insecure  # SQL TLS is governed by trustServerCertificate, not the global insecure flag
+    product = (params or {}).get("product") or "data"
+    cfg, key = _resolve_sql_cfg(secrets, product)
+    if not cfg:
+        return {
+            "ok": False,
+            "message": f"Connector has no {key or 'sql'} block in connector-secrets.json for product '{product}'.",
+            "latencyMs": 0,
+        }
+    result = selftest_sql(cfg)
+    if result is None:
+        return {"ok": False, "message": f"{key} block present but empty", "latencyMs": 0}
+    status, message, latency = result
+    payload: dict = {
+        "ok": status == "ok",
+        "message": message,
+        "latencyMs": latency,
+    }
+    if status == "ok":
+        # Strip the noisy SQL Server banner from `message` — the wizard
+        # only needs to display a "Connected" pill, not the full
+        # @@VERSION. Keep enough metadata for the SQL Server info row
+        # that the direct-mode handler returns.
+        payload["server"] = {
+            "host":             cfg.get("server", ""),
+            "port":             cfg.get("port", 1433),
+            "database":         cfg.get("database", ""),
+            "secretKey":        key,
+            "versionBanner":    message,  # client decides what to show
+        }
+    return payload
+
+
+def handle_sql_query(params: dict, secrets: dict | None, insecure: bool) -> dict:
+    """Run a SQL query passed in by the companion. The companion
+    resolved DLP_QUERIES[sqlKey] into a final SQL string + chose the
+    product — the connector just needs to open a connection to the
+    right secret-block DB and execute. Params:
+        { product: 'data'|'web'|'email', sql: '<resolved SQL>', sqlKey?: '...' }
+    Returns { ok, rows, rowCount, latencyMs } or { ok: false, error }.
+    Rows are converted to a list of dicts keyed by column name so the
+    companion's existing aggregator can consume the payload unchanged."""
+    del insecure
+    product = (params or {}).get("product") or "data"
+    sql_text = ((params or {}).get("sql") or "").strip()
+    if not sql_text:
+        return {"ok": False, "error": "params.sql is empty"}
+    cfg, key = _resolve_sql_cfg(secrets, product)
+    if not cfg:
+        return {"ok": False, "error": f"Connector has no {key or 'sql'} block for product '{product}'."}
+
+    host = (cfg.get("server") or "").strip()
+    port = int(cfg.get("port") or 1433)
+    db   = (cfg.get("database") or "").strip()
+    auth_mode = (cfg.get("authMode") or "sql").lower()
+    trust_cert = "yes" if cfg.get("trustServerCertificate", True) else "no"
+    if not host:
+        return {"ok": False, "error": f"{key}.server is empty"}
+
+    try:
+        import pyodbc  # type: ignore
+    except ImportError:
+        return {"ok": False, "error": "pyodbc not bundled into this connector .exe"}
+
+    drivers = [d for d in pyodbc.drivers() if "SQL Server" in d]
+    if not drivers:
+        return {"ok": False, "error": "no SQL Server ODBC driver detected on this host"}
+    driver = sorted(drivers, reverse=True)[0]
+
+    if auth_mode == "windows":
+        conn_str = (
+            f"DRIVER={{{driver}}};"
+            f"SERVER={host},{port};"
+            f"DATABASE={db};"
+            f"Trusted_Connection=yes;"
+            f"TrustServerCertificate={trust_cert};"
+        )
+    else:
+        user = cfg.get("username", "")
+        pw   = cfg.get("password", "")
+        if not user or not pw:
+            return {"ok": False, "error": f"{key}.authMode=sql but username/password empty"}
+        conn_str = (
+            f"DRIVER={{{driver}}};"
+            f"SERVER={host},{port};"
+            f"DATABASE={db};"
+            f"UID={user};PWD={pw};"
+            f"TrustServerCertificate={trust_cert};"
+        )
+
+    started = time.time()
+    try:
+        # Generous connect timeout — DLP reports against busy FSMs
+        # occasionally take >30s; pyodbc's `timeout` is connect-only,
+        # the query itself has no library-level cap.
+        conn = pyodbc.connect(conn_str, timeout=15)
+        try:
+            cur = conn.cursor()
+            cur.execute(sql_text)
+            # Some templates use EXEC sp_executesql + dynamic SELECT —
+            # pyodbc fetches whichever resultset arrived first via
+            # nextset() walking. We grab the first one with rows.
+            rows: list[dict] = []
+            columns: list[str] = []
+            while True:
+                if cur.description is not None:
+                    columns = [c[0] for c in cur.description]
+                    for r in cur.fetchall():
+                        # pyodbc Row → dict. Coerce non-JSON types
+                        # (datetime, Decimal, bytes) to strings so the
+                        # AES envelope can serialize them.
+                        row_dict: dict = {}
+                        for i, col in enumerate(columns):
+                            v = r[i]
+                            try:
+                                json.dumps(v)
+                                row_dict[col] = v
+                            except (TypeError, ValueError):
+                                row_dict[col] = str(v)
+                        rows.append(row_dict)
+                    break
+                if not cur.nextset():
+                    break
+        finally:
+            try: conn.close()
+            except Exception: pass
+        latency = int((time.time() - started) * 1000)
+        return {
+            "ok": True,
+            "rows": rows,
+            "rowCount": len(rows),
+            "columns": columns,
+            "latencyMs": latency,
+        }
+    except Exception as e:  # noqa: BLE001 — surface every error verbatim
+        latency = int((time.time() - started) * 1000)
+        return {
+            "ok": False,
+            "error": f"{type(e).__name__}: {e}",
+            "latencyMs": latency,
+        }
+
+
 # Job-handler dispatch table. Add entries here when new kinds are
 # introduced — keeps the poller loop body trivial.
 _JOB_HANDLERS = {
     "dlp.test":  handle_dlp_test,
     "dlp.fetch": handle_dlp_fetch,
+    "sql.test":  handle_sql_test,
+    "sql.query": handle_sql_query,
 }
 
 

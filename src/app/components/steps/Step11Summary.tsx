@@ -775,7 +775,7 @@ function buildReportHTML(p: {
   
     return `
   <div class="section">
-    <div class="section-eyebrow">Section 13 · Part II · Posture Telemetry</div>
+    <div class="section-eyebrow">${isExec ? 'Section 3 · Part 2 · Posture Telemetry' : 'Section 13 · Part II · Posture Telemetry'}</div>
     <div class="section-title">Information Security Posture Dashboard</div>
     <p class="section-lead">
       Live posture snapshot pulled from the customer's Forcepoint DLP REST API over the last
@@ -1954,7 +1954,7 @@ tr:last-child td{border-bottom:none;}
 ══════════════════════════════════════ -->
 <!--VARIANT:EXEC_ONLY:START-->
 <div class="chapter">
-  <div class="chapter-part">PART 0</div>
+  <div class="chapter-part">PART 1</div>
   <div class="chapter-title">Executive Briefing</div>
   <div class="chapter-sub">A decision-ready three-page brief for the CISO and security leadership — the risk posture at a glance, the top critical risks framed in business terms, and the compliance exposure created by today's deployment.</div>
 </div>
@@ -1965,7 +1965,7 @@ tr:last-child td{border-bottom:none;}
      PART 0 · 01 RISK POSTURE & FINDING BREAKDOWN
 ══════════════════════════════════════ -->
 <div class="section">
-  <div class="section-eyebrow">Part 0 · Risk Posture</div>
+  <div class="section-eyebrow">Section 1 · Part 1 · Risk Posture</div>
   <div class="section-title">Risk Posture &amp; CISO Dashboard</div>
 
   <div class="brief-intro">
@@ -2369,7 +2369,7 @@ tr:last-child td{border-bottom:none;}
      PART 0 · 03 COMPLIANCE EXPOSURE
 ══════════════════════════════════════ -->
 <div class="section">
-  <div class="section-eyebrow">Part 0 · Compliance Lens</div>
+  <div class="section-eyebrow">Section 2 · Part 1 · Compliance Lens</div>
   <div class="section-title">Compliance Exposure</div>
   <p class="section-lead">
     The compliance frameworks below are relevant to this customer based on jurisdiction and industry. The findings in this report — particularly End-of-Support components, expired certificates, and DLP enforcement gaps — create direct audit and reporting exposure under each framework listed.
@@ -2411,7 +2411,14 @@ tr:last-child td{border-bottom:none;}
 
 <!-- ══════════════════════════════════════
      PART I — EXECUTIVE OVERVIEW
+     Tech-only — chapter header + customer profile tables + board
+     briefing duplicate. The Executive Risk Briefing skips Part I
+     entirely; CISO already has the verdict in Part 0 and customer
+     identification on the cover page, so the back-of-the-book
+     narrative + license tables + duplicate verdict don't earn page
+     space at executive scale.
 ══════════════════════════════════════ -->
+<!--VARIANT:TECH_ONLY:START-->
 <div class="chapter">
   <div class="chapter-part">PART I</div>
   <div class="chapter-title">Executive Overview</div>
@@ -2527,7 +2534,7 @@ ${(() => {
   </table>
   ` : ''}
 
-  ${hasLicenses ? `
+  ${hasLicenses && !isExec ? `
   <div class="subsection-title">License Gap Analysis (${sd.licenses!.length})</div>
   <table style="margin-bottom:18px;">
     <thead>
@@ -2556,7 +2563,7 @@ ${(() => {
     </tbody>
   </table>` : ''}
 
-  ${hasEntitlements ? `
+  ${hasEntitlements && !isExec ? `
   <div class="subsection-title">Support Entitlements (${sd.entitlements!.length})</div>
   <table style="margin-bottom:18px;">
     <thead>
@@ -2579,7 +2586,7 @@ ${(() => {
     </tbody>
   </table>` : ''}
 
-  ${hasHardware ? `
+  ${hasHardware && !isExec ? `
   <div class="subsection-title">Customer Hardware Inventory (${sd.hardware!.length})</div>
   <table style="margin-bottom:18px;">
     <thead>
@@ -2648,7 +2655,7 @@ ${(() => {
     </tbody>
   </table>` : ''}
 
-  ${hasCases ? `
+  ${hasCases && !isExec ? `
   <div class="subsection-title">Recent Customer Support Cases (${sd.cases!.length})</div>
   <table style="margin-bottom:18px;">
     <thead>
@@ -2678,7 +2685,7 @@ ${(() => {
     </tbody>
   </table>` : ''}
 
-  ${hasCustFR ? `
+  ${hasCustFR && !isExec ? `
   <div class="subsection-title">Customer Feature Requests (${sd.featureRequests!.length})</div>
   <table>
     <thead>
@@ -3316,6 +3323,8 @@ ${(() => {
 </div>
 
 </div><!-- /content (Part I closes here) -->
+<!--VARIANT:TECH_ONLY:END-->
+<!-- end of Part I (tech-only) -->
 
 <!-- ══════════════════════════════════════
      PART II — TECHNICAL ASSESSMENT
@@ -3325,24 +3334,25 @@ ${(() => {
 ══════════════════════════════════════ -->
 
 <!-- ══════════════════════════════════════
-     PART II (executive variant) — Posture Telemetry only
-     The full technical Part II is wrapped in TECH_ONLY below and
-     stripped from the Executive Risk Briefing. We still want the
-     CISO-grade DLP posture dashboard, so an EXEC_ONLY mini-chapter
-     here surfaces just that section using the shared postureSection
-     const (so changes to the section template propagate to both
-     variants automatically).
+     PART 2 — SECURITY POSTURE  (executive variant)
+     Smooth Part 1 → Part 2 → Part 3 numbering for the briefing,
+     and Section 13 (Posture Telemetry) under its own chapter so
+     it doesn't look orphaned between Executive Briefing (Part 1)
+     and Roadmap (Part 3). Shared postureSection const renders the
+     dashboard; the eyebrow inside the const flips to "Section 3 ·
+     Part 2 ·..." in executive mode (see exec-aware section eyebrow
+     in the postureSection block).
 ══════════════════════════════════════ -->
 <!--VARIANT:EXEC_ONLY:START-->
 <div class="chapter">
-  <div class="chapter-part">PART II</div>
+  <div class="chapter-part">PART 2</div>
   <div class="chapter-title">Security Posture</div>
   <div class="chapter-sub">Live DLP telemetry pulled from the customer's Forcepoint REST API — categorical rollups only, no individual user names cross this boundary.</div>
 </div>
 
 <div class="content">
 ${postureSection}
-</div><!-- /content (executive Part II closes here) -->
+</div><!-- /content (executive Posture Telemetry closes here) -->
 <!--VARIANT:EXEC_ONLY:END-->
 
 <!--VARIANT:TECH_ONLY:START-->
@@ -4599,7 +4609,7 @@ ${p.certificates.length > 0 ? `
      "Part III" label flips to "Part 2" for the Executive Risk Briefing.
 ══════════════════════════════════════ -->
 <div class="chapter">
-  <div class="chapter-part">${isExec ? 'PART 2' : 'PART III'}</div>
+  <div class="chapter-part">${isExec ? 'PART 3' : 'PART III'}</div>
   <div class="chapter-title">Roadmap &amp; Strategy</div>
   <div class="chapter-sub">${isExec
     ? `Decision points for security leadership — the additional Forcepoint entitlement coverage that closes today's licensing gaps, and the enhancement initiatives that strengthen the customer's overall security posture.`
@@ -4976,7 +4986,7 @@ ${(() => {
   const sorted = [...gaps].sort((a, b) => (PRIO[a.priority ?? 'medium'] ?? 9) - (PRIO[b.priority ?? 'medium'] ?? 9));
   return `
 <div class="section">
-  <div class="section-eyebrow">Section 17 · Part III · Licensing Roadmap</div>
+  <div class="section-eyebrow">${isExec ? 'Section 4 · Part 3 · Licensing Roadmap' : 'Section 17 · Part III · Licensing Roadmap'}</div>
   <div class="section-title">Recommended License Extension <span style="font-weight:400;color:var(--fp-ink-faint);font-size:14px;letter-spacing:0;">(${gaps.length})</span></div>
   <p class="section-lead">
     Products where Forcepoint recommends the customer expand their entitlement count, based on the deployment scope, headcount growth, and operational coverage observed in this assessment. Each line below proposes the additional licenses needed per product — quantities are not aggregated, as each product carries its own licensing unit.
@@ -5019,7 +5029,7 @@ ${(() => {
 ══════════════════════════════════════ -->
 ${p.selectedEnhancements.length > 0 ? `
 <div class="section">
-  <div class="section-eyebrow">Section 18 · Part III · Strategic Initiatives</div>
+  <div class="section-eyebrow">${isExec ? 'Section 5 · Part 3 · Strategic Initiatives' : 'Section 18 · Part III · Strategic Initiatives'}</div>
   <div class="section-title">Recommended Enhancements</div>
   <p style="margin-bottom:18px;color:#475569;line-height:1.7;font-size:11px;">
     The following Forcepoint product enhancements are proposed as next-step initiatives to strengthen the customer's overall security posture. Each recommendation is selected based on the health check findings, current scope, and identified gaps. The business value commentary below should be reviewed jointly with the customer's security and compliance stakeholders.

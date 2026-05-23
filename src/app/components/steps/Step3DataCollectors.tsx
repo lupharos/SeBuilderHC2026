@@ -30,9 +30,22 @@ export interface SqlConfig {
   authType: 'windows' | 'sql';
   username: string;
   password: string;
+  /* Same transport semantics as ApiConnectorConfig.transport:
+       direct        — companion's mssql client dials the customer SQL Server.
+                       Requires line-of-sight from the deploy host to FSM:1433.
+                       Fields above (server/port/database/authType/username/
+                       password) must be filled in.
+       via-connector — companion enqueues `sql.test` / `sql.query` jobs
+                       on the connector's outbound HTTPS channel. The
+                       connector reads sql_Data / sql_Web / sql_Email
+                       out of connector-secrets.json and runs the query
+                       inside the customer network. Server/port/auth
+                       fields are ignored on that path.
+     Legacy sessions without this field default to 'direct'. */
+  transport?: ApiTransport;
 }
 export const DEFAULT_SQL_CONFIG: SqlConfig = {
-  enabled: false, server: '', port: 1433, database: '', authType: 'windows', username: '', password: '',
+  enabled: false, server: '', port: 1433, database: '', authType: 'windows', username: '', password: '', transport: 'direct',
 };
 
 // ── REST API connectors ──────────────────────────────────────────────────────
@@ -1688,8 +1701,51 @@ export function Step3DataCollectors({
     setApiConnectors(prev => ({ ...prev, [key]: { ...prev[key], ...p } }));
 
   const testSql = async () => {
-    if (!sqlConfig.server.trim()) return;
+    const transport = sqlConfig.transport ?? 'direct';
+    /* Direct mode still requires a host before we can dial anything;
+       Via-Connector mode has nothing to dial from the wizard side
+       (the connector owns the credentials), so we just need the
+       connector itself to be online + registered. */
+    if (transport === 'direct' && !sqlConfig.server.trim()) return;
     setSqlStatus({ state: 'testing' });
+    if (transport === 'via-connector') {
+      /* Probe target: pick the first in-scope product so the operator
+         sees a single representative result. DLP-only deployments
+         test sql_Data; web-only test sql_Web; mixed scopes default
+         to DLP since the wizard's reports skew DLP-heavy. The
+         CONNECTOR-SIDE SELFTEST panel up in the Customer Connector
+         card carries the full per-DB pass/fail anyway. */
+      const probeProduct =
+        selectedProducts.data ? 'data'
+        : selectedProducts.web  ? 'web'
+        : selectedProducts.email ? 'email'
+        : 'data';
+      try {
+        const res = await fetch('/api/sql/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ transport, connectorToken: customerConnector.token, product: probeProduct }),
+          signal: AbortSignal.timeout(35_000),
+        });
+        type SqlTestOk    = { ok: boolean; message?: string; server?: SqlServerInfo; latencyMs?: number };
+        type SqlTestError = { ok: false; message?: string };
+        if (res.ok) {
+          const d = await res.json() as SqlTestOk;
+          setSqlStatus({
+            state: 'ok',
+            message: d.message || `SQL · ${probeProduct.toUpperCase()} authenticated via connector`,
+            server: d.server ? { ...d.server, latencyMs: d.latencyMs } : undefined,
+          });
+        } else {
+          const e = await res.json() as SqlTestError;
+          setSqlStatus({ state: 'error', message: e.message || `Server error (${res.status})` });
+        }
+      } catch (e) {
+        const timeout = e instanceof Error && e.name === 'TimeoutError';
+        setSqlStatus({ state: 'error', message: timeout ? 'Via-Connector SQL test timed out' : 'Via-Connector SQL test failed' });
+      }
+      return;
+    }
     setSqlStatus(await runTest('/api/sql/test', sqlConfig));
   };
 
@@ -1780,18 +1836,51 @@ export function Step3DataCollectors({
     return sqlKey;
   };
 
+  /* Look up the report's product (web / dlp / email) so the
+     companion's via-connector branch can route to the matching
+     sql_* secrets block on the customer host. Falls back to 'data'
+     for unknown sqlKeys — same default the companion uses. */
+  const reportProductBySqlKey = (sqlKey: string): 'web' | 'data' | 'email' => {
+    for (const grp of REPORT_GROUPS) {
+      const r = grp.reports.find((rr) => rr.sqlKey === sqlKey);
+      if (r) {
+        if (r.product === 'web')   return 'web';
+        if (r.product === 'email') return 'email';
+        return 'data';
+      }
+    }
+    return 'data';
+  };
+
   /* Fire a single report against the companion SQL service. Pure runtime:
      results land in reportRuns and disappear on refresh. `topN` is optional
-     and forwarded to the server for a TOP N clause; undefined = no cap. */
+     and forwarded to the server for a TOP N clause; undefined = no cap.
+
+     Transport branch: when sqlConfig.transport === 'via-connector',
+     we tell the companion to route through the Customer Connector by
+     adding { transport, connectorToken, product }. The companion
+     looks up DLP_QUERIES[sqlKey], resolves the SQL string, then
+     enqueues a sql.query job on the connector. The connector picks
+     the matching sql_<product> block from connector-secrets.json,
+     runs pyodbc locally, and returns the rows encrypted. None of
+     the customer credentials touch the wizard host. */
   const runReport = async (sqlKey: string, windowDays: number, topN?: number) => {
     const id = reportIdBySqlKey(sqlKey);
     setReportRuns((prev) => ({ ...prev, [id]: { state: 'running', windowDays } }));
     try {
+      const transport = sqlConfig.transport ?? 'direct';
+      const bodyExtras = transport === 'via-connector'
+        ? { transport, connectorToken: customerConnector.token, product: reportProductBySqlKey(sqlKey) }
+        : { transport: 'direct' as const };
       const res = await fetch('/api/sql/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...sqlConfig, sqlKey, windowDays, topN }),
-        signal: AbortSignal.timeout(45000),
+        body: JSON.stringify({ ...sqlConfig, ...bodyExtras, sqlKey, windowDays, topN }),
+        /* Via-Connector jobs can take up to 90s on the connector side
+           (the /incidents-equivalent SQL query is the worst case),
+           plus enqueue/poll round-trip. Direct mode keeps the original
+           45s cap since companion+SQL are local network. */
+        signal: AbortSignal.timeout(transport === 'via-connector' ? 110_000 : 45_000),
       });
       type QueryOk = { ok: true; rows: Array<Record<string, unknown>>; rowCount: number; latencyMs: number; windowDays: number };
       type QueryErr = { ok: false; message?: string; latencyMs?: number };
@@ -2663,6 +2752,113 @@ export function Step3DataCollectors({
         </div>
 
         {sqlConfig.enabled && isCardOpen('sql_server') && <div className="p-[16px_22px] space-y-4">
+          {/* Transport mode picker — same semantics as the DLP REST
+              API card. Direct = companion dials customer SQL Server
+              itself; Via Connector = enqueue sql.test/sql.query jobs
+              for the customer Connector .exe to execute locally.
+              In via-connector mode the customer's connector-secrets.json
+              holds the per-product sql blocks (sql_Data / sql_Web /
+              sql_Email), so the wizard hides the server/port/auth/creds
+              fields below. */}
+          {(() => {
+            const transport: ApiTransport = sqlConfig.transport ?? 'direct';
+            const connEnabled = customerConnector.enabled && !!customerConnector.token;
+            const connOnline  = !!connectorStatus?.online;
+            return (
+              <div>
+                <label style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.04em', display: 'block', marginBottom: '8px' }}>
+                  TRANSPORT
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {([
+                    { id: 'direct'        as const, title: 'Direct',        sub: 'HC server contacts the customer SQL Server (needs host + creds here)' },
+                    { id: 'via-connector' as const, title: 'Via Connector', sub: 'Customer Connector runs the queries (uses sql_Data / sql_Web / sql_Email from connector-secrets.json)' },
+                  ]).map((opt) => {
+                    const active = transport === opt.id;
+                    return (
+                      <button key={opt.id} type="button"
+                        onClick={() => updSql({ transport: opt.id })}
+                        className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-all text-left"
+                        style={{
+                          background: active ? 'rgba(37,99,235,0.06)' : '#F8FAFC',
+                          border: active ? '2px solid rgba(37,99,235,0.35)' : '1.5px solid #E2E8F0',
+                          cursor: 'pointer',
+                        }}>
+                        <div className="w-4 h-4 rounded-full flex-shrink-0 flex items-center justify-center"
+                          style={{ border: `2px solid ${active ? '#2563EB' : '#CBD5E1'}`, background: active ? '#2563EB' : 'transparent' }}>
+                          {active && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                        </div>
+                        <div>
+                          <div style={{ fontSize: '12px', fontWeight: 600, color: active ? '#2563EB' : '#334155' }}>
+                            {opt.title}
+                          </div>
+                          <div style={{ fontSize: '10px', color: '#94A3B8' }}>
+                            {opt.sub}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Connector liveness rails — same three states as the
+                    DLP REST API card. Don't auto-fall-back; force the
+                    operator to fix the connector before queries fire. */}
+                {transport === 'via-connector' && !connEnabled && (
+                  <div className="mt-2 flex items-start gap-2 px-3 py-2 rounded-lg"
+                    style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
+                    <XCircle size={13} style={{ color: '#B45309', flexShrink: 0, marginTop: 1 }} />
+                    <span style={{ fontSize: '11px', color: '#92400E', lineHeight: 1.5 }}>
+                      <strong>Customer Connector is OFF.</strong>{' '}
+                      Enable the Customer Connector card above and complete the token / encryption-key setup; Via-Connector mode can't route SQL queries until the connector is registered.
+                    </span>
+                  </div>
+                )}
+                {transport === 'via-connector' && connEnabled && !connOnline && (
+                  <div className="mt-2 flex items-start gap-2 px-3 py-2 rounded-lg"
+                    style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}>
+                    <XCircle size={13} style={{ color: '#DC2626', flexShrink: 0, marginTop: 1 }} />
+                    <span style={{ fontSize: '11px', color: '#991B1B', lineHeight: 1.5 }}>
+                      <strong>Connector OFFLINE.</strong>{' '}
+                      Connector .exe isn't phoning home; Via-Connector SQL will fail until the Customer Connector status pill turns <span style={{ color: '#16A34A', fontWeight: 700 }}>ONLINE</span>.
+                    </span>
+                  </div>
+                )}
+                {transport === 'via-connector' && connEnabled && connOnline && (
+                  <div className="mt-2 flex items-start gap-2 px-3 py-2 rounded-lg"
+                    style={{ background: '#F0FDF4', border: '1px solid #BBF7D0' }}>
+                    <CheckCircle2 size={13} style={{ color: '#16A34A', flexShrink: 0, marginTop: 1 }} />
+                    <span style={{ fontSize: '11px', color: '#15803D', lineHeight: 1.5 }}>
+                      <strong>Routing SQL through connector.</strong>{' '}
+                      Each report's <code>product</code> picks the matching block on the customer host
+                      (DLP → <span style={{ fontFamily: 'monospace' }}>sql_Data</span>,
+                      {' '}Web → <span style={{ fontFamily: 'monospace' }}>sql_Web</span>,
+                      {' '}Email → <span style={{ fontFamily: 'monospace' }}>sql_Email</span>).
+                      Live per-DB pass/fail is visible in the SELFTEST panel inside the Customer Connector card above.
+                    </span>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          {(sqlConfig.transport ?? 'direct') === 'via-connector' ? (
+            <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg"
+              style={{ background: '#F0FDFA', border: '1px solid #99F6E4' }}>
+              <Database size={14} style={{ color: '#0D9488', flexShrink: 0, marginTop: 1 }} />
+              <div style={{ fontSize: '11px', color: '#0F766E', lineHeight: 1.55 }}>
+                <strong>SQL credentials live on the customer host.</strong>{' '}
+                The Customer Connector reads its three per-product SQL blocks (<span style={{ fontFamily: 'monospace' }}>sql_Data</span>,
+                {' '}<span style={{ fontFamily: 'monospace' }}>sql_Web</span>,
+                {' '}<span style={{ fontFamily: 'monospace' }}>sql_Email</span>)
+                from <span style={{ fontFamily: 'monospace' }}>connector-secrets.json</span>.
+                Nothing to enter here — when you click <strong>Run</strong> on a report below, the wizard sends the resolved
+                SQL + the report's product code to the connector, which opens its local pyodbc connection
+                with the matching credentials and returns the rows.
+              </div>
+            </div>
+          ) : (
+          <>
           {/* Server + Port */}
           <div className="grid grid-cols-[1fr_100px] gap-3">
             <div>
@@ -2758,39 +2954,6 @@ export function Step3DataCollectors({
             </div>
           )}
 
-          {/* Test */}
-          <div className="flex items-center gap-3">
-            <button onClick={testSql}
-              disabled={!sqlConfig.server.trim() || sqlStatus.state === 'testing'}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold transition-all"
-              style={{
-                fontSize: '12.5px',
-                background: !sqlConfig.server.trim() || sqlStatus.state === 'testing'
-                  ? '#F1F5F9' : 'linear-gradient(135deg,#2563EB,#1D4ED8)',
-                color: !sqlConfig.server.trim() || sqlStatus.state === 'testing' ? '#94A3B8' : '#fff',
-                cursor: !sqlConfig.server.trim() || sqlStatus.state === 'testing' ? 'not-allowed' : 'pointer',
-                boxShadow: sqlConfig.server.trim() && sqlStatus.state !== 'testing' ? '0 4px 14px rgba(37,99,235,0.35)' : 'none',
-                border: '1.5px solid transparent',
-              }}>
-              {sqlStatus.state === 'testing'
-                ? <><Loader size={13} className="animate-spin" /> Testing…</>
-                : <><Database size={13} /> Test Connection</>}
-            </button>
-            {sqlStatus.state !== 'idle' && sqlStatus.state !== 'testing' && (
-              <div className="flex items-center gap-1.5">
-                {sqlStatus.state === 'ok'
-                  ? <CheckCircle2 size={14} style={{ color: '#16A34A' }} />
-                  : <XCircle     size={14} style={{ color: '#DC2626' }} />}
-                <span style={{ fontSize: '11.5px', fontWeight: 500, color: sqlStatus.state === 'ok' ? '#16A34A' : '#DC2626' }}>
-                  {sqlStatus.message}
-                </span>
-              </div>
-            )}
-            {sqlStatus.state === 'idle' && !sqlConfig.server.trim() && (
-              <span style={{ fontSize: '11px', color: '#94A3B8' }}>Enter server address to test</span>
-            )}
-          </div>
-
           {/* Detected server identity — appears only on a successful test.
               Runtime-only: SQL details are never persisted to localStorage. */}
           {sqlStatus.state === 'ok' && sqlStatus.server && (
@@ -2829,6 +2992,60 @@ export function Step3DataCollectors({
               </div>
             </div>
           )}
+          </>
+          )}
+
+          {/* Test Connection — shared button, transport-aware gating.
+                direct        — disabled until SERVER / HOST is filled.
+                via-connector — disabled until the Customer Connector
+                                is registered + ONLINE; clicking fires
+                                a sql.test job for the first in-scope
+                                product so the operator sees one
+                                representative pass/fail in the SQL
+                                card itself (the SELFTEST panel above
+                                still shows all three per-DB results). */}
+          {(() => {
+            const transport = sqlConfig.transport ?? 'direct';
+            const isVia = transport === 'via-connector';
+            const connReady = customerConnector.enabled && !!customerConnector.token && !!connectorStatus?.online;
+            const blocker = isVia ? !connReady : !sqlConfig.server.trim();
+            const disabled = blocker || sqlStatus.state === 'testing';
+            return (
+              <div className="flex items-center gap-3">
+                <button onClick={testSql}
+                  disabled={disabled}
+                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold transition-all"
+                  style={{
+                    fontSize: '12.5px',
+                    background: disabled ? '#F1F5F9' : 'linear-gradient(135deg,#2563EB,#1D4ED8)',
+                    color:      disabled ? '#94A3B8' : '#fff',
+                    cursor:     disabled ? 'not-allowed' : 'pointer',
+                    boxShadow:  !disabled ? '0 4px 14px rgba(37,99,235,0.35)' : 'none',
+                    border: '1.5px solid transparent',
+                  }}>
+                  {sqlStatus.state === 'testing'
+                    ? <><Loader size={13} className="animate-spin" /> Testing…</>
+                    : <><Database size={13} /> Test Connection</>}
+                </button>
+                {sqlStatus.state !== 'idle' && sqlStatus.state !== 'testing' && (
+                  <div className="flex items-center gap-1.5">
+                    {sqlStatus.state === 'ok'
+                      ? <CheckCircle2 size={14} style={{ color: '#16A34A' }} />
+                      : <XCircle     size={14} style={{ color: '#DC2626' }} />}
+                    <span style={{ fontSize: '11.5px', fontWeight: 500, color: sqlStatus.state === 'ok' ? '#16A34A' : '#DC2626' }}>
+                      {sqlStatus.message}
+                    </span>
+                  </div>
+                )}
+                {sqlStatus.state === 'idle' && !isVia && !sqlConfig.server.trim() && (
+                  <span style={{ fontSize: '11px', color: '#94A3B8' }}>Enter server address to test</span>
+                )}
+                {sqlStatus.state === 'idle' && isVia && !connReady && (
+                  <span style={{ fontSize: '11px', color: '#94A3B8' }}>Waiting for Customer Connector to come ONLINE…</span>
+                )}
+              </div>
+            );
+          })()}
         </div>}
       </div>
       )}

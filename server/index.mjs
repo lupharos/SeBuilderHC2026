@@ -106,6 +106,43 @@ function sanitizeError(err) {
 ───────────────────────────────────────────────────────────────── */
 app.post('/api/sql/test', async (req, res) => {
   const started = Date.now();
+  const body = req.body ?? {};
+  const { transport, connectorToken, product } = body;
+
+  /* Via-Connector branch — connector executes the auth probe locally
+     against the per-product `sql_*` block in its connector-secrets.json.
+     Same body shape as direct mode plus { transport, connectorToken,
+     product } — wizard sends the report's product so the connector
+     picks the right secrets block. */
+  if (transport === 'via-connector') {
+    if (!connectorToken || typeof connectorToken !== 'string') {
+      return res.status(400).json({ ok: false, message: 'Via-Connector SQL test requires connectorToken in body.' });
+    }
+    if (!connectorAllowlist.has(connectorToken)) {
+      return res.status(404).json({ ok: false, message: 'Connector token not registered with companion.' });
+    }
+    if (!connectorKeys.has(connectorToken)) {
+      return res.status(412).json({ ok: false, message: 'Companion has no encryption key for this token — wizard must /register first.' });
+    }
+    if (!isConnectorOnline(connectorToken)) {
+      return res.status(503).json({ ok: false, message: 'Connector for this token is OFFLINE.' });
+    }
+    const jobId = enqueueJobInProcess(connectorToken, 'sql.test', { product: product || 'data' });
+    const done = await awaitJobInProcess(jobId, 30_000);
+    const ms = Date.now() - started;
+    if (!done.ok) return res.status(400).json({ ok: false, message: done.error, latencyMs: ms });
+    const p = done.payload || {};
+    if (p.ok) {
+      return res.json({
+        ok: true,
+        message: `Connected via connector · ${p.message || ''}`,
+        server: p.server || {},
+        latencyMs: ms,
+      });
+    }
+    return res.status(400).json({ ok: false, message: p.message || 'Connector reported SQL test failure.', latencyMs: ms });
+  }
+
   let pool = null;
   try {
     const cfg = buildSqlConfig(req.body);
@@ -187,7 +224,7 @@ const DLP_DATABASE = 'wbsn-data-security';
 
 app.post('/api/sql/query', async (req, res) => {
   const started = Date.now();
-  const { sqlKey, windowDays, topN, ...connBody } = req.body ?? {};
+  const { sqlKey, windowDays, topN, transport, connectorToken, product, ...connBody } = req.body ?? {};
   if (!sqlKey || typeof sqlKey !== 'string') {
     return res.status(400).json({ ok: false, message: 'Missing "sqlKey" in request body.' });
   }
@@ -211,6 +248,69 @@ app.post('/api/sql/query', async (req, res) => {
     if (!Number.isFinite(n) || n <= 0) return undefined;
     return Math.min(n, 10000);
   })();
+
+  /* Via-Connector branch — companion resolves the SQL template here
+     (keeps the catalogue server-side and the queries the same as
+     direct mode), then hands the final SQL string + product code to
+     the connector. The connector reads its own connector-secrets.json
+     (sql_Data / sql_Web / sql_Email per product) and runs the query
+     against the customer-local SQL Server. No customer credentials
+     ever leave the customer host. */
+  if (transport === 'via-connector') {
+    if (!connectorToken || typeof connectorToken !== 'string') {
+      return res.status(400).json({ ok: false, message: 'Via-Connector SQL query requires connectorToken in body.' });
+    }
+    if (!connectorAllowlist.has(connectorToken)) {
+      return res.status(404).json({ ok: false, message: 'Connector token not registered with companion.' });
+    }
+    if (!connectorKeys.has(connectorToken)) {
+      return res.status(412).json({ ok: false, message: 'Companion has no encryption key for this token — wizard must /register first.' });
+    }
+    if (!isConnectorOnline(connectorToken)) {
+      return res.status(503).json({ ok: false, message: 'Connector for this token is OFFLINE.' });
+    }
+    const sqlText = template.sql({ days: effectiveDays, topN: effectiveTopN });
+    /* DLP queries assume the connection is already pinned to
+       wbsn-data-security; the connector's sql_Data secrets block has
+       that database baked in, so the product mapping handles it
+       implicitly. Web / Email products use their own DBs. */
+    const jobProduct = (typeof product === 'string' && product) ? product : (sqlKey.startsWith('dlp_') ? 'data' : sqlKey.startsWith('web_') ? 'web' : sqlKey.startsWith('email_') ? 'email' : 'data');
+    const jobId = enqueueJobInProcess(connectorToken, 'sql.query', { product: jobProduct, sql: sqlText, sqlKey });
+    const done = await awaitJobInProcess(jobId, 90_000);
+    const ms = Date.now() - started;
+    if (!done.ok) {
+      return res.status(400).json({
+        ok: false,
+        sqlKey,
+        windowDays: effectiveDays,
+        topN: effectiveTopN,
+        message: done.error,
+        latencyMs: ms,
+      });
+    }
+    const p = done.payload || {};
+    if (!p.ok) {
+      return res.status(400).json({
+        ok: false,
+        sqlKey,
+        windowDays: effectiveDays,
+        topN: effectiveTopN,
+        message: p.error || 'Connector reported SQL query failure.',
+        latencyMs: p.latencyMs ?? ms,
+      });
+    }
+    return res.json({
+      ok: true,
+      sqlKey,
+      title: template.title,
+      description: template.description,
+      windowDays: effectiveDays,
+      topN: effectiveTopN,
+      rowCount: p.rowCount ?? (Array.isArray(p.rows) ? p.rows.length : 0),
+      latencyMs: ms,
+      rows: p.rows || [],
+    });
+  }
 
   let pool = null;
   try {
