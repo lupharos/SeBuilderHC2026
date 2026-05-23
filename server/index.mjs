@@ -23,6 +23,8 @@ import sql from 'mssql';
 import { DLP_QUERIES } from './queries.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { spawn } from 'node:child_process';
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
 
 const app = express();
@@ -1848,6 +1850,201 @@ app.get('/api/connector/agent', (_req, res) => {
    but SQL refused". GET-only so a curl from the operator is trivial. */
 app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'forcepoint-hc-sql-companion', port: PORT });
+});
+
+/* ═══════════════════════════════════════════════════════════════════
+   ADMIN — Self-upgrade
+   ───────────────────────────────────────────────────────────────────
+   One-button "pull latest + redeploy" that mirrors what the SE used to
+   do manually from a shell:
+       cd ~/SeBuilderHC2026 && git pull && sudo bash deploy.sh
+   Companion typically runs as root under systemd, but the repo is
+   owned by the operator (e.g. /home/student/SeBuilderHC2026 owned by
+   `student`). To keep git's working-tree ownership clean, we run the
+   pull as the repo owner via `su -`, then run deploy.sh as root.
+
+   Linux-only: process.platform must be 'linux'. The frontend is told
+   so via /api/admin/platform and hides the button on every other host
+   (Windows dev machines, macOS laptops, etc.) — running an Ubuntu
+   bash script there would be nonsense.
+
+   The upgrade detaches because deploy.sh restarts our own systemd unit
+   mid-flight; once spawned the child runs to completion regardless of
+   what happens to this process. Output is appended to a log file the
+   frontend can tail via /api/admin/upgrade/log. */
+const UPGRADE_LOG_PATH = process.env.HC_UPGRADE_LOG || '/tmp/forcepoint-hc-upgrade.log';
+const UPGRADE_REPO_DEFAULTS = [
+  process.env.HC_UPGRADE_REPO_PATH,
+  '/home/student/SeBuilderHC2026',
+  path.join(os.homedir() || '/root', 'SeBuilderHC2026'),
+].filter(Boolean);
+
+/* Resolve which repo directory exists. Returns null when nothing is
+   on disk — frontend uses that to show "Upgrade not configured". */
+function resolveUpgradeRepo() {
+  for (const candidate of UPGRADE_REPO_DEFAULTS) {
+    try {
+      const st = fs.statSync(candidate);
+      if (st.isDirectory()) {
+        const deploy = path.join(candidate, 'deploy.sh');
+        const gitDir = path.join(candidate, '.git');
+        if (fs.existsSync(deploy) && fs.existsSync(gitDir)) {
+          return { path: candidate, deployScript: deploy, owner: st.uid };
+        }
+      }
+    } catch { /* try next */ }
+  }
+  return null;
+}
+
+/* Map a numeric uid to a username. Reads /etc/passwd directly — avoids
+   shelling out for a single lookup. Falls back to the numeric uid when
+   the entry is missing, which is still a valid `su` target. */
+function uidToUsername(uid) {
+  try {
+    const txt = fs.readFileSync('/etc/passwd', 'utf8');
+    for (const line of txt.split('\n')) {
+      const [name, , uidStr] = line.split(':');
+      if (parseInt(uidStr, 10) === uid) return name;
+    }
+  } catch { /* fall through */ }
+  return String(uid);
+}
+
+app.get('/api/admin/platform', (_req, res) => {
+  const platform = process.platform;
+  const repo = platform === 'linux' ? resolveUpgradeRepo() : null;
+  res.json({
+    platform,
+    nodeVersion: process.version,
+    runningAsRoot: typeof process.getuid === 'function' ? process.getuid() === 0 : false,
+    upgradeAvailable: platform === 'linux' && repo !== null,
+    repoPath: repo ? repo.path : null,
+    repoOwner: repo ? uidToUsername(repo.owner) : null,
+    reason: platform !== 'linux'
+      ? 'Self-upgrade only runs on Linux — the deploy script targets Ubuntu/nginx/systemd.'
+      : repo === null
+        ? 'No SeBuilderHC2026 clone with deploy.sh + .git was found in the search path. Set HC_UPGRADE_REPO_PATH to point at the SE checkout.'
+        : '',
+  });
+});
+
+/* In-memory tracking — the actual child detaches, so this is only the
+   companion's *view* of the run. After deploy.sh restarts us, the next
+   process boot starts with running=false and reads the log from disk. */
+let upgradeStartedAt = null;
+
+app.post('/api/admin/upgrade', (_req, res) => {
+  if (process.platform !== 'linux') {
+    return res.status(412).json({ ok: false, error: 'Self-upgrade is Linux-only.' });
+  }
+  const repo = resolveUpgradeRepo();
+  if (!repo) {
+    return res.status(404).json({ ok: false, error: 'No SeBuilderHC2026 clone found on the search path.' });
+  }
+  const ownerUser = uidToUsername(repo.owner);
+  const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+
+  /* Build the upgrade command. If we're already root and the repo is
+     owned by another user, `su - <user> -c '...'` keeps the git working
+     tree consistently owned. If we're not root, we just run everything
+     in-process and trust that whoever launched us has the rights. */
+  const repoPathQ = repo.path.replace(/'/g, `'\\''`);
+  const deployQ = repo.deployScript.replace(/'/g, `'\\''`);
+  let cmd;
+  if (isRoot && ownerUser !== 'root' && ownerUser !== String(process.getuid())) {
+    cmd = `set -e; su - '${ownerUser}' -c 'cd '\\''${repoPathQ}'\\'' && git pull' && bash '${deployQ}'`;
+  } else if (isRoot) {
+    cmd = `set -e; cd '${repoPathQ}' && git pull && bash '${deployQ}'`;
+  } else {
+    cmd = `set -e; cd '${repoPathQ}' && git pull && sudo -n bash '${deployQ}'`;
+  }
+
+  /* Truncate the log so the frontend doesn't see stale output from a
+     previous run. Header carries the start banner + the resolved cmd. */
+  upgradeStartedAt = new Date().toISOString();
+  const banner =
+    `========================================================\n` +
+    ` Forcepoint HC self-upgrade\n` +
+    ` Started:    ${upgradeStartedAt}\n` +
+    ` Repo:       ${repo.path}\n` +
+    ` Owner:      ${ownerUser}\n` +
+    ` Running as: ${isRoot ? 'root' : 'non-root'}\n` +
+    `========================================================\n`;
+  try {
+    fs.writeFileSync(UPGRADE_LOG_PATH, banner, { mode: 0o644 });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: `Cannot write log at ${UPGRADE_LOG_PATH}: ${err.message}` });
+  }
+
+  /* Open the log fd and hand it to the detached child as stdout+stderr.
+     `unref()` so the child outlives our own process; deploy.sh will
+     restart this systemd unit while it's still running. */
+  let logFd;
+  try {
+    logFd = fs.openSync(UPGRADE_LOG_PATH, 'a');
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: `Cannot open log fd: ${err.message}` });
+  }
+  const child = spawn('bash', ['-c', cmd], {
+    detached: true,
+    stdio: ['ignore', logFd, logFd],
+    env: { ...process.env, DEBIAN_FRONTEND: 'noninteractive' },
+  });
+  child.on('error', (err) => {
+    try { fs.appendFileSync(UPGRADE_LOG_PATH, `\n[spawn error] ${err.message}\n`); } catch { /* noop */ }
+  });
+  child.unref();
+  try { fs.closeSync(logFd); } catch { /* noop */ }
+
+  res.status(202).json({
+    ok: true,
+    pid: child.pid,
+    startedAt: upgradeStartedAt,
+    repoPath: repo.path,
+    logPath: UPGRADE_LOG_PATH,
+    message: 'Upgrade dispatched. The companion service will restart during deploy — expect a transient connectivity gap.',
+  });
+});
+
+/* Tail of the upgrade log. The frontend polls this every couple of
+   seconds; we cap the response at the last ~64 KB so even a runaway
+   build doesn't push megabytes through the proxy. */
+app.get('/api/admin/upgrade/log', (req, res) => {
+  if (process.platform !== 'linux') {
+    return res.status(412).json({ ok: false, error: 'Self-upgrade is Linux-only.' });
+  }
+  const maxBytes = Math.min(Math.max(parseInt(String(req.query.bytes ?? '65536'), 10) || 65536, 4096), 262144);
+  let log = '';
+  let exists = false;
+  let mtimeMs = 0;
+  try {
+    const st = fs.statSync(UPGRADE_LOG_PATH);
+    exists = true;
+    mtimeMs = st.mtimeMs;
+    const fd = fs.openSync(UPGRADE_LOG_PATH, 'r');
+    try {
+      const start = Math.max(0, st.size - maxBytes);
+      const buf = Buffer.alloc(st.size - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      log = buf.toString('utf8');
+      if (start > 0) log = `[…log truncated to last ${maxBytes} bytes…]\n` + log;
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch { /* fall through */ }
+  /* "Running" is best-effort: if the log was touched in the last 10s
+     we treat the upgrade as still active. After deploy.sh restarts us
+     this flag self-clears once mtime crosses the threshold. */
+  const running = exists && (Date.now() - mtimeMs) < 10_000;
+  res.json({
+    ok: true,
+    exists,
+    running,
+    startedAt: upgradeStartedAt,
+    mtime: exists ? new Date(mtimeMs).toISOString() : null,
+    log,
+  });
 });
 
 /* ─────────────────────────────────────────────────────────────────

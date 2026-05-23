@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { X, LogOut, Mail, Shield, AlertTriangle } from 'lucide-react';
 import type { PanelType } from './Dashboard';
+import { SystemMaintenanceCard, useUpgradePlatform } from './SystemUpgrade';
 
 interface SidePanelProps {
   panelType: PanelType;
@@ -120,6 +121,11 @@ const templateList = [
 
 export function SidePanel({ panelType, onClose, onNavigate, onLogout }: SidePanelProps) {
   const [showLogoutModal, setShowLogoutModal] = useState(false);
+  /* Probe the companion for self-upgrade capability. Only fetched when
+     the profile panel is mounted so the request doesn't fire from the
+     templates view; the hook itself is cheap (single GET) and the
+     result is memoised by React across re-renders of this panel. */
+  const upgradeInfo = useUpgradePlatform();
 
   const handleLogoutConfirm = () => {
     setShowLogoutModal(false);
@@ -297,6 +303,13 @@ export function SidePanel({ panelType, onClose, onNavigate, onLogout }: SidePane
                 </div>
               ))}
             </div>
+
+            {/* System Maintenance — only renders the Upgrade button when
+                the companion reports it's running on Linux with a usable
+                clone of the repo. On Windows / macOS dev hosts the card
+                stays visible but the button is disabled with the reason
+                shown beneath it. */}
+            <SystemMaintenanceCard info={upgradeInfo} />
 
             {/* Logout */}
             <button
