@@ -2893,14 +2893,19 @@ export function Step3DataCollectors({
             {cfg.enabled && isCardOpen(def.key) && (
               <div className="p-[16px_22px] space-y-4">
 
-                {/* Base URL */}
-                <div>
-                  <label style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.04em' }}>BASE URL</label>
-                  <input style={{ ...IS, marginTop: '4px' }} placeholder={def.placeholder}
-                    value={cfg.url} onChange={e => updApi(def.key, { url: e.target.value })}
-                    onFocus={e => (e.currentTarget.style.border = '1.5px solid #93C5FD')}
-                    onBlur={e =>  (e.currentTarget.style.border = '1.5px solid #E2E8F0')} />
-                </div>
+                {/* Base URL — hidden in DLP via-connector mode (the
+                    customer-side connector reads the URL out of its
+                    own connector-secrets.json; the wizard companion
+                    never needs it on that path). */}
+                {(def.key !== 'dlpApi' || (cfg.transport ?? 'direct') === 'direct') && (
+                  <div>
+                    <label style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.04em' }}>BASE URL</label>
+                    <input style={{ ...IS, marginTop: '4px' }} placeholder={def.placeholder}
+                      value={cfg.url} onChange={e => updApi(def.key, { url: e.target.value })}
+                      onFocus={e => (e.currentTarget.style.border = '1.5px solid #93C5FD')}
+                      onBlur={e =>  (e.currentTarget.style.border = '1.5px solid #E2E8F0')} />
+                  </div>
+                )}
 
                 {/* Transport mode picker — DLP REST API only. Two paths
                     to the customer's API:
@@ -2931,8 +2936,8 @@ export function Step3DataCollectors({
                       </label>
                       <div className="grid grid-cols-2 gap-2">
                         {([
-                          { id: 'direct'        as const, title: 'Direct',        sub: 'Companion → customer API (current)' },
-                          { id: 'via-connector' as const, title: 'Via Connector', sub: 'Companion → connector → customer API' },
+                          { id: 'direct'        as const, title: 'Direct',        sub: 'HC server contacts the customer FSM (needs URL + creds here)' },
+                          { id: 'via-connector' as const, title: 'Via Connector', sub: 'Customer Connector queries the FSM (uses connector-secrets.json)' },
                         ]).map((opt) => {
                           const active = transport === opt.id;
                           return (
@@ -3047,8 +3052,23 @@ export function Step3DataCollectors({
 
                 {/* Credentials — DLP is locked to basic auth (Application
                     Administrator only), so the apiKey branch never renders
-                    on that card. */}
-                {(def.key !== 'dlpApi' && cfg.authType === 'apikey') ? (
+                    on that card. Hidden entirely in DLP via-connector
+                    mode (the connector .exe reads creds from its own
+                    connector-secrets.json on the customer host). */}
+                {def.key === 'dlpApi' && (cfg.transport ?? 'direct') === 'via-connector' ? (
+                  <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg"
+                    style={{ background: '#F0FDFA', border: '1px solid #99F6E4' }}>
+                    <Plug size={14} style={{ color: '#0D9488', flexShrink: 0, marginTop: 1 }} />
+                    <div style={{ fontSize: '11px', color: '#0F766E', lineHeight: 1.55 }}>
+                      <strong>Credentials live on the customer host.</strong>{' '}
+                      The Customer Connector reads its DLP REST API URL + Application
+                      Administrator username / password from{' '}
+                      <span style={{ fontFamily: 'monospace' }}>connector-secrets.json</span>.
+                      Nothing to enter here — Test Connection and Fetch will route through
+                      the connector using whatever the customer put in that file.
+                    </div>
+                  </div>
+                ) : (def.key !== 'dlpApi' && cfg.authType === 'apikey') ? (
                   <div>
                     <label style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.04em' }}>API KEY</label>
                     <div style={{ position: 'relative', marginTop: '4px' }}>
@@ -3090,38 +3110,53 @@ export function Step3DataCollectors({
                   </div>
                 )}
 
-                {/* Test connection */}
-                <div className="flex items-center gap-3">
-                  <button onClick={() => testApi(def.key, def.endpoint)}
-                    disabled={!cfg.url.trim() || testing}
-                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold transition-all"
-                    style={{
-                      fontSize: '12.5px',
-                      background: !cfg.url.trim() || testing
-                        ? '#F1F5F9' : 'linear-gradient(135deg,#2563EB,#1D4ED8)',
-                      color:  !cfg.url.trim() || testing ? '#94A3B8' : '#fff',
-                      cursor: !cfg.url.trim() || testing ? 'not-allowed' : 'pointer',
-                      boxShadow: cfg.url.trim() && !testing ? '0 4px 14px rgba(37,99,235,0.35)' : 'none',
-                      border: '1.5px solid transparent',
-                    }}>
-                    {testing
-                      ? <><Loader size={13} className="animate-spin" /> Testing…</>
-                      : <>Test Connection</>}
-                  </button>
-                  {st.state !== 'idle' && st.state !== 'testing' && (
-                    <div className="flex items-center gap-1.5">
-                      {st.state === 'ok'
-                        ? <CheckCircle2 size={14} style={{ color: '#16A34A' }} />
-                        : <XCircle     size={14} style={{ color: '#DC2626' }} />}
-                      <span style={{ fontSize: '11.5px', fontWeight: 500, color: st.state === 'ok' ? '#16A34A' : '#DC2626' }}>
-                        {st.message}
-                      </span>
+                {/* Test connection — DLP via-connector mode doesn't
+                    need a URL (the connector reads its own
+                    connector-secrets.json), so the disabled gate flips
+                    to "connector must be online" instead. */}
+                {(() => {
+                  const isDlpVia = def.key === 'dlpApi' && (cfg.transport ?? 'direct') === 'via-connector';
+                  const connOnline = !!connectorStatus?.online;
+                  const connReady = customerConnector.enabled && !!customerConnector.token && connOnline;
+                  const urlNeeded = !isDlpVia;
+                  const blocker = isDlpVia ? !connReady : !cfg.url.trim();
+                  const disabled = blocker || testing;
+                  return (
+                    <div className="flex items-center gap-3">
+                      <button onClick={() => testApi(def.key, def.endpoint)}
+                        disabled={disabled}
+                        className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold transition-all"
+                        style={{
+                          fontSize: '12.5px',
+                          background: disabled ? '#F1F5F9' : 'linear-gradient(135deg,#2563EB,#1D4ED8)',
+                          color:  disabled ? '#94A3B8' : '#fff',
+                          cursor: disabled ? 'not-allowed' : 'pointer',
+                          boxShadow: !disabled ? '0 4px 14px rgba(37,99,235,0.35)' : 'none',
+                          border: '1.5px solid transparent',
+                        }}>
+                        {testing
+                          ? <><Loader size={13} className="animate-spin" /> Testing…</>
+                          : <>Test Connection</>}
+                      </button>
+                      {st.state !== 'idle' && st.state !== 'testing' && (
+                        <div className="flex items-center gap-1.5">
+                          {st.state === 'ok'
+                            ? <CheckCircle2 size={14} style={{ color: '#16A34A' }} />
+                            : <XCircle     size={14} style={{ color: '#DC2626' }} />}
+                          <span style={{ fontSize: '11.5px', fontWeight: 500, color: st.state === 'ok' ? '#16A34A' : '#DC2626' }}>
+                            {st.message}
+                          </span>
+                        </div>
+                      )}
+                      {st.state === 'idle' && urlNeeded && !cfg.url.trim() && (
+                        <span style={{ fontSize: '11px', color: '#94A3B8' }}>Enter base URL to test</span>
+                      )}
+                      {st.state === 'idle' && isDlpVia && !connReady && (
+                        <span style={{ fontSize: '11px', color: '#94A3B8' }}>Waiting for Customer Connector to come ONLINE…</span>
+                      )}
                     </div>
-                  )}
-                  {st.state === 'idle' && !cfg.url.trim() && (
-                    <span style={{ fontSize: '11px', color: '#94A3B8' }}>Enter base URL to test</span>
-                  )}
-                </div>
+                  );
+                })()}
 
                 {/* ── DLP-API hint: once the connection test is green the
                      operator picks blocks in the "REST API Data Selection"
@@ -3409,24 +3444,44 @@ export function Step3DataCollectors({
               </span>
             </span>
           )}
-          <button onClick={fetchPosture}
-            disabled={postureFetching || !apiConnectors.dlpApi.url.trim() || (apiStatus.dlpApi?.state !== 'ok' && !dlpPostureSummary)}
-            title={apiStatus.dlpApi?.state !== 'ok' && !dlpPostureSummary
+          {(() => {
+            /* Fetch enable gate — depends on transport:
+                 direct        — needs a real Base URL filled in.
+                 via-connector — needs the Customer Connector ONLINE
+                                 (the URL field is hidden in this mode,
+                                 so requiring it would be a permanent
+                                 dead-end). */
+            const transport = apiConnectors.dlpApi.transport ?? 'direct';
+            const isVia = transport === 'via-connector';
+            const connReady = customerConnector.enabled && !!customerConnector.token && !!connectorStatus?.online;
+            const urlMissing = !apiConnectors.dlpApi.url.trim();
+            const blocker = isVia ? !connReady : urlMissing;
+            const tested = apiStatus.dlpApi?.state === 'ok' || !!dlpPostureSummary;
+            const disabled = postureFetching || blocker || !tested;
+            const titleMsg = !tested
               ? 'Test the DLP REST API connection above before fetching posture data.'
-              : 'Pull deploy status, enabled policies, and aggregated incident telemetry.'}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded font-semibold transition-all"
-            style={{
-              fontSize: '11px',
-              background: postureFetching || !apiConnectors.dlpApi.url.trim() ? '#F1F5F9' : 'linear-gradient(135deg,#16A34A,#15803D)',
-              color: postureFetching || !apiConnectors.dlpApi.url.trim() ? '#94A3B8' : '#fff',
-              cursor: postureFetching || !apiConnectors.dlpApi.url.trim() ? 'not-allowed' : 'pointer',
-              border: '1px solid transparent',
-              boxShadow: postureFetching || !apiConnectors.dlpApi.url.trim() ? 'none' : '0 2px 8px rgba(22,163,74,0.3)',
-            }}>
-            {postureFetching
-              ? <><Loader size={11} className="animate-spin" /> Fetching…</>
-              : <><Play size={11} /> {dlpPostureSummary ? 'Refresh' : 'Fetch'}</>}
-          </button>
+              : blocker
+                ? (isVia ? 'Waiting for Customer Connector to come ONLINE.' : 'Enter the BASE URL above first.')
+                : 'Pull deploy status, enabled policies, and aggregated incident telemetry.';
+            return (
+              <button onClick={fetchPosture}
+                disabled={disabled}
+                title={titleMsg}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded font-semibold transition-all"
+                style={{
+                  fontSize: '11px',
+                  background: disabled ? '#F1F5F9' : 'linear-gradient(135deg,#16A34A,#15803D)',
+                  color:      disabled ? '#94A3B8' : '#fff',
+                  cursor:     disabled ? 'not-allowed' : 'pointer',
+                  border: '1px solid transparent',
+                  boxShadow:  disabled ? 'none' : '0 2px 8px rgba(22,163,74,0.3)',
+                }}>
+                {postureFetching
+                  ? <><Loader size={11} className="animate-spin" /> Fetching…</>
+                  : <><Play size={11} /> {dlpPostureSummary ? 'Refresh' : 'Fetch'}</>}
+              </button>
+            );
+          })()}
         </div>
 
         {postureError && (
