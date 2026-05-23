@@ -697,6 +697,390 @@ function buildReportHTML(p: {
     return html.replace(dropRe, '').replace(markerRe, '');
   };
 
+  /* Posture Telemetry section, hoisted to a const so it can be
+     referenced from both Part II variants:
+       • Executive Risk Briefing  → inside an EXEC_ONLY block,
+         standalone as the only Part II content.
+       • Health Check (technical) → inside the TECH_ONLY Part III
+         block, alongside the other roadmap/posture material.
+     One template, two placement points — keeps the section's
+     content + styling in lockstep across variants. */
+  const postureSection: string = (p.dlpPostureSummary && Object.values(p.dlpPostureSections).some(Boolean)) ? (() => {
+    const ps = p.dlpPostureSummary!;
+    const sec = p.dlpPostureSections;
+    const total = Math.max(1, ps.totalIncidents);
+    const sevHigh = ps.bySeverity.HIGH, sevMed = ps.bySeverity.MEDIUM, sevLow = ps.bySeverity.LOW;
+    const sevHighPct = Math.round((sevHigh / total) * 1000) / 10;
+    const sevMedPct  = Math.round((sevMed  / total) * 1000) / 10;
+    const sevLowPct  = Math.round((sevLow  / total) * 1000) / 10;
+  
+    /* Severity donut (mirrors the DLP Activity Snapshot styling) */
+    const sevSegs: { color: string; from: number; to: number }[] = [];
+    let ang = 0;
+    if (sevHigh > 0) { const slice = (sevHigh / total) * 360; sevSegs.push({ color: 'var(--fp-violette)', from: ang, to: ang + slice }); ang += slice; }
+    if (sevMed  > 0) { const slice = (sevMed  / total) * 360; sevSegs.push({ color: 'var(--fp-yellow)',   from: ang, to: ang + slice }); ang += slice; }
+    if (sevLow  > 0) { const slice = (sevLow  / total) * 360; sevSegs.push({ color: 'var(--fp-green)',    from: ang, to: ang + slice }); ang += slice; }
+    const sevDonut = sevSegs.length === 0
+      ? `conic-gradient(#E2E8F0 0deg 360deg)`
+      : `conic-gradient(${sevSegs.map(s => `${s.color} ${s.from}deg ${s.to}deg`).join(', ')})`;
+  
+    /* Action color helper — reuses the palette tuned for the PDF snapshot. */
+    const actionColor = (act: string) => /BLOCKED/i.test(act) ? 'var(--fp-violette)'
+      : /QUARANTIN/i.test(act) ? 'var(--fp-red)'
+      : /RELEASED/i.test(act) ? 'var(--fp-yellow)'
+      : /ENCRYPTED/i.test(act) ? 'var(--fp-cyan)'
+      : /AUDITED|PERMITTED/i.test(act) ? 'var(--fp-green)'
+      : /UNSHARE/i.test(act) ? 'var(--fp-navy)'
+      : 'var(--fp-ink-muted)';
+    const channelColor = (ch: string) => /ENDPOINT/i.test(ch) ? 'var(--fp-cyan)'
+      : /EMAIL/i.test(ch) ? 'var(--fp-navy)'
+      : /CASB/i.test(ch) ? 'var(--fp-violette)'
+      : /HTTPS|HTTP/i.test(ch) ? 'var(--fp-green)'
+      : 'var(--fp-ink-muted)';
+  
+    /* Render a horizontal bar list from a label→count map, top N. */
+    const renderBars = (map: Record<string, number>, n: number, color: (k: string) => string) => {
+      const entries = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, n);
+      const max = Math.max(1, ...entries.map(([, v]) => v));
+      if (entries.length === 0) {
+        return `<div style="font-size:10.5px;color:var(--fp-ink-faint);font-style:italic;">No data in window.</div>`;
+      }
+      return entries.map(([label, count]) => {
+        const w = Math.max(1, Math.round((count / max) * 100));
+        const pctLbl = Math.round((count / total) * 1000) / 10;
+        return `<div style="display:grid;grid-template-columns:170px 1fr 70px 50px;gap:10px;align-items:center;font-size:11px;margin-bottom:6px;">
+          <div style="font-weight:600;color:var(--fp-ink);font-size:10.5px;word-break:break-word;">${esc(label.replace(/_/g, ' '))}</div>
+          <div style="height:13px;background:var(--fp-rule-soft);border-radius:3px;overflow:hidden;"><div style="width:${w}%;height:100%;background:${color(label)};border-radius:3px;"></div></div>
+          <div class="mono" style="text-align:right;font-weight:700;color:var(--fp-ink);">${count.toLocaleString()}</div>
+          <div class="mono" style="text-align:right;color:var(--fp-ink-faint);font-size:10.5px;">${pctLbl}%</div>
+        </div>`;
+      }).join('');
+    };
+  
+    const deployCfg: Record<string, { color: string; bg: string; border: string; label: string }> = {
+      COMPLETED:           { color: '#16A34A', bg: '#F0FDF4', border: '#BBF7D0', label: 'Completed' },
+      IN_PROGRESS:         { color: '#0284C7', bg: '#F0F9FF', border: '#BAE6FD', label: 'In Progress' },
+      PENDING_DEPLOYMENT:  { color: '#B58800', bg: '#FFFBEB', border: '#FDE68A', label: 'Pending Deployment' },
+      FAILED:              { color: '#DC2626', bg: '#FEF2F2', border: '#FECACA', label: 'Failed' },
+      UNKNOWN:             { color: '#64748B', bg: '#F1F5F9', border: '#E2E8F0', label: 'Unknown' },
+    };
+    const dCfg = deployCfg[ps.deploymentStatus] ?? deployCfg.UNKNOWN;
+  
+    const epTotal = ps.byEndpointType.LAPTOP + ps.byEndpointType.DESKTOP + ps.byEndpointType.NA;
+    const epPct = (n: number) => epTotal > 0 ? Math.round((n / epTotal) * 1000) / 10 : 0;
+  
+    const fpRate  = total > 0 ? Math.round((ps.falsePositiveCount  / total) * 1000) / 10 : 0;
+    const relRate = total > 0 ? Math.round((ps.releasedIncidentCount / total) * 1000) / 10 : 0;
+    const ignRate = total > 0 ? Math.round((ps.ignoredCount        / total) * 1000) / 10 : 0;
+  
+    return `
+  <div class="section">
+    <div class="section-eyebrow">Section 13 · Part II · Posture Telemetry</div>
+    <div class="section-title">Information Security Posture Dashboard</div>
+    <p class="section-lead">
+      Live posture snapshot pulled from the customer's Forcepoint DLP REST API over the last
+      <strong>${ps.windowDays} days</strong>. CXO-grade categorical rollups plus the top-users
+      offender leaderboard; AD domains, run-as identifiers, and host names remain redacted. Fetched
+      <span class="mono" style="color:var(--fp-ink-muted);">${esc(new Date(ps.fetchedAt).toLocaleString())}</span>
+      from <span class="mono" style="color:var(--fp-ink-muted);">${esc(ps.serverBaseUrl)}</span>.
+      ${hasDLP ? `<br/><span style="color:var(--fp-ink-faint);font-size:11.5px;">The
+        SQL-driven <em>Data Security Usage</em> section is intentionally omitted while REST API
+        posture data is present — the API hits the same FSM source-of-truth and emits a richer
+        cross-section, so DLP coverage runs through this single authoritative block to avoid
+        duplicate numbers.</span>` : ''}
+    </p>
+  
+    ${sec.overview ? `<!-- KPI strip: deploy status + headline counts -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px;page-break-inside:avoid;">
+      <div style="background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-navy);border-radius:6px;padding:12px 14px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
+        <div style="font-size:9px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;color:var(--fp-ink-faint);">DLP Version</div>
+        <div class="mono" style="font-size:18px;font-weight:800;color:var(--fp-navy);margin-top:4px;">${esc(ps.dlpVersion || '—')}</div>
+      </div>
+      <div style="background:${dCfg.bg};border:1px solid ${dCfg.border};border-top:3px solid ${dCfg.color};border-radius:6px;padding:12px 14px;">
+        <div style="font-size:9px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;color:var(--fp-ink-faint);">Deployment Status</div>
+        <div style="font-size:14px;font-weight:800;color:${dCfg.color};margin-top:4px;">${esc(dCfg.label)}</div>
+      </div>
+      <div style="background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-cyan);border-radius:6px;padding:12px 14px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
+        <div style="font-size:9px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;color:var(--fp-ink-faint);">Enabled Policies</div>
+        <div class="mono" style="font-size:18px;font-weight:800;color:var(--fp-cyan-deep);margin-top:4px;">${ps.enabledDlpPolicies.toLocaleString()} <span style="font-size:10px;font-weight:600;color:var(--fp-ink-faint);">DLP</span> · ${ps.enabledDiscoveryPolicies.toLocaleString()} <span style="font-size:10px;font-weight:600;color:var(--fp-ink-faint);">Disc</span></div>
+      </div>
+      <div style="background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-violette);border-radius:6px;padding:12px 14px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
+        <div style="font-size:9px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;color:var(--fp-ink-faint);">Incidents (${ps.windowDays}d)</div>
+        <div class="mono" style="font-size:18px;font-weight:800;color:var(--fp-violette);margin-top:4px;">${ps.totalIncidents.toLocaleString()}</div>
+      </div>
+    </div>` : ''}
+  
+    ${(sec.severity || sec.action) ? `<!-- Severity donut + Action bars -->
+    <div style="display:flex;flex-wrap:wrap;gap:14px;page-break-inside:avoid;margin-bottom:14px;">
+      ${sec.severity ? `<div style="flex:0 0 230px;background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-navy);border-radius:6px;padding:16px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,0.05);">
+        <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);margin-bottom:10px;">Incidents by Severity</div>
+        <div style="width:150px;height:150px;border-radius:50%;background:${sevDonut};margin:0 auto;display:flex;align-items:center;justify-content:center;">
+          <div style="width:96px;height:96px;border-radius:50%;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;">
+            <div style="font-size:22px;font-weight:700;color:var(--fp-navy);line-height:1;letter-spacing:-0.02em;">${ps.totalIncidents.toLocaleString()}</div>
+            <div style="font-size:8px;color:var(--fp-ink-faint);letter-spacing:0.14em;text-transform:uppercase;margin-top:4px;font-weight:700;">Total</div>
+          </div>
+        </div>
+        <div style="margin-top:12px;display:flex;flex-direction:column;gap:5px;font-size:10.5px;">
+          <div style="display:flex;align-items:center;gap:6px;"><span style="width:9px;height:9px;background:var(--fp-violette);border-radius:2px;"></span><span style="flex:1;text-align:left;color:var(--fp-ink);font-weight:500;">High</span><span class="mono" style="font-weight:700;">${sevHigh.toLocaleString()}</span><span class="mono" style="color:var(--fp-ink-faint);">${sevHighPct}%</span></div>
+          <div style="display:flex;align-items:center;gap:6px;"><span style="width:9px;height:9px;background:var(--fp-yellow);border-radius:2px;"></span><span style="flex:1;text-align:left;color:var(--fp-ink);font-weight:500;">Medium</span><span class="mono" style="font-weight:700;">${sevMed.toLocaleString()}</span><span class="mono" style="color:var(--fp-ink-faint);">${sevMedPct}%</span></div>
+          <div style="display:flex;align-items:center;gap:6px;"><span style="width:9px;height:9px;background:var(--fp-green);border-radius:2px;"></span><span style="flex:1;text-align:left;color:var(--fp-ink);font-weight:500;">Low</span><span class="mono" style="font-weight:700;">${sevLow.toLocaleString()}</span><span class="mono" style="color:var(--fp-ink-faint);">${sevLowPct}%</span></div>
+        </div>
+      </div>` : ''}
+  
+      ${sec.action ? `<div style="flex:1 1 280px;background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-cyan);border-radius:6px;padding:16px 20px;box-shadow:0 2px 8px rgba(0,0,0,0.05);">
+        <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);margin-bottom:10px;">Incidents by Action</div>
+        ${renderBars(ps.byAction, 8, actionColor)}
+      </div>` : ''}
+    </div>` : ''}
+  
+    ${(sec.channel || sec.status) ? `<!-- Channel + Status side-by-side -->
+    <div style="display:flex;flex-wrap:wrap;gap:14px;page-break-inside:avoid;margin-bottom:14px;">
+      ${sec.channel ? `<div style="flex:1 1 280px;background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-cyan-deep);border-radius:6px;padding:14px 16px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
+        <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);margin-bottom:10px;">Top Channels</div>
+        ${renderBars(ps.byChannel, 8, channelColor)}
+      </div>` : ''}
+      ${sec.status ? `<div style="flex:1 1 280px;background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-navy);border-radius:6px;padding:14px 16px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
+        <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);margin-bottom:10px;">Workflow Status</div>
+        ${(() => {
+          const entries = Object.entries(ps.byStatus).sort((a, b) => b[1] - a[1]);
+          if (entries.length === 0) return `<div style="font-size:10.5px;color:var(--fp-ink-faint);font-style:italic;">No status telemetry in window.</div>`;
+          return `<div style="display:flex;flex-wrap:wrap;gap:6px;">
+            ${entries.map(([s, c]) => {
+              const norm = s.toUpperCase().replace(/\\s+/g, '_');
+              const col = norm === 'NEW' ? 'var(--fp-cyan)'
+                        : norm === 'IN_PROCESS' ? 'var(--fp-yellow)'
+                        : norm === 'CLOSE' || norm === 'CLOSED' ? 'var(--fp-green)'
+                        : norm === 'FALSE_POSITIVE' ? 'var(--fp-ink-faint)'
+                        : norm === 'ESCALATED' ? 'var(--fp-violette)'
+                        : 'var(--fp-navy)';
+              return `<span style="display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:14px;background:${col}14;border:1px solid ${col}40;font-size:10.5px;color:${col};font-weight:700;">
+                <span style="text-transform:uppercase;letter-spacing:0.04em;">${esc(s)}</span>
+                <span class="mono" style="background:#fff;padding:1px 6px;border-radius:6px;color:var(--fp-ink);">${c.toLocaleString()}</span>
+              </span>`;
+            }).join('')}
+          </div>`;
+        })()}
+      </div>` : ''}
+    </div>` : ''}
+  
+    ${(sec.policies || sec.destinations) ? `<!-- Top policies + Top destinations -->
+    <div style="display:flex;flex-wrap:wrap;gap:14px;page-break-inside:avoid;margin-bottom:14px;">
+      ${sec.policies ? `<div style="flex:1 1 280px;background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-red);border-radius:6px;padding:14px 16px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
+        <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);margin-bottom:10px;">Top Triggered Policies</div>
+        ${ps.topPolicies.length === 0
+          ? `<div style="font-size:10.5px;color:var(--fp-ink-faint);font-style:italic;">No policy hits in window.</div>`
+          : `<table style="margin:0;box-shadow:none;border:1px solid var(--fp-rule);">
+            <thead><tr><th style="padding:5px 8px;font-size:9px;">Policy</th><th style="padding:5px 8px;font-size:9px;width:70px;text-align:right;">Count</th></tr></thead>
+            <tbody>${ps.topPolicies.map((r) => `<tr>
+              <td style="padding:5px 8px;font-size:10.5px;color:var(--fp-ink);font-weight:500;">${esc(r.label)}</td>
+              <td class="mono" style="padding:5px 8px;font-size:10.5px;color:var(--fp-ink);font-weight:700;text-align:right;">${r.count.toLocaleString()}</td>
+            </tr>`).join('')}</tbody>
+          </table>`}
+      </div>` : ''}
+      ${sec.destinations ? `<div style="flex:1 1 280px;background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-cyan-deep);border-radius:6px;padding:14px 16px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
+        <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);margin-bottom:10px;">Top Destinations</div>
+        ${ps.topDestinations.length === 0
+          ? `<div style="font-size:10.5px;color:var(--fp-ink-faint);font-style:italic;">No destination data in window.</div>`
+          : `<table style="margin:0;box-shadow:none;border:1px solid var(--fp-rule);">
+            <thead><tr><th style="padding:5px 8px;font-size:9px;">Destination</th><th style="padding:5px 8px;font-size:9px;width:70px;text-align:right;">Count</th></tr></thead>
+            <tbody>${ps.topDestinations.map((r) => `<tr>
+              <td style="padding:5px 8px;font-size:10.5px;color:var(--fp-ink);font-weight:500;word-break:break-all;">${esc(r.label)}</td>
+              <td class="mono" style="padding:5px 8px;font-size:10.5px;color:var(--fp-ink);font-weight:700;text-align:right;">${r.count.toLocaleString()}</td>
+            </tr>`).join('')}</tbody>
+          </table>`}
+      </div>` : ''}
+    </div>` : ''}
+  
+    ${sec.users ? (() => {
+      const list = ps.topUsers ?? [];
+      const maxCount = Math.max(1, ...list.map((u) => u.count));
+      return `<!-- Top Users (Offenders) — CXO offender list -->
+    <div style="margin-bottom:14px;page-break-inside:avoid;">
+      <div style="background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-red);border-radius:6px;padding:14px 18px;box-shadow:0 2px 8px rgba(0,0,0,0.05);">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px;">
+          <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);">Top Users — Offender Leaderboard</div>
+          <div style="font-size:9.5px;color:var(--fp-ink-faint);">${list.length} of ${ps.totalIncidents.toLocaleString()} incident sources surfaced</div>
+        </div>
+        ${list.length === 0
+          ? `<div style="font-size:11px;color:var(--fp-ink-faint);font-style:italic;">No user telemetry surfaced — incidents may have arrived without <code>source.login_name</code> populated.</div>`
+          : `<table style="margin:0;box-shadow:none;border:1px solid var(--fp-rule);">
+            <thead><tr>
+              <th style="padding:6px 10px;font-size:9px;width:30px;text-align:center;">#</th>
+              <th style="padding:6px 10px;font-size:9px;">User</th>
+              <th style="padding:6px 10px;font-size:9px;">Distribution</th>
+              <th style="padding:6px 10px;font-size:9px;width:90px;text-align:right;">Incidents</th>
+              <th style="padding:6px 10px;font-size:9px;width:70px;text-align:right;">Share</th>
+            </tr></thead>
+            <tbody>${list.map((u, i) => {
+              const w = Math.round((u.count / maxCount) * 100);
+              const pctOfAll = ps.totalIncidents > 0 ? Math.round((u.count / ps.totalIncidents) * 1000) / 10 : 0;
+              const rankColor = i === 0 ? 'var(--fp-violette)' : i < 3 ? 'var(--fp-red)' : 'var(--fp-ink-muted)';
+              return `<tr>
+                <td class="mono" style="padding:6px 10px;font-size:11px;text-align:center;font-weight:800;color:${rankColor};">${i + 1}</td>
+                <td style="padding:6px 10px;font-size:11px;font-weight:600;color:var(--fp-ink);">${esc(u.label)}</td>
+                <td style="padding:6px 10px;"><div style="height:9px;background:var(--fp-rule-soft);border-radius:2px;overflow:hidden;"><div style="width:${w}%;height:100%;background:${rankColor};"></div></div></td>
+                <td class="mono" style="padding:6px 10px;font-size:11px;text-align:right;font-weight:700;color:var(--fp-ink);">${u.count.toLocaleString()}</td>
+                <td class="mono" style="padding:6px 10px;font-size:10.5px;text-align:right;color:var(--fp-ink-faint);">${pctOfAll}%</td>
+              </tr>`;
+            }).join('')}</tbody>
+          </table>`}
+      </div>
+    </div>`;
+    })() : ''}
+  
+    ${(sec.genai_apps || sec.saas_apps || sec.webmail) ? (() => {
+      /* CXO Exfil-Vector exposure strip — three side-by-side cards each
+         showing a pattern-classified destination bucket. Headline number
+         per bucket is the incident count; the table below lists the top
+         hits within that bucket. */
+      const renderBucket = (
+        title, accent, hits, list, emptyMsg,
+      ) => {
+        const maxC = Math.max(1, ...list.map((r) => r.count));
+        const pct = ps.totalIncidents > 0 ? Math.round((hits / ps.totalIncidents) * 1000) / 10 : 0;
+        return `<div style="flex:1 1 300px;background:#fff;border:1px solid var(--fp-rule);border-top:3px solid ${accent};border-radius:6px;padding:14px 16px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px;">
+            <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);">${title}</div>
+            <div style="font-size:9.5px;color:var(--fp-ink-faint);">${pct}% of incidents</div>
+          </div>
+          <div class="mono" style="font-size:22px;font-weight:800;color:${accent};line-height:1.1;margin-bottom:10px;">${hits.toLocaleString()} <span style="font-size:10px;font-weight:600;color:var(--fp-ink-faint);">incidents</span></div>
+          ${list.length === 0
+            ? `<div style="font-size:10.5px;color:var(--fp-ink-faint);font-style:italic;">${esc(emptyMsg)}</div>`
+            : `<table style="margin:0;box-shadow:none;border:1px solid var(--fp-rule);">
+              <thead><tr><th style="padding:5px 8px;font-size:9px;">Destination</th><th style="padding:5px 8px;font-size:9px;width:60px;text-align:right;">Hits</th></tr></thead>
+              <tbody>${list.map((r) => {
+                const w = Math.round((r.count / maxC) * 100);
+                return `<tr>
+                  <td style="padding:4px 8px;font-size:10px;color:var(--fp-ink);font-weight:500;word-break:break-all;">
+                    <div>${esc(r.label)}</div>
+                    <div style="height:5px;background:var(--fp-rule-soft);border-radius:2px;margin-top:3px;overflow:hidden;"><div style="width:${w}%;height:100%;background:${accent};"></div></div>
+                  </td>
+                  <td class="mono" style="padding:4px 8px;font-size:10px;font-weight:700;color:var(--fp-ink);text-align:right;">${r.count.toLocaleString()}</td>
+                </tr>`;
+              }).join('')}</tbody>
+            </table>`}
+        </div>`;
+      };
+      return `<!-- Exfil-vector exposure: GenAI / SaaS / Webmail -->
+    <div style="display:flex;flex-wrap:wrap;gap:14px;page-break-inside:avoid;margin-bottom:14px;">
+      ${sec.genai_apps ? renderBucket('GenAI Applications',     'var(--fp-violette)',  ps.genAiIncidentCount ?? 0,   ps.topGenAiApps ?? [],   'No incidents matched the GenAI pattern catalogue in this window.') : ''}
+      ${sec.saas_apps  ? renderBucket('SaaS & Cloud Storage',   'var(--fp-cyan-deep)', ps.saasIncidentCount ?? 0,    ps.topSaasApps ?? [],    'No incidents matched the SaaS / cloud-storage catalogue in this window.') : ''}
+      ${sec.webmail    ? renderBucket('Personal Webmail',       'var(--fp-yellow)',    ps.webmailIncidentCount ?? 0, ps.topWebmail ?? [],     'No incidents matched the webmail catalogue in this window.') : ''}
+    </div>`;
+    })() : ''}
+  
+    ${sec.data_exposure ? (() => {
+      /* CXO headline block — total bytes that crossed a policy boundary
+         in the window, with a severity-coloured stacked bar. */
+      const fb = ps.forensicBytesBySeverity ?? { HIGH: 0, MEDIUM: 0, LOW: 0 };
+      const totalBytes = Math.max(0, ps.totalForensicBytes ?? 0);
+      const pctH = totalBytes > 0 ? (fb.HIGH   / totalBytes) * 100 : 0;
+      const pctM = totalBytes > 0 ? (fb.MEDIUM / totalBytes) * 100 : 0;
+      const pctL = totalBytes > 0 ? (fb.LOW    / totalBytes) * 100 : 0;
+      return `<!-- Forensic Data Exposure -->
+    <div style="margin-bottom:14px;page-break-inside:avoid;">
+      <div style="background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-red);border-radius:6px;padding:14px 18px;box-shadow:0 2px 8px rgba(0,0,0,0.05);">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px;">
+          <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);">Forensic Data Exposure (${ps.windowDays}d)</div>
+          <div style="font-size:9.5px;color:var(--fp-ink-faint);">Sum of <code>transaction_size</code> across all incidents</div>
+        </div>
+        <div class="mono" style="font-size:32px;font-weight:800;color:var(--fp-red);letter-spacing:-0.02em;line-height:1.1;">
+          ${esc(formatBytes(totalBytes))}
+          <span style="font-size:11px;color:var(--fp-ink-faint);font-weight:600;letter-spacing:0;margin-left:8px;">crossed a policy boundary</span>
+        </div>
+        ${totalBytes > 0 ? `
+        <div style="margin-top:14px;">
+          <div style="height:18px;border-radius:3px;overflow:hidden;display:flex;background:var(--fp-rule-soft);">
+            ${pctH > 0 ? `<div style="width:${pctH}%;background:var(--fp-violette);" title="HIGH"></div>` : ''}
+            ${pctM > 0 ? `<div style="width:${pctM}%;background:var(--fp-yellow);"  title="MEDIUM"></div>` : ''}
+            ${pctL > 0 ? `<div style="width:${pctL}%;background:var(--fp-green);"   title="LOW"></div>` : ''}
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px;color:var(--fp-ink-muted);">
+            <span><span style="display:inline-block;width:8px;height:8px;background:var(--fp-violette);border-radius:2px;margin-right:5px;"></span>High&nbsp;<strong style="color:var(--fp-ink);">${esc(formatBytes(fb.HIGH))}</strong></span>
+            <span><span style="display:inline-block;width:8px;height:8px;background:var(--fp-yellow);border-radius:2px;margin-right:5px;"></span>Medium&nbsp;<strong style="color:var(--fp-ink);">${esc(formatBytes(fb.MEDIUM))}</strong></span>
+            <span><span style="display:inline-block;width:8px;height:8px;background:var(--fp-green);border-radius:2px;margin-right:5px;"></span>Low&nbsp;<strong style="color:var(--fp-ink);">${esc(formatBytes(fb.LOW))}</strong></span>
+          </div>
+        </div>` : `<div style="margin-top:10px;font-size:10.5px;color:var(--fp-ink-faint);font-style:italic;">No <code>transaction_size</code> data available — the FSM list endpoint omits this on lighter incidents. Fetch by-ID for richer forensics.</div>`}
+      </div>
+    </div>`;
+    })() : ''}
+  
+    ${(sec.endpoint_type || sec.detection_sources || sec.workflow_rates || sec.risk_sla) ? `<!-- Endpoint type + Detection sources + Workflow rates + Risk/SLA -->
+    <div style="display:flex;flex-wrap:wrap;gap:14px;page-break-inside:avoid;">
+      ${sec.endpoint_type ? `<div style="flex:1 1 220px;background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-cyan);border-radius:6px;padding:14px 16px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
+        <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);margin-bottom:10px;">Endpoint Type</div>
+        <div style="display:flex;flex-direction:column;gap:7px;font-size:10.5px;">
+          <div style="display:grid;grid-template-columns:80px 1fr 60px 45px;gap:8px;align-items:center;">
+            <span style="font-weight:600;color:var(--fp-ink);">Laptop</span>
+            <div style="height:10px;background:var(--fp-rule-soft);border-radius:2px;overflow:hidden;"><div style="width:${epPct(ps.byEndpointType.LAPTOP)}%;height:100%;background:var(--fp-cyan);"></div></div>
+            <span class="mono" style="text-align:right;font-weight:700;">${ps.byEndpointType.LAPTOP.toLocaleString()}</span>
+            <span class="mono" style="text-align:right;color:var(--fp-ink-faint);">${epPct(ps.byEndpointType.LAPTOP)}%</span>
+          </div>
+          <div style="display:grid;grid-template-columns:80px 1fr 60px 45px;gap:8px;align-items:center;">
+            <span style="font-weight:600;color:var(--fp-ink);">Desktop</span>
+            <div style="height:10px;background:var(--fp-rule-soft);border-radius:2px;overflow:hidden;"><div style="width:${epPct(ps.byEndpointType.DESKTOP)}%;height:100%;background:var(--fp-navy);"></div></div>
+            <span class="mono" style="text-align:right;font-weight:700;">${ps.byEndpointType.DESKTOP.toLocaleString()}</span>
+            <span class="mono" style="text-align:right;color:var(--fp-ink-faint);">${epPct(ps.byEndpointType.DESKTOP)}%</span>
+          </div>
+          <div style="display:grid;grid-template-columns:80px 1fr 60px 45px;gap:8px;align-items:center;">
+            <span style="font-weight:600;color:var(--fp-ink);">Network</span>
+            <div style="height:10px;background:var(--fp-rule-soft);border-radius:2px;overflow:hidden;"><div style="width:${epPct(ps.byEndpointType.NA)}%;height:100%;background:var(--fp-ink-faint);"></div></div>
+            <span class="mono" style="text-align:right;font-weight:700;">${ps.byEndpointType.NA.toLocaleString()}</span>
+            <span class="mono" style="text-align:right;color:var(--fp-ink-faint);">${epPct(ps.byEndpointType.NA)}%</span>
+          </div>
+        </div>
+      </div>` : ''}
+  
+      ${sec.detection_sources ? `<div style="flex:1 1 220px;background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-violette);border-radius:6px;padding:14px 16px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
+        <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);margin-bottom:10px;">Detection Sources</div>
+        ${Object.keys(ps.byDetectedBy).length === 0
+          ? `<div style="font-size:10.5px;color:var(--fp-ink-faint);font-style:italic;">No detection telemetry.</div>`
+          : renderBars(ps.byDetectedBy, 5, () => 'var(--fp-violette)')}
+      </div>` : ''}
+  
+      ${sec.workflow_rates ? `<div style="flex:1 1 220px;background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-yellow);border-radius:6px;padding:14px 16px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
+        <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);margin-bottom:10px;">Workflow Rates</div>
+        <div style="display:flex;flex-direction:column;gap:9px;font-size:10.5px;">
+          <div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:3px;"><span style="font-weight:600;color:var(--fp-ink);">False Positive</span><span class="mono" style="font-weight:700;">${ps.falsePositiveCount.toLocaleString()} <span style="color:var(--fp-ink-faint);">(${fpRate}%)</span></span></div>
+            <div style="height:8px;background:var(--fp-rule-soft);border-radius:2px;overflow:hidden;"><div style="width:${fpRate}%;height:100%;background:var(--fp-ink-faint);"></div></div>
+          </div>
+          <div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:3px;"><span style="font-weight:600;color:var(--fp-ink);">Released</span><span class="mono" style="font-weight:700;">${ps.releasedIncidentCount.toLocaleString()} <span style="color:var(--fp-ink-faint);">(${relRate}%)</span></span></div>
+            <div style="height:8px;background:var(--fp-rule-soft);border-radius:2px;overflow:hidden;"><div style="width:${relRate}%;height:100%;background:var(--fp-yellow);"></div></div>
+          </div>
+          <div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:3px;"><span style="font-weight:600;color:var(--fp-ink);">Ignored</span><span class="mono" style="font-weight:700;">${ps.ignoredCount.toLocaleString()} <span style="color:var(--fp-ink-faint);">(${ignRate}%)</span></span></div>
+            <div style="height:8px;background:var(--fp-rule-soft);border-radius:2px;overflow:hidden;"><div style="width:${ignRate}%;height:100%;background:var(--fp-cyan);"></div></div>
+          </div>
+        </div>
+      </div>` : ''}
+  
+      ${sec.risk_sla ? (() => {
+        const riskCount = ps.riskLevelPositiveCount ?? 0;
+        const slaCount  = ps.slaBreachCount ?? 0;
+        const riskPct = total > 0 ? Math.round((riskCount / total) * 1000) / 10 : 0;
+        const slaPct  = total > 0 ? Math.round((slaCount  / total) * 1000) / 10 : 0;
+        return `<div style="flex:1 1 220px;background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-red);border-radius:6px;padding:14px 16px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
+          <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);margin-bottom:10px;">Risk Adaptive &amp; SLA</div>
+          <div style="display:flex;flex-direction:column;gap:9px;font-size:10.5px;">
+            <div>
+              <div style="display:flex;justify-content:space-between;margin-bottom:3px;"><span style="font-weight:600;color:var(--fp-ink);">Risk-Adaptive Coverage</span><span class="mono" style="font-weight:700;">${riskCount.toLocaleString()} <span style="color:var(--fp-ink-faint);">(${riskPct}%)</span></span></div>
+              <div style="height:8px;background:var(--fp-rule-soft);border-radius:2px;overflow:hidden;"><div style="width:${riskPct}%;height:100%;background:var(--fp-violette);"></div></div>
+              <div style="font-size:9.5px;color:var(--fp-ink-faint);margin-top:3px;line-height:1.4;">Incidents carrying a positive <code>risk_level</code> — Risk-Adaptive Protection touched these.</div>
+            </div>
+            <div>
+              <div style="display:flex;justify-content:space-between;margin-bottom:3px;"><span style="font-weight:600;color:var(--fp-ink);">SLA Breach (&gt;24h)</span><span class="mono" style="font-weight:700;">${slaCount.toLocaleString()} <span style="color:var(--fp-ink-faint);">(${slaPct}%)</span></span></div>
+              <div style="height:8px;background:var(--fp-rule-soft);border-radius:2px;overflow:hidden;"><div style="width:${slaPct}%;height:100%;background:var(--fp-red);"></div></div>
+              <div style="font-size:9.5px;color:var(--fp-ink-faint);margin-top:3px;line-height:1.4;">NEW or IN_PROCESS incidents older than 24h — analyst workflow backlog.</div>
+            </div>
+          </div>
+        </div>`;
+      })() : ''}
+    </div>` : ''}
+  </div>`;
+  })() : '';
+
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2939,6 +3323,28 @@ ${(() => {
      markers (regex-stripped post-render). CISO briefing skips all the
      technical evidence and jumps from Part I to the roadmap.
 ══════════════════════════════════════ -->
+
+<!-- ══════════════════════════════════════
+     PART II (executive variant) — Posture Telemetry only
+     The full technical Part II is wrapped in TECH_ONLY below and
+     stripped from the Executive Risk Briefing. We still want the
+     CISO-grade DLP posture dashboard, so an EXEC_ONLY mini-chapter
+     here surfaces just that section using the shared postureSection
+     const (so changes to the section template propagate to both
+     variants automatically).
+══════════════════════════════════════ -->
+<!--VARIANT:EXEC_ONLY:START-->
+<div class="chapter">
+  <div class="chapter-part">PART II</div>
+  <div class="chapter-title">Security Posture</div>
+  <div class="chapter-sub">Live DLP telemetry pulled from the customer's Forcepoint REST API — categorical rollups only, no individual user names cross this boundary.</div>
+</div>
+
+<div class="content">
+${postureSection}
+</div><!-- /content (executive Part II closes here) -->
+<!--VARIANT:EXEC_ONLY:END-->
+
 <!--VARIANT:TECH_ONLY:START-->
 <div class="chapter">
   <div class="chapter-part">PART II</div>
@@ -3479,7 +3885,6 @@ ${p.dlpBundles.length > 0 ? `
      service logs. Operator-starred (★) findings only — clean logs never
      reach this section. Tech-only — not part of the CISO Executive Briefing.
 ══════════════════════════════════════ -->
-<!--VARIANT:TECH_ONLY:BEGIN-->
 ${(() => {
   const dlpLog = p.dlpAllLogReport;
   const auditLog = p.auditLogReport;
@@ -3583,7 +3988,6 @@ ${(() => {
   ` : ''}
 </div>`;
 })()}
-<!--VARIANT:TECH_ONLY:END-->
 
 <!-- ══════════════════════════════════════
      ENDPOINT AGENT ANALYSIS
@@ -4322,381 +4726,7 @@ ${p.versionUpgrades.length > 0 ? `
      Per the project's redaction rules, only categorical aggregations are
      emitted — no login names, AD domains, or run-as identities.
 ══════════════════════════════════════ -->
-${(p.dlpPostureSummary && Object.values(p.dlpPostureSections).some(Boolean)) ? (() => {
-  const ps = p.dlpPostureSummary!;
-  const sec = p.dlpPostureSections;
-  const total = Math.max(1, ps.totalIncidents);
-  const sevHigh = ps.bySeverity.HIGH, sevMed = ps.bySeverity.MEDIUM, sevLow = ps.bySeverity.LOW;
-  const sevHighPct = Math.round((sevHigh / total) * 1000) / 10;
-  const sevMedPct  = Math.round((sevMed  / total) * 1000) / 10;
-  const sevLowPct  = Math.round((sevLow  / total) * 1000) / 10;
-
-  /* Severity donut (mirrors the DLP Activity Snapshot styling) */
-  const sevSegs: { color: string; from: number; to: number }[] = [];
-  let ang = 0;
-  if (sevHigh > 0) { const slice = (sevHigh / total) * 360; sevSegs.push({ color: 'var(--fp-violette)', from: ang, to: ang + slice }); ang += slice; }
-  if (sevMed  > 0) { const slice = (sevMed  / total) * 360; sevSegs.push({ color: 'var(--fp-yellow)',   from: ang, to: ang + slice }); ang += slice; }
-  if (sevLow  > 0) { const slice = (sevLow  / total) * 360; sevSegs.push({ color: 'var(--fp-green)',    from: ang, to: ang + slice }); ang += slice; }
-  const sevDonut = sevSegs.length === 0
-    ? `conic-gradient(#E2E8F0 0deg 360deg)`
-    : `conic-gradient(${sevSegs.map(s => `${s.color} ${s.from}deg ${s.to}deg`).join(', ')})`;
-
-  /* Action color helper — reuses the palette tuned for the PDF snapshot. */
-  const actionColor = (act: string) => /BLOCKED/i.test(act) ? 'var(--fp-violette)'
-    : /QUARANTIN/i.test(act) ? 'var(--fp-red)'
-    : /RELEASED/i.test(act) ? 'var(--fp-yellow)'
-    : /ENCRYPTED/i.test(act) ? 'var(--fp-cyan)'
-    : /AUDITED|PERMITTED/i.test(act) ? 'var(--fp-green)'
-    : /UNSHARE/i.test(act) ? 'var(--fp-navy)'
-    : 'var(--fp-ink-muted)';
-  const channelColor = (ch: string) => /ENDPOINT/i.test(ch) ? 'var(--fp-cyan)'
-    : /EMAIL/i.test(ch) ? 'var(--fp-navy)'
-    : /CASB/i.test(ch) ? 'var(--fp-violette)'
-    : /HTTPS|HTTP/i.test(ch) ? 'var(--fp-green)'
-    : 'var(--fp-ink-muted)';
-
-  /* Render a horizontal bar list from a label→count map, top N. */
-  const renderBars = (map: Record<string, number>, n: number, color: (k: string) => string) => {
-    const entries = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, n);
-    const max = Math.max(1, ...entries.map(([, v]) => v));
-    if (entries.length === 0) {
-      return `<div style="font-size:10.5px;color:var(--fp-ink-faint);font-style:italic;">No data in window.</div>`;
-    }
-    return entries.map(([label, count]) => {
-      const w = Math.max(1, Math.round((count / max) * 100));
-      const pctLbl = Math.round((count / total) * 1000) / 10;
-      return `<div style="display:grid;grid-template-columns:170px 1fr 70px 50px;gap:10px;align-items:center;font-size:11px;margin-bottom:6px;">
-        <div style="font-weight:600;color:var(--fp-ink);font-size:10.5px;word-break:break-word;">${esc(label.replace(/_/g, ' '))}</div>
-        <div style="height:13px;background:var(--fp-rule-soft);border-radius:3px;overflow:hidden;"><div style="width:${w}%;height:100%;background:${color(label)};border-radius:3px;"></div></div>
-        <div class="mono" style="text-align:right;font-weight:700;color:var(--fp-ink);">${count.toLocaleString()}</div>
-        <div class="mono" style="text-align:right;color:var(--fp-ink-faint);font-size:10.5px;">${pctLbl}%</div>
-      </div>`;
-    }).join('');
-  };
-
-  const deployCfg: Record<string, { color: string; bg: string; border: string; label: string }> = {
-    COMPLETED:           { color: '#16A34A', bg: '#F0FDF4', border: '#BBF7D0', label: 'Completed' },
-    IN_PROGRESS:         { color: '#0284C7', bg: '#F0F9FF', border: '#BAE6FD', label: 'In Progress' },
-    PENDING_DEPLOYMENT:  { color: '#B58800', bg: '#FFFBEB', border: '#FDE68A', label: 'Pending Deployment' },
-    FAILED:              { color: '#DC2626', bg: '#FEF2F2', border: '#FECACA', label: 'Failed' },
-    UNKNOWN:             { color: '#64748B', bg: '#F1F5F9', border: '#E2E8F0', label: 'Unknown' },
-  };
-  const dCfg = deployCfg[ps.deploymentStatus] ?? deployCfg.UNKNOWN;
-
-  const epTotal = ps.byEndpointType.LAPTOP + ps.byEndpointType.DESKTOP + ps.byEndpointType.NA;
-  const epPct = (n: number) => epTotal > 0 ? Math.round((n / epTotal) * 1000) / 10 : 0;
-
-  const fpRate  = total > 0 ? Math.round((ps.falsePositiveCount  / total) * 1000) / 10 : 0;
-  const relRate = total > 0 ? Math.round((ps.releasedIncidentCount / total) * 1000) / 10 : 0;
-  const ignRate = total > 0 ? Math.round((ps.ignoredCount        / total) * 1000) / 10 : 0;
-
-  return `
-<div class="section">
-  <div class="section-eyebrow">Section 13 · Part II · Posture Telemetry</div>
-  <div class="section-title">Information Security Posture Dashboard</div>
-  <p class="section-lead">
-    Live posture snapshot pulled from the customer's Forcepoint DLP REST API over the last
-    <strong>${ps.windowDays} days</strong>. CXO-grade categorical rollups plus the top-users
-    offender leaderboard; AD domains, run-as identifiers, and host names remain redacted. Fetched
-    <span class="mono" style="color:var(--fp-ink-muted);">${esc(new Date(ps.fetchedAt).toLocaleString())}</span>
-    from <span class="mono" style="color:var(--fp-ink-muted);">${esc(ps.serverBaseUrl)}</span>.
-    ${hasDLP ? `<br/><span style="color:var(--fp-ink-faint);font-size:11.5px;">The
-      SQL-driven <em>Data Security Usage</em> section is intentionally omitted while REST API
-      posture data is present — the API hits the same FSM source-of-truth and emits a richer
-      cross-section, so DLP coverage runs through this single authoritative block to avoid
-      duplicate numbers.</span>` : ''}
-  </p>
-
-  ${sec.overview ? `<!-- KPI strip: deploy status + headline counts -->
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px;page-break-inside:avoid;">
-    <div style="background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-navy);border-radius:6px;padding:12px 14px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
-      <div style="font-size:9px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;color:var(--fp-ink-faint);">DLP Version</div>
-      <div class="mono" style="font-size:18px;font-weight:800;color:var(--fp-navy);margin-top:4px;">${esc(ps.dlpVersion || '—')}</div>
-    </div>
-    <div style="background:${dCfg.bg};border:1px solid ${dCfg.border};border-top:3px solid ${dCfg.color};border-radius:6px;padding:12px 14px;">
-      <div style="font-size:9px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;color:var(--fp-ink-faint);">Deployment Status</div>
-      <div style="font-size:14px;font-weight:800;color:${dCfg.color};margin-top:4px;">${esc(dCfg.label)}</div>
-    </div>
-    <div style="background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-cyan);border-radius:6px;padding:12px 14px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
-      <div style="font-size:9px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;color:var(--fp-ink-faint);">Enabled Policies</div>
-      <div class="mono" style="font-size:18px;font-weight:800;color:var(--fp-cyan-deep);margin-top:4px;">${ps.enabledDlpPolicies.toLocaleString()} <span style="font-size:10px;font-weight:600;color:var(--fp-ink-faint);">DLP</span> · ${ps.enabledDiscoveryPolicies.toLocaleString()} <span style="font-size:10px;font-weight:600;color:var(--fp-ink-faint);">Disc</span></div>
-    </div>
-    <div style="background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-violette);border-radius:6px;padding:12px 14px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
-      <div style="font-size:9px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;color:var(--fp-ink-faint);">Incidents (${ps.windowDays}d)</div>
-      <div class="mono" style="font-size:18px;font-weight:800;color:var(--fp-violette);margin-top:4px;">${ps.totalIncidents.toLocaleString()}</div>
-    </div>
-  </div>` : ''}
-
-  ${(sec.severity || sec.action) ? `<!-- Severity donut + Action bars -->
-  <div style="display:flex;flex-wrap:wrap;gap:14px;page-break-inside:avoid;margin-bottom:14px;">
-    ${sec.severity ? `<div style="flex:0 0 230px;background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-navy);border-radius:6px;padding:16px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,0.05);">
-      <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);margin-bottom:10px;">Incidents by Severity</div>
-      <div style="width:150px;height:150px;border-radius:50%;background:${sevDonut};margin:0 auto;display:flex;align-items:center;justify-content:center;">
-        <div style="width:96px;height:96px;border-radius:50%;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;">
-          <div style="font-size:22px;font-weight:700;color:var(--fp-navy);line-height:1;letter-spacing:-0.02em;">${ps.totalIncidents.toLocaleString()}</div>
-          <div style="font-size:8px;color:var(--fp-ink-faint);letter-spacing:0.14em;text-transform:uppercase;margin-top:4px;font-weight:700;">Total</div>
-        </div>
-      </div>
-      <div style="margin-top:12px;display:flex;flex-direction:column;gap:5px;font-size:10.5px;">
-        <div style="display:flex;align-items:center;gap:6px;"><span style="width:9px;height:9px;background:var(--fp-violette);border-radius:2px;"></span><span style="flex:1;text-align:left;color:var(--fp-ink);font-weight:500;">High</span><span class="mono" style="font-weight:700;">${sevHigh.toLocaleString()}</span><span class="mono" style="color:var(--fp-ink-faint);">${sevHighPct}%</span></div>
-        <div style="display:flex;align-items:center;gap:6px;"><span style="width:9px;height:9px;background:var(--fp-yellow);border-radius:2px;"></span><span style="flex:1;text-align:left;color:var(--fp-ink);font-weight:500;">Medium</span><span class="mono" style="font-weight:700;">${sevMed.toLocaleString()}</span><span class="mono" style="color:var(--fp-ink-faint);">${sevMedPct}%</span></div>
-        <div style="display:flex;align-items:center;gap:6px;"><span style="width:9px;height:9px;background:var(--fp-green);border-radius:2px;"></span><span style="flex:1;text-align:left;color:var(--fp-ink);font-weight:500;">Low</span><span class="mono" style="font-weight:700;">${sevLow.toLocaleString()}</span><span class="mono" style="color:var(--fp-ink-faint);">${sevLowPct}%</span></div>
-      </div>
-    </div>` : ''}
-
-    ${sec.action ? `<div style="flex:1 1 280px;background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-cyan);border-radius:6px;padding:16px 20px;box-shadow:0 2px 8px rgba(0,0,0,0.05);">
-      <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);margin-bottom:10px;">Incidents by Action</div>
-      ${renderBars(ps.byAction, 8, actionColor)}
-    </div>` : ''}
-  </div>` : ''}
-
-  ${(sec.channel || sec.status) ? `<!-- Channel + Status side-by-side -->
-  <div style="display:flex;flex-wrap:wrap;gap:14px;page-break-inside:avoid;margin-bottom:14px;">
-    ${sec.channel ? `<div style="flex:1 1 280px;background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-cyan-deep);border-radius:6px;padding:14px 16px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
-      <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);margin-bottom:10px;">Top Channels</div>
-      ${renderBars(ps.byChannel, 8, channelColor)}
-    </div>` : ''}
-    ${sec.status ? `<div style="flex:1 1 280px;background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-navy);border-radius:6px;padding:14px 16px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
-      <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);margin-bottom:10px;">Workflow Status</div>
-      ${(() => {
-        const entries = Object.entries(ps.byStatus).sort((a, b) => b[1] - a[1]);
-        if (entries.length === 0) return `<div style="font-size:10.5px;color:var(--fp-ink-faint);font-style:italic;">No status telemetry in window.</div>`;
-        return `<div style="display:flex;flex-wrap:wrap;gap:6px;">
-          ${entries.map(([s, c]) => {
-            const norm = s.toUpperCase().replace(/\\s+/g, '_');
-            const col = norm === 'NEW' ? 'var(--fp-cyan)'
-                      : norm === 'IN_PROCESS' ? 'var(--fp-yellow)'
-                      : norm === 'CLOSE' || norm === 'CLOSED' ? 'var(--fp-green)'
-                      : norm === 'FALSE_POSITIVE' ? 'var(--fp-ink-faint)'
-                      : norm === 'ESCALATED' ? 'var(--fp-violette)'
-                      : 'var(--fp-navy)';
-            return `<span style="display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:14px;background:${col}14;border:1px solid ${col}40;font-size:10.5px;color:${col};font-weight:700;">
-              <span style="text-transform:uppercase;letter-spacing:0.04em;">${esc(s)}</span>
-              <span class="mono" style="background:#fff;padding:1px 6px;border-radius:6px;color:var(--fp-ink);">${c.toLocaleString()}</span>
-            </span>`;
-          }).join('')}
-        </div>`;
-      })()}
-    </div>` : ''}
-  </div>` : ''}
-
-  ${(sec.policies || sec.destinations) ? `<!-- Top policies + Top destinations -->
-  <div style="display:flex;flex-wrap:wrap;gap:14px;page-break-inside:avoid;margin-bottom:14px;">
-    ${sec.policies ? `<div style="flex:1 1 280px;background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-red);border-radius:6px;padding:14px 16px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
-      <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);margin-bottom:10px;">Top Triggered Policies</div>
-      ${ps.topPolicies.length === 0
-        ? `<div style="font-size:10.5px;color:var(--fp-ink-faint);font-style:italic;">No policy hits in window.</div>`
-        : `<table style="margin:0;box-shadow:none;border:1px solid var(--fp-rule);">
-          <thead><tr><th style="padding:5px 8px;font-size:9px;">Policy</th><th style="padding:5px 8px;font-size:9px;width:70px;text-align:right;">Count</th></tr></thead>
-          <tbody>${ps.topPolicies.map((r) => `<tr>
-            <td style="padding:5px 8px;font-size:10.5px;color:var(--fp-ink);font-weight:500;">${esc(r.label)}</td>
-            <td class="mono" style="padding:5px 8px;font-size:10.5px;color:var(--fp-ink);font-weight:700;text-align:right;">${r.count.toLocaleString()}</td>
-          </tr>`).join('')}</tbody>
-        </table>`}
-    </div>` : ''}
-    ${sec.destinations ? `<div style="flex:1 1 280px;background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-cyan-deep);border-radius:6px;padding:14px 16px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
-      <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);margin-bottom:10px;">Top Destinations</div>
-      ${ps.topDestinations.length === 0
-        ? `<div style="font-size:10.5px;color:var(--fp-ink-faint);font-style:italic;">No destination data in window.</div>`
-        : `<table style="margin:0;box-shadow:none;border:1px solid var(--fp-rule);">
-          <thead><tr><th style="padding:5px 8px;font-size:9px;">Destination</th><th style="padding:5px 8px;font-size:9px;width:70px;text-align:right;">Count</th></tr></thead>
-          <tbody>${ps.topDestinations.map((r) => `<tr>
-            <td style="padding:5px 8px;font-size:10.5px;color:var(--fp-ink);font-weight:500;word-break:break-all;">${esc(r.label)}</td>
-            <td class="mono" style="padding:5px 8px;font-size:10.5px;color:var(--fp-ink);font-weight:700;text-align:right;">${r.count.toLocaleString()}</td>
-          </tr>`).join('')}</tbody>
-        </table>`}
-    </div>` : ''}
-  </div>` : ''}
-
-  ${sec.users ? (() => {
-    const list = ps.topUsers ?? [];
-    const maxCount = Math.max(1, ...list.map((u) => u.count));
-    return `<!-- Top Users (Offenders) — CXO offender list -->
-  <div style="margin-bottom:14px;page-break-inside:avoid;">
-    <div style="background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-red);border-radius:6px;padding:14px 18px;box-shadow:0 2px 8px rgba(0,0,0,0.05);">
-      <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px;">
-        <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);">Top Users — Offender Leaderboard</div>
-        <div style="font-size:9.5px;color:var(--fp-ink-faint);">${list.length} of ${ps.totalIncidents.toLocaleString()} incident sources surfaced</div>
-      </div>
-      ${list.length === 0
-        ? `<div style="font-size:11px;color:var(--fp-ink-faint);font-style:italic;">No user telemetry surfaced — incidents may have arrived without <code>source.login_name</code> populated.</div>`
-        : `<table style="margin:0;box-shadow:none;border:1px solid var(--fp-rule);">
-          <thead><tr>
-            <th style="padding:6px 10px;font-size:9px;width:30px;text-align:center;">#</th>
-            <th style="padding:6px 10px;font-size:9px;">User</th>
-            <th style="padding:6px 10px;font-size:9px;">Distribution</th>
-            <th style="padding:6px 10px;font-size:9px;width:90px;text-align:right;">Incidents</th>
-            <th style="padding:6px 10px;font-size:9px;width:70px;text-align:right;">Share</th>
-          </tr></thead>
-          <tbody>${list.map((u, i) => {
-            const w = Math.round((u.count / maxCount) * 100);
-            const pctOfAll = ps.totalIncidents > 0 ? Math.round((u.count / ps.totalIncidents) * 1000) / 10 : 0;
-            const rankColor = i === 0 ? 'var(--fp-violette)' : i < 3 ? 'var(--fp-red)' : 'var(--fp-ink-muted)';
-            return `<tr>
-              <td class="mono" style="padding:6px 10px;font-size:11px;text-align:center;font-weight:800;color:${rankColor};">${i + 1}</td>
-              <td style="padding:6px 10px;font-size:11px;font-weight:600;color:var(--fp-ink);">${esc(u.label)}</td>
-              <td style="padding:6px 10px;"><div style="height:9px;background:var(--fp-rule-soft);border-radius:2px;overflow:hidden;"><div style="width:${w}%;height:100%;background:${rankColor};"></div></div></td>
-              <td class="mono" style="padding:6px 10px;font-size:11px;text-align:right;font-weight:700;color:var(--fp-ink);">${u.count.toLocaleString()}</td>
-              <td class="mono" style="padding:6px 10px;font-size:10.5px;text-align:right;color:var(--fp-ink-faint);">${pctOfAll}%</td>
-            </tr>`;
-          }).join('')}</tbody>
-        </table>`}
-    </div>
-  </div>`;
-  })() : ''}
-
-  ${(sec.genai_apps || sec.saas_apps || sec.webmail) ? (() => {
-    /* CXO Exfil-Vector exposure strip — three side-by-side cards each
-       showing a pattern-classified destination bucket. Headline number
-       per bucket is the incident count; the table below lists the top
-       hits within that bucket. */
-    const renderBucket = (
-      title, accent, hits, list, emptyMsg,
-    ) => {
-      const maxC = Math.max(1, ...list.map((r) => r.count));
-      const pct = ps.totalIncidents > 0 ? Math.round((hits / ps.totalIncidents) * 1000) / 10 : 0;
-      return `<div style="flex:1 1 300px;background:#fff;border:1px solid var(--fp-rule);border-top:3px solid ${accent};border-radius:6px;padding:14px 16px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
-        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px;">
-          <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);">${title}</div>
-          <div style="font-size:9.5px;color:var(--fp-ink-faint);">${pct}% of incidents</div>
-        </div>
-        <div class="mono" style="font-size:22px;font-weight:800;color:${accent};line-height:1.1;margin-bottom:10px;">${hits.toLocaleString()} <span style="font-size:10px;font-weight:600;color:var(--fp-ink-faint);">incidents</span></div>
-        ${list.length === 0
-          ? `<div style="font-size:10.5px;color:var(--fp-ink-faint);font-style:italic;">${esc(emptyMsg)}</div>`
-          : `<table style="margin:0;box-shadow:none;border:1px solid var(--fp-rule);">
-            <thead><tr><th style="padding:5px 8px;font-size:9px;">Destination</th><th style="padding:5px 8px;font-size:9px;width:60px;text-align:right;">Hits</th></tr></thead>
-            <tbody>${list.map((r) => {
-              const w = Math.round((r.count / maxC) * 100);
-              return `<tr>
-                <td style="padding:4px 8px;font-size:10px;color:var(--fp-ink);font-weight:500;word-break:break-all;">
-                  <div>${esc(r.label)}</div>
-                  <div style="height:5px;background:var(--fp-rule-soft);border-radius:2px;margin-top:3px;overflow:hidden;"><div style="width:${w}%;height:100%;background:${accent};"></div></div>
-                </td>
-                <td class="mono" style="padding:4px 8px;font-size:10px;font-weight:700;color:var(--fp-ink);text-align:right;">${r.count.toLocaleString()}</td>
-              </tr>`;
-            }).join('')}</tbody>
-          </table>`}
-      </div>`;
-    };
-    return `<!-- Exfil-vector exposure: GenAI / SaaS / Webmail -->
-  <div style="display:flex;flex-wrap:wrap;gap:14px;page-break-inside:avoid;margin-bottom:14px;">
-    ${sec.genai_apps ? renderBucket('GenAI Applications',     'var(--fp-violette)',  ps.genAiIncidentCount ?? 0,   ps.topGenAiApps ?? [],   'No incidents matched the GenAI pattern catalogue in this window.') : ''}
-    ${sec.saas_apps  ? renderBucket('SaaS & Cloud Storage',   'var(--fp-cyan-deep)', ps.saasIncidentCount ?? 0,    ps.topSaasApps ?? [],    'No incidents matched the SaaS / cloud-storage catalogue in this window.') : ''}
-    ${sec.webmail    ? renderBucket('Personal Webmail',       'var(--fp-yellow)',    ps.webmailIncidentCount ?? 0, ps.topWebmail ?? [],     'No incidents matched the webmail catalogue in this window.') : ''}
-  </div>`;
-  })() : ''}
-
-  ${sec.data_exposure ? (() => {
-    /* CXO headline block — total bytes that crossed a policy boundary
-       in the window, with a severity-coloured stacked bar. */
-    const fb = ps.forensicBytesBySeverity ?? { HIGH: 0, MEDIUM: 0, LOW: 0 };
-    const totalBytes = Math.max(0, ps.totalForensicBytes ?? 0);
-    const pctH = totalBytes > 0 ? (fb.HIGH   / totalBytes) * 100 : 0;
-    const pctM = totalBytes > 0 ? (fb.MEDIUM / totalBytes) * 100 : 0;
-    const pctL = totalBytes > 0 ? (fb.LOW    / totalBytes) * 100 : 0;
-    return `<!-- Forensic Data Exposure -->
-  <div style="margin-bottom:14px;page-break-inside:avoid;">
-    <div style="background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-red);border-radius:6px;padding:14px 18px;box-shadow:0 2px 8px rgba(0,0,0,0.05);">
-      <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px;">
-        <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);">Forensic Data Exposure (${ps.windowDays}d)</div>
-        <div style="font-size:9.5px;color:var(--fp-ink-faint);">Sum of <code>transaction_size</code> across all incidents</div>
-      </div>
-      <div class="mono" style="font-size:32px;font-weight:800;color:var(--fp-red);letter-spacing:-0.02em;line-height:1.1;">
-        ${esc(formatBytes(totalBytes))}
-        <span style="font-size:11px;color:var(--fp-ink-faint);font-weight:600;letter-spacing:0;margin-left:8px;">crossed a policy boundary</span>
-      </div>
-      ${totalBytes > 0 ? `
-      <div style="margin-top:14px;">
-        <div style="height:18px;border-radius:3px;overflow:hidden;display:flex;background:var(--fp-rule-soft);">
-          ${pctH > 0 ? `<div style="width:${pctH}%;background:var(--fp-violette);" title="HIGH"></div>` : ''}
-          ${pctM > 0 ? `<div style="width:${pctM}%;background:var(--fp-yellow);"  title="MEDIUM"></div>` : ''}
-          ${pctL > 0 ? `<div style="width:${pctL}%;background:var(--fp-green);"   title="LOW"></div>` : ''}
-        </div>
-        <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px;color:var(--fp-ink-muted);">
-          <span><span style="display:inline-block;width:8px;height:8px;background:var(--fp-violette);border-radius:2px;margin-right:5px;"></span>High&nbsp;<strong style="color:var(--fp-ink);">${esc(formatBytes(fb.HIGH))}</strong></span>
-          <span><span style="display:inline-block;width:8px;height:8px;background:var(--fp-yellow);border-radius:2px;margin-right:5px;"></span>Medium&nbsp;<strong style="color:var(--fp-ink);">${esc(formatBytes(fb.MEDIUM))}</strong></span>
-          <span><span style="display:inline-block;width:8px;height:8px;background:var(--fp-green);border-radius:2px;margin-right:5px;"></span>Low&nbsp;<strong style="color:var(--fp-ink);">${esc(formatBytes(fb.LOW))}</strong></span>
-        </div>
-      </div>` : `<div style="margin-top:10px;font-size:10.5px;color:var(--fp-ink-faint);font-style:italic;">No <code>transaction_size</code> data available — the FSM list endpoint omits this on lighter incidents. Fetch by-ID for richer forensics.</div>`}
-    </div>
-  </div>`;
-  })() : ''}
-
-  ${(sec.endpoint_type || sec.detection_sources || sec.workflow_rates || sec.risk_sla) ? `<!-- Endpoint type + Detection sources + Workflow rates + Risk/SLA -->
-  <div style="display:flex;flex-wrap:wrap;gap:14px;page-break-inside:avoid;">
-    ${sec.endpoint_type ? `<div style="flex:1 1 220px;background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-cyan);border-radius:6px;padding:14px 16px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
-      <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);margin-bottom:10px;">Endpoint Type</div>
-      <div style="display:flex;flex-direction:column;gap:7px;font-size:10.5px;">
-        <div style="display:grid;grid-template-columns:80px 1fr 60px 45px;gap:8px;align-items:center;">
-          <span style="font-weight:600;color:var(--fp-ink);">Laptop</span>
-          <div style="height:10px;background:var(--fp-rule-soft);border-radius:2px;overflow:hidden;"><div style="width:${epPct(ps.byEndpointType.LAPTOP)}%;height:100%;background:var(--fp-cyan);"></div></div>
-          <span class="mono" style="text-align:right;font-weight:700;">${ps.byEndpointType.LAPTOP.toLocaleString()}</span>
-          <span class="mono" style="text-align:right;color:var(--fp-ink-faint);">${epPct(ps.byEndpointType.LAPTOP)}%</span>
-        </div>
-        <div style="display:grid;grid-template-columns:80px 1fr 60px 45px;gap:8px;align-items:center;">
-          <span style="font-weight:600;color:var(--fp-ink);">Desktop</span>
-          <div style="height:10px;background:var(--fp-rule-soft);border-radius:2px;overflow:hidden;"><div style="width:${epPct(ps.byEndpointType.DESKTOP)}%;height:100%;background:var(--fp-navy);"></div></div>
-          <span class="mono" style="text-align:right;font-weight:700;">${ps.byEndpointType.DESKTOP.toLocaleString()}</span>
-          <span class="mono" style="text-align:right;color:var(--fp-ink-faint);">${epPct(ps.byEndpointType.DESKTOP)}%</span>
-        </div>
-        <div style="display:grid;grid-template-columns:80px 1fr 60px 45px;gap:8px;align-items:center;">
-          <span style="font-weight:600;color:var(--fp-ink);">Network</span>
-          <div style="height:10px;background:var(--fp-rule-soft);border-radius:2px;overflow:hidden;"><div style="width:${epPct(ps.byEndpointType.NA)}%;height:100%;background:var(--fp-ink-faint);"></div></div>
-          <span class="mono" style="text-align:right;font-weight:700;">${ps.byEndpointType.NA.toLocaleString()}</span>
-          <span class="mono" style="text-align:right;color:var(--fp-ink-faint);">${epPct(ps.byEndpointType.NA)}%</span>
-        </div>
-      </div>
-    </div>` : ''}
-
-    ${sec.detection_sources ? `<div style="flex:1 1 220px;background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-violette);border-radius:6px;padding:14px 16px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
-      <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);margin-bottom:10px;">Detection Sources</div>
-      ${Object.keys(ps.byDetectedBy).length === 0
-        ? `<div style="font-size:10.5px;color:var(--fp-ink-faint);font-style:italic;">No detection telemetry.</div>`
-        : renderBars(ps.byDetectedBy, 5, () => 'var(--fp-violette)')}
-    </div>` : ''}
-
-    ${sec.workflow_rates ? `<div style="flex:1 1 220px;background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-yellow);border-radius:6px;padding:14px 16px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
-      <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);margin-bottom:10px;">Workflow Rates</div>
-      <div style="display:flex;flex-direction:column;gap:9px;font-size:10.5px;">
-        <div>
-          <div style="display:flex;justify-content:space-between;margin-bottom:3px;"><span style="font-weight:600;color:var(--fp-ink);">False Positive</span><span class="mono" style="font-weight:700;">${ps.falsePositiveCount.toLocaleString()} <span style="color:var(--fp-ink-faint);">(${fpRate}%)</span></span></div>
-          <div style="height:8px;background:var(--fp-rule-soft);border-radius:2px;overflow:hidden;"><div style="width:${fpRate}%;height:100%;background:var(--fp-ink-faint);"></div></div>
-        </div>
-        <div>
-          <div style="display:flex;justify-content:space-between;margin-bottom:3px;"><span style="font-weight:600;color:var(--fp-ink);">Released</span><span class="mono" style="font-weight:700;">${ps.releasedIncidentCount.toLocaleString()} <span style="color:var(--fp-ink-faint);">(${relRate}%)</span></span></div>
-          <div style="height:8px;background:var(--fp-rule-soft);border-radius:2px;overflow:hidden;"><div style="width:${relRate}%;height:100%;background:var(--fp-yellow);"></div></div>
-        </div>
-        <div>
-          <div style="display:flex;justify-content:space-between;margin-bottom:3px;"><span style="font-weight:600;color:var(--fp-ink);">Ignored</span><span class="mono" style="font-weight:700;">${ps.ignoredCount.toLocaleString()} <span style="color:var(--fp-ink-faint);">(${ignRate}%)</span></span></div>
-          <div style="height:8px;background:var(--fp-rule-soft);border-radius:2px;overflow:hidden;"><div style="width:${ignRate}%;height:100%;background:var(--fp-cyan);"></div></div>
-        </div>
-      </div>
-    </div>` : ''}
-
-    ${sec.risk_sla ? (() => {
-      const riskCount = ps.riskLevelPositiveCount ?? 0;
-      const slaCount  = ps.slaBreachCount ?? 0;
-      const riskPct = total > 0 ? Math.round((riskCount / total) * 1000) / 10 : 0;
-      const slaPct  = total > 0 ? Math.round((slaCount  / total) * 1000) / 10 : 0;
-      return `<div style="flex:1 1 220px;background:#fff;border:1px solid var(--fp-rule);border-top:3px solid var(--fp-red);border-radius:6px;padding:14px 16px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
-        <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);margin-bottom:10px;">Risk Adaptive &amp; SLA</div>
-        <div style="display:flex;flex-direction:column;gap:9px;font-size:10.5px;">
-          <div>
-            <div style="display:flex;justify-content:space-between;margin-bottom:3px;"><span style="font-weight:600;color:var(--fp-ink);">Risk-Adaptive Coverage</span><span class="mono" style="font-weight:700;">${riskCount.toLocaleString()} <span style="color:var(--fp-ink-faint);">(${riskPct}%)</span></span></div>
-            <div style="height:8px;background:var(--fp-rule-soft);border-radius:2px;overflow:hidden;"><div style="width:${riskPct}%;height:100%;background:var(--fp-violette);"></div></div>
-            <div style="font-size:9.5px;color:var(--fp-ink-faint);margin-top:3px;line-height:1.4;">Incidents carrying a positive <code>risk_level</code> — Risk-Adaptive Protection touched these.</div>
-          </div>
-          <div>
-            <div style="display:flex;justify-content:space-between;margin-bottom:3px;"><span style="font-weight:600;color:var(--fp-ink);">SLA Breach (&gt;24h)</span><span class="mono" style="font-weight:700;">${slaCount.toLocaleString()} <span style="color:var(--fp-ink-faint);">(${slaPct}%)</span></span></div>
-            <div style="height:8px;background:var(--fp-rule-soft);border-radius:2px;overflow:hidden;"><div style="width:${slaPct}%;height:100%;background:var(--fp-red);"></div></div>
-            <div style="font-size:9.5px;color:var(--fp-ink-faint);margin-top:3px;line-height:1.4;">NEW or IN_PROCESS incidents older than 24h — analyst workflow backlog.</div>
-          </div>
-        </div>
-      </div>`;
-    })() : ''}
-  </div>` : ''}
-</div>`;
-})() : ''}
+${postureSection}
 
 <!-- Legacy raw-matrix dump retained as a hidden fallback only when an
      assessment hasn't been produced yet but the operator did import the
