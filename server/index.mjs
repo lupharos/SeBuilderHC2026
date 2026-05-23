@@ -23,6 +23,7 @@ import sql from 'mssql';
 import { DLP_QUERIES } from './queries.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
@@ -322,6 +323,73 @@ async function getDlpAccessToken({ baseUrl, username, password }, timeoutMs = 15
   }
 }
 
+/* Wraps a `dlp.fetch` job result so the posture aggregator (which was
+   written against Response objects) keeps working unchanged. The
+   connector returns `{ ok, status, body }` already-parsed-as-JSON
+   when the call succeeded, or `{ ok: false, error }` when the
+   connector itself failed (TLS, connection refused, etc). We mirror
+   the fields the aggregator touches: `.ok`, `.status`, `.json()`,
+   `.text()`. */
+function makeResponseShimFromJobPayload(payload) {
+  if (!payload || payload.ok === false) {
+    const err = (payload && payload.error) || 'Via-Connector job returned failure.';
+    return {
+      ok: false,
+      status: 0,
+      _viaConnectorError: err,
+      json: () => Promise.resolve({}),
+      text: () => Promise.resolve(err),
+    };
+  }
+  const httpOk = payload.status >= 200 && payload.status < 300;
+  return {
+    ok: httpOk,
+    status: payload.status,
+    json: () => Promise.resolve(payload.body),
+    text: () => Promise.resolve(
+      typeof payload.body === 'string' ? payload.body : JSON.stringify(payload.body),
+    ),
+  };
+}
+
+/**
+ * Transport-aware DLP REST API call.
+ *   ctx.mode = 'direct'         → companion fetches customer FSM with ctx.accessToken Bearer
+ *   ctx.mode = 'via-connector'  → enqueue `dlp.fetch` job for ctx.connectorToken, await result
+ *
+ * Returns a Response (direct) or a Response-shaped shim (via-connector)
+ * so callers can use `.ok` / `.status` / `.json()` uniformly. The
+ * companion's posture aggregator stays untouched modulo the ctx
+ * wiring.
+ */
+async function dlpFetchVia(ctx, path, init = {}, timeoutMs = 30000) {
+  if (ctx.mode === 'direct') {
+    return dlpFetch(ctx.baseUrl, ctx.accessToken, path, init, timeoutMs);
+  }
+  /* Via-Connector path. The connector handles its own Bearer token —
+     we just hand it the relative path + method + body. JSON-decode
+     the body when it's a pre-stringified payload so the connector
+     can re-serialise cleanly with the correct Content-Type. */
+  const method = (init.method || 'GET').toUpperCase();
+  let body = init.body ?? null;
+  if (typeof body === 'string' && body.length > 0) {
+    try { body = JSON.parse(body); } catch { /* keep raw string */ }
+  }
+  const jobId = enqueueJobInProcess(ctx.connectorToken, 'dlp.fetch', {
+    path,
+    method,
+    body,
+    timeout: Math.max(10, Math.round(timeoutMs / 1000)),
+  });
+  /* Give the connector the full timeout PLUS a 10s buffer for the
+     job round-trip itself before we synthesise a failure. */
+  const done = await awaitJobInProcess(jobId, timeoutMs + 10000);
+  if (!done.ok) {
+    return makeResponseShimFromJobPayload({ ok: false, error: done.error });
+  }
+  return makeResponseShimFromJobPayload(done.payload);
+}
+
 /* Convenience wrapper around fetch for DLP REST calls with auth header,
    self-signed cert tolerance, and a unified timeout. */
 async function dlpFetch(baseUrl, accessToken, path, init = {}, timeoutMs = 30000) {
@@ -346,10 +414,52 @@ async function dlpFetch(baseUrl, accessToken, path, init = {}, timeoutMs = 30000
 
 /* ─── /api/dlp/test ──────────────────────────────────────────────
    Full auth handshake + lightweight GET /deploy/status as a sanity
-   probe. Returns DLP version + deployment status on success. */
+   probe. Returns DLP version + deployment status on success.
+
+   Transport modes (Stage 3 of the Via-Connector rollout):
+     • Default (no transport / 'direct')  — companion dials the
+       customer FSM with the credentials in req.body, same as
+       before this rollout.
+     • transport='via-connector' + connectorToken — the wizard's
+       way of telling us to route the probe through the customer
+       Connector .exe instead. We don't need credentials here; the
+       connector has its own connector-secrets.json with whatever
+       creds the customer entered. We just enqueue a `dlp.test`
+       job, wait for the result, and return it in the same shape
+       the direct branch produces. */
 app.post('/api/dlp/test', async (req, res) => {
   const started = Date.now();
-  const { url, username = '', password = '' } = req.body ?? {};
+  const body = req.body ?? {};
+  const { url, username = '', password = '', transport, connectorToken } = body;
+
+  /* Via-Connector branch — connector executes the probe on its end. */
+  if (transport === 'via-connector') {
+    if (!connectorToken || typeof connectorToken !== 'string') {
+      return res.status(400).json({ ok: false, message: 'Via-Connector test requires connectorToken in body.' });
+    }
+    if (!connectorAllowlist.has(connectorToken)) {
+      return res.status(404).json({ ok: false, message: 'Connector token not registered with companion.' });
+    }
+    if (!connectorKeys.has(connectorToken)) {
+      return res.status(412).json({ ok: false, message: 'Companion has no encryption key for this token — wizard must /register first.' });
+    }
+    if (!isConnectorOnline(connectorToken)) {
+      return res.status(503).json({ ok: false, message: 'Connector for this token is OFFLINE.' });
+    }
+    const jobId = enqueueJobInProcess(connectorToken, 'dlp.test', null);
+    const done = await awaitJobInProcess(jobId, 30_000);
+    const ms = Date.now() - started;
+    if (!done.ok) return res.status(400).json({ ok: false, message: done.error, latencyMs: ms });
+    const p = done.payload || {};
+    if (p.ok) {
+      return res.json({
+        ok: true,
+        message: `Authenticated via connector · ${p.message || ''} · ${ms} ms`,
+        latencyMs: ms,
+      });
+    }
+    return res.status(400).json({ ok: false, message: p.message || 'Connector reported failure.', latencyMs: ms });
+  }
 
   try {
     if (!username || !password) {
@@ -463,7 +573,18 @@ function sanitisePatternList(arr, fallback) {
 
 app.post('/api/dlp/posture', async (req, res) => {
   const started = Date.now();
-  const { url, username = '', password = '', windowDays = 30, patterns } = req.body ?? {};
+  const {
+    url,
+    username = '',
+    password = '',
+    windowDays = 30,
+    patterns,
+    /* Transport selection (Stage 3 of the Via-Connector rollout).
+       Default 'direct' so existing wizards that don't send the field
+       keep their current behavior. */
+    transport = 'direct',
+    connectorToken,
+  } = req.body ?? {};
   const days = Math.max(1, Math.min(Math.floor(Number(windowDays) || 30), 365));
 
   /* Resolve effective pattern set — caller's lists override defaults. */
@@ -485,11 +606,33 @@ app.post('/api/dlp/posture', async (req, res) => {
   };
 
   try {
-    if (!username || !password) {
-      throw new Error('DLP REST API requires Application Administrator username + password.');
+    /* Build the transport context. Direct mode still requires the
+       creds + url from the wizard's apiConnectors.dlpApi entry;
+       Via-Connector mode never sees those — the connector reads its
+       own connector-secrets.json on the customer host. */
+    let ctx;
+    if (transport === 'via-connector') {
+      if (!connectorToken || typeof connectorToken !== 'string') {
+        return res.status(400).json({ ok: false, message: 'Via-Connector posture fetch requires connectorToken in body.' });
+      }
+      if (!connectorAllowlist.has(connectorToken)) {
+        return res.status(404).json({ ok: false, message: 'Connector token not registered with companion.' });
+      }
+      if (!connectorKeys.has(connectorToken)) {
+        return res.status(412).json({ ok: false, message: 'Companion has no encryption key for this token — wizard must /register first.' });
+      }
+      if (!isConnectorOnline(connectorToken)) {
+        return res.status(503).json({ ok: false, message: 'Connector for this token is OFFLINE.' });
+      }
+      ctx = { mode: 'via-connector', connectorToken };
+    } else {
+      if (!username || !password) {
+        throw new Error('DLP REST API requires Application Administrator username + password.');
+      }
+      const baseUrl = normaliseDlpBaseUrl(url);
+      const token = await getDlpAccessToken({ baseUrl, username, password });
+      ctx = { mode: 'direct', baseUrl, accessToken: token };
     }
-    const baseUrl = normaliseDlpBaseUrl(url);
-    const token = await getDlpAccessToken({ baseUrl, username, password });
 
     /* dd/MM/yyyy HH:mm:ss is the format /incidents expects per the spec. */
     const fmtDlpDate = (d) => {
@@ -502,12 +645,14 @@ app.post('/api/dlp/posture', async (req, res) => {
     /* Three independent fetches in parallel: deploy/status, enabled-names
        (DLP + DISCOVERY), and the incident window. /incidents tops out at
        10K rows; we request DLP type only (DISCOVERY would be a separate
-       call but isn't included in the posture dashboard for v1). */
+       call but isn't included in the posture dashboard for v1).
+       Same call shape in both transport modes — `dlpFetchVia` hides
+       the routing decision so the aggregator below stays oblivious. */
     const [deployRes, polDlpRes, polDiscRes, incRes] = await Promise.all([
-      dlpFetch(baseUrl, token, '/deploy/status'),
-      dlpFetch(baseUrl, token, '/policy/enabled-names?type=DLP'),
-      dlpFetch(baseUrl, token, '/policy/enabled-names?type=DISCOVERY'),
-      dlpFetch(baseUrl, token, '/incidents', {
+      dlpFetchVia(ctx, '/deploy/status'),
+      dlpFetchVia(ctx, '/policy/enabled-names?type=DLP'),
+      dlpFetchVia(ctx, '/policy/enabled-names?type=DISCOVERY'),
+      dlpFetchVia(ctx, '/incidents', {
         method: 'POST',
         body: JSON.stringify({
           type: 'INCIDENTS',
@@ -658,7 +803,11 @@ app.post('/api/dlp/posture', async (req, res) => {
     res.json({
       ok: true,
       fetchedAt: new Date().toISOString(),
-      serverBaseUrl: baseUrl,
+      /* serverBaseUrl is meaningful only in direct mode; under
+         via-connector the FSM URL lives on the customer host and we
+         never see it. Replace with a transport tag so the report's
+         "fetched from" caption stays informative either way. */
+      serverBaseUrl: ctx.mode === 'direct' ? ctx.baseUrl : `via-connector://${connectorToken.slice(0, 8)}…`,
       latencyMs: ms,
       windowDays: days,
       dlpVersion: deployJson.dlp_version || '',
@@ -726,9 +875,225 @@ const connectorState = new Map();
 /** @type {Map<string, string>} */
 const connectorAllowlist = new Map();
 
+/* Per-token AES-256-GCM symmetric key, hex-encoded (64 chars = 32
+   bytes). Pushed by the wizard via /api/connector/register the same
+   moment the operator generates the connector.json bundle, so the
+   companion can decrypt job results coming back from the connector
+   .exe. Stored in RAM only — wiped on process restart, which forces
+   the wizard to re-register on every page reload (already the
+   existing behavior). */
+/** @type {Map<string, string>} */
+const connectorKeys = new Map();
+
 /* Heartbeat freshness window. The connector beats every 30s; we treat
    anything < 90s as ONLINE so a single missed beat doesn't flap. */
 const CONNECTOR_ONLINE_WINDOW_MS = 90 * 1000;
+
+/* ─────────────────────────────────────────────────────────────────
+   Job queue for "Via Connector" DLP REST API mode
+   ───────────────────────────────────────────────────────────────────
+   The Customer Connector is outbound-only — it phones home, the
+   companion never initiates a TCP connection to it. So when the
+   wizard wants the connector to execute a customer-side DLP API call
+   (test, posture fetch, report run), we can't push; we have to wait
+   for the connector to pull. Mechanics:
+
+     1. Wizard POST /api/connector/job/queue
+          → companion creates jobId, pushes to pendingJobs[token],
+            and immediately resolves any waiting connector long-poll.
+     2. Connector GET /api/connector/job/next?token=X  (long-poll, 25s)
+          → if pending exists: pop & return as plaintext JSON
+          → if empty: park as a waiter; resolve when a job arrives,
+            else 204 No Content after 25s.
+     3. Connector POST /api/connector/job/result
+          → body carries an AES-256-GCM envelope produced with the
+            connector's own symmetric key; companion decrypts using
+            connectorKeys[token] and stashes the plaintext result.
+     4. Wizard GET /api/connector/job/result?jobId=Y  (short-poll, 2s)
+          → returns { status: 'pending' } until the result lands,
+            then { ok, payload } / { ok: false, error }.
+
+   Each map below keys on a different identifier (token vs jobId) so
+   we don't have to walk the world to find work. */
+
+/** Token → ordered list of jobs not yet picked up by /next. FIFO. */
+const pendingJobs = new Map(); // Map<string, Array<JobRecord>>
+/** jobId → JobRecord after /next handed it out, before /result lands. */
+const inflightJobs = new Map(); // Map<string, JobRecord>
+/** jobId → { ok, payload?, error?, completedAt } once /result arrives.
+    Wizard polls /api/connector/job/result?jobId=... to drain. */
+const completedJobs = new Map(); // Map<string, CompletedRecord>
+/** Token → array of long-poll waiters parked on /next. Each entry
+    carries a resolve fn the queue endpoint pops when a job arrives. */
+const jobWaiters = new Map(); // Map<string, Array<{ resolve, timer }>>
+
+/* Limits — defense against runaway clients / disconnected connectors.
+     • PENDING_QUEUE_MAX: hard cap on pending jobs per token. Excess
+       /queue requests get 503 instead of growing without bound.
+     • PENDING_JOB_TTL_MS:  jobs older than this in pendingJobs get
+       garbage-collected as "stale — no connector". The wizard's
+       GET /result will see them as errored.
+     • COMPLETED_JOB_TTL_MS: completed jobs are kept around for the
+       wizard to drain, then dropped.
+     • LONG_POLL_MS: how long /next holds the request open. nginx
+       proxy_read_timeout in deploy.sh is 75s, so 25s gives plenty
+       of headroom. */
+const PENDING_QUEUE_MAX     = 64;
+const PENDING_JOB_TTL_MS    = 2  * 60 * 1000; // 2 min
+const COMPLETED_JOB_TTL_MS  = 5  * 60 * 1000; // 5 min
+const LONG_POLL_MS          = 25 * 1000;
+
+/**
+ * @typedef {Object} JobRecord
+ * @property {string} jobId
+ * @property {string} token
+ * @property {string} kind        // 'dlp.test' | 'dlp.posture' | 'dlp.report'
+ * @property {any}    params      // plaintext — params themselves aren't sensitive
+ * @property {number} createdAt   // Date.now()
+ */
+
+/**
+ * @typedef {Object} CompletedRecord
+ * @property {boolean} ok
+ * @property {any}     [payload]  // decrypted plaintext from the connector
+ * @property {string}  [error]
+ * @property {number}  completedAt
+ */
+
+/* ─── AES-256-GCM envelope ───────────────────────────────────────
+   Connector sends results wrapped as { iv, ct, tag } (all hex).
+   Key is hex-encoded 32 bytes from the connector.json bundle.
+   GCM gives confidentiality + integrity in one shot, which matches
+   what the bundle already advertises (`encryptionAlgorithm: 'AES-256-GCM'`). */
+
+/**
+ * Decrypt a {iv, ct, tag} envelope produced by the connector.
+ * Returns the parsed JSON object, or throws Error with a stable
+ * message on any tag mismatch / malformed input.
+ */
+function decryptEnvelope(envelope, keyHex) {
+  if (!envelope || typeof envelope !== 'object') {
+    throw new Error('decryptEnvelope: not an object');
+  }
+  const { iv, ct, tag } = envelope;
+  if (typeof iv !== 'string' || typeof ct !== 'string' || typeof tag !== 'string') {
+    throw new Error('decryptEnvelope: iv/ct/tag must all be hex strings');
+  }
+  if (!/^[0-9a-fA-F]{64}$/.test(keyHex)) {
+    throw new Error('decryptEnvelope: key must be 64 hex chars');
+  }
+  const key   = Buffer.from(keyHex, 'hex');
+  const ivBuf = Buffer.from(iv,  'hex');
+  const ctBuf = Buffer.from(ct,  'hex');
+  const tagBuf= Buffer.from(tag, 'hex');
+  /* AES-GCM IV must be 12 bytes; reject anything else so we fail
+     fast instead of silently miscomputing. */
+  if (ivBuf.length !== 12) throw new Error('decryptEnvelope: iv must be 12 bytes (24 hex chars)');
+  if (tagBuf.length !== 16) throw new Error('decryptEnvelope: tag must be 16 bytes (32 hex chars)');
+  const decipher = createDecipheriv('aes-256-gcm', key, ivBuf);
+  decipher.setAuthTag(tagBuf);
+  const plainBuf = Buffer.concat([decipher.update(ctBuf), decipher.final()]);
+  const plainStr = plainBuf.toString('utf8');
+  try {
+    return JSON.parse(plainStr);
+  } catch {
+    /* The connector should always send JSON; if it didn't, bubble up
+       the raw string so the operator can see what arrived. */
+    throw new Error(`decryptEnvelope: payload is not valid JSON: ${plainStr.slice(0, 80)}…`);
+  }
+}
+
+/**
+ * Mostly a debugging hook — in Stage 3 the wizard could optionally
+ * encrypt request params before queueing for end-to-end secrecy.
+ * Currently unused (params are non-sensitive plaintext), but exposed
+ * for symmetry + future use.
+ * @returns {{ iv: string, ct: string, tag: string }}
+ */
+// eslint-disable-next-line no-unused-vars
+function encryptEnvelope(plaintextObj, keyHex) {
+  if (!/^[0-9a-fA-F]{64}$/.test(keyHex)) {
+    throw new Error('encryptEnvelope: key must be 64 hex chars');
+  }
+  const key   = Buffer.from(keyHex, 'hex');
+  const iv    = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const ct  = Buffer.concat([cipher.update(JSON.stringify(plaintextObj), 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return { iv: iv.toString('hex'), ct: ct.toString('hex'), tag: tag.toString('hex') };
+}
+
+/* Connector liveness probe used by the /queue endpoint to refuse
+   work when nobody's home — the operator gets an immediate 503
+   instead of wizard-side polling that never resolves. Mirrors the
+   logic in GET /api/connector/status. */
+function isConnectorOnline(token) {
+  const state = connectorState.get(token);
+  if (!state || !state.lastHeartbeatAt) return false;
+  return (Date.now() - state.lastHeartbeatAt) < CONNECTOR_ONLINE_WINDOW_MS;
+}
+
+/* In-process job enqueue for use by other endpoints (e.g. /api/dlp/posture
+   in Via-Connector mode). Skips the HTTP loopback the wizard goes
+   through; mutates the same Maps the /queue endpoint would have, so
+   subsequent /next + /result still work normally. Caller MUST verify
+   token registration / online state / key presence — we don't repeat
+   those checks here because the caller already has richer context
+   (e.g. posture knows its `connectorToken` came from a logged-in
+   wizard, no need to 404 it). */
+function enqueueJobInProcess(connectorToken, kind, params) {
+  const job = {
+    jobId: randomUUID(),
+    token: connectorToken,
+    kind,
+    params: params ?? null,
+    createdAt: Date.now(),
+  };
+  const queue = pendingJobs.get(connectorToken) ?? [];
+  queue.push(job);
+  pendingJobs.set(connectorToken, queue);
+  flushWaiters(connectorToken);
+  return job.jobId;
+}
+
+/* Wait for a job result to land in completedJobs and drain it.
+   Companion-internal counterpart of the wizard's runJobViaConnector
+   polling loop. Polls every 200ms (we're in the same process — no
+   HTTP cost) up to `timeoutMs`. */
+async function awaitJobInProcess(jobId, timeoutMs = 90000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const done = completedJobs.get(jobId);
+    if (done) {
+      completedJobs.delete(jobId);
+      return done; // { ok, payload? | error? }
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return { ok: false, error: `awaitJobInProcess: job ${jobId} timed out after ${timeoutMs / 1000}s.` };
+}
+
+/* Resolve all waiters parked on /next for a given token. Returns the
+   number of waiters that got served. Caller is responsible for
+   ensuring there's actually a job to hand them — typically called
+   right after a /queue push has appended to pendingJobs. */
+function flushWaiters(token) {
+  const waiters = jobWaiters.get(token);
+  if (!waiters || waiters.length === 0) return 0;
+  const pending = pendingJobs.get(token);
+  if (!pending || pending.length === 0) return 0;
+  let served = 0;
+  while (waiters.length > 0 && pending.length > 0) {
+    const job = pending.shift();
+    const w = waiters.shift();
+    clearTimeout(w.timer);
+    w.resolve(job);
+    served++;
+  }
+  if (waiters.length === 0) jobWaiters.delete(token);
+  if (pending.length === 0) pendingJobs.delete(token);
+  return served;
+}
 
 function clientIp(req) {
   const xff = req.headers['x-forwarded-for'];
@@ -779,17 +1144,23 @@ function ipMatchesAllowlist(clientIpStr, allowed) {
 }
 
 /* POST /api/connector/register
-   Body: { token: string, allowedSourceIp?: string }
+   Body: { token: string, allowedSourceIp?: string, encryptionKey?: string }
    The wizard calls this whenever the operator sets / changes the
-   token or the allowed-source-IP. Companion stores the allowlist
-   per-token in memory; subsequent heartbeats are validated against
-   it. Empty `allowedSourceIp` clears the restriction for that token.
+   token, the allowed-source-IP, or the encryption key. Companion
+   stores all three per-token in memory; subsequent heartbeats are
+   validated against the allowlist, and Via-Connector job results are
+   decrypted with the stored key.
+
+   `encryptionKey` (added in Stage 2 of the Via-Connector rollout) is
+   a 64-char hex string (32 bytes = AES-256). Optional for backwards
+   compat — legacy wizards that don't send it can still use direct
+   mode and selftest heartbeats, just not Via-Connector jobs.
 
    Idempotent — safe to re-call after a wizard refresh or server
    restart (the companion's in-memory map is wiped on restart, so the
-   wizard re-pushes the allowlist on every page open). */
+   wizard re-pushes on every page open). */
 app.post('/api/connector/register', (req, res) => {
-  const { token, allowedSourceIp } = req.body ?? {};
+  const { token, allowedSourceIp, encryptionKey } = req.body ?? {};
   if (!token || typeof token !== 'string') {
     return res.status(400).json({ ok: false, message: 'Missing token.' });
   }
@@ -800,7 +1171,20 @@ app.post('/api/connector/register', (req, res) => {
      so a registered-with-empty-IP entry is the way to whitelist a
      token without locking it to a specific IP. */
   connectorAllowlist.set(token, ip);
-  res.json({ ok: true, token: token.slice(0, 8) + '…', allowedSourceIp: ip || null });
+  /* Store / refresh the symmetric key. Empty / non-hex → drop any
+     prior key (Via-Connector mode will refuse to queue until the
+     wizard re-pushes a valid key). */
+  if (typeof encryptionKey === 'string' && /^[0-9a-fA-F]{64}$/.test(encryptionKey)) {
+    connectorKeys.set(token, encryptionKey);
+  } else {
+    connectorKeys.delete(token);
+  }
+  res.json({
+    ok: true,
+    token: token.slice(0, 8) + '…',
+    allowedSourceIp: ip || null,
+    keyRegistered: connectorKeys.has(token),
+  });
 });
 
 /* POST /api/connector/deregister
@@ -829,6 +1213,21 @@ app.post('/api/connector/deregister', (req, res) => {
   }
   const hadState     = connectorState.delete(token);
   const hadAllowlist = connectorAllowlist.delete(token);
+  /* Also wipe Via-Connector state: the encryption key (so old results
+     can't be decrypted post-revoke) and any pending jobs (so a freshly
+     deployed connector with the same token doesn't accidentally pick
+     up work queued for the previous one). Long-poll waiters are
+     resolved with null — the connector .exe sees an empty response
+     and re-polls, by which point the token has no entry and it'll
+     just keep heartbeating fresh. Inflight / completed jobs are
+     left alone — their TTL gc handles cleanup. */
+  connectorKeys.delete(token);
+  pendingJobs.delete(token);
+  const waiters = jobWaiters.get(token);
+  if (waiters && waiters.length > 0) {
+    for (const w of waiters) { clearTimeout(w.timer); w.resolve(null); }
+    jobWaiters.delete(token);
+  }
   res.json({
     ok: true,
     token: token.slice(0, 8) + '…',
@@ -974,6 +1373,248 @@ app.get('/api/connector/status', (req, res) => {
   });
 });
 
+/* ─────────────────────────────────────────────────────────────────
+   "Via Connector" job-queue endpoints
+   ───────────────────────────────────────────────────────────────────
+   See block comment near `pendingJobs` for the protocol overview.
+   These four endpoints form a job-pull RPC layer on top of the
+   connector's outbound-only heartbeat channel. */
+
+/* POST /api/connector/job/queue
+   Body: { token: string, kind: string, params?: any }
+   Caller: wizard (browser).
+   Refuses with 503 when no connector is online for the token — the
+   alternative (queueing into the void) leaves the wizard polling
+   forever. Refuses with 412 when the wizard hasn't registered an
+   encryption key, because /result decryption would fail anyway.
+   Returns: { ok: true, jobId } */
+app.post('/api/connector/job/queue', (req, res) => {
+  const { token, kind, params } = req.body ?? {};
+  if (!token || typeof token !== 'string') {
+    return res.status(400).json({ ok: false, message: 'Missing token.' });
+  }
+  if (!kind || typeof kind !== 'string') {
+    return res.status(400).json({ ok: false, message: 'Missing job kind.' });
+  }
+  if (!connectorAllowlist.has(token)) {
+    return res.status(404).json({ ok: false, message: 'Token not registered. Call /api/connector/register first.' });
+  }
+  if (!connectorKeys.has(token)) {
+    return res.status(412).json({ ok: false, message: 'No encryption key registered for this token. The wizard must include encryptionKey in the /register call before queueing jobs.' });
+  }
+  if (!isConnectorOnline(token)) {
+    return res.status(503).json({ ok: false, message: 'Connector for this token is OFFLINE (no heartbeat within the freshness window). Wait for the customer to start forcepoint-hc-connector.exe.' });
+  }
+  const queue = pendingJobs.get(token) ?? [];
+  if (queue.length >= PENDING_QUEUE_MAX) {
+    return res.status(503).json({ ok: false, message: `Pending job queue full (${PENDING_QUEUE_MAX}) for this token. The connector is online but isn't draining work.` });
+  }
+  const job = {
+    jobId: randomUUID(),
+    token,
+    kind,
+    params: params ?? null,
+    createdAt: Date.now(),
+  };
+  queue.push(job);
+  pendingJobs.set(token, queue);
+  /* If a /next long-poll is already parked, hand the job to it
+     directly — the connector wakes up immediately instead of
+     waiting another LONG_POLL_MS. */
+  flushWaiters(token);
+  res.json({ ok: true, jobId: job.jobId });
+});
+
+/* GET /api/connector/job/next?token=...
+   Caller: customer Connector .exe.
+   Long-poll. If a job is pending → return it as plaintext JSON
+   immediately. Else park the request for up to LONG_POLL_MS; resolve
+   on first arrival of a job for this token. On timeout → 204 No
+   Content (connector re-polls).
+   Response shape (200): { jobId, kind, params } — params plaintext,
+   they aren't sensitive. */
+app.get('/api/connector/job/next', (req, res) => {
+  const token = typeof req.query.token === 'string' ? req.query.token : '';
+  if (!token) {
+    return res.status(400).json({ ok: false, message: 'Missing token query param.' });
+  }
+  if (!connectorAllowlist.has(token)) {
+    return res.status(404).json({ ok: false, message: 'Token not registered.' });
+  }
+  /* Fast path — pending job already waiting. */
+  const queue = pendingJobs.get(token);
+  if (queue && queue.length > 0) {
+    const job = queue.shift();
+    if (queue.length === 0) pendingJobs.delete(token);
+    inflightJobs.set(job.jobId, job);
+    return res.json({ jobId: job.jobId, kind: job.kind, params: job.params });
+  }
+  /* Long-poll path — park a waiter. */
+  const waiters = jobWaiters.get(token) ?? [];
+  const waiter = {
+    resolve: (job) => {
+      if (res.writableEnded) return;
+      if (!job) {
+        res.status(204).end();
+        return;
+      }
+      inflightJobs.set(job.jobId, job);
+      res.json({ jobId: job.jobId, kind: job.kind, params: job.params });
+    },
+    timer: null,
+  };
+  waiter.timer = setTimeout(() => {
+    /* Timed out — remove ourselves from the waiter list and 204. */
+    const list = jobWaiters.get(token);
+    if (list) {
+      const idx = list.indexOf(waiter);
+      if (idx >= 0) list.splice(idx, 1);
+      if (list.length === 0) jobWaiters.delete(token);
+    }
+    waiter.resolve(null);
+  }, LONG_POLL_MS);
+  waiters.push(waiter);
+  jobWaiters.set(token, waiters);
+  /* Also clean up if the client disconnects mid-wait — prevents a
+     dangling waiter holding a closed response. */
+  req.on('close', () => {
+    if (res.writableEnded) return;
+    clearTimeout(waiter.timer);
+    const list = jobWaiters.get(token);
+    if (list) {
+      const idx = list.indexOf(waiter);
+      if (idx >= 0) list.splice(idx, 1);
+      if (list.length === 0) jobWaiters.delete(token);
+    }
+  });
+});
+
+/* POST /api/connector/job/result
+   Body: { jobId: string, ok: boolean, envelope?: { iv, ct, tag }, error?: string }
+   Caller: customer Connector .exe.
+   On ok=true the envelope is decrypted with the per-token key and
+   the plaintext is stored for the wizard to pick up. On ok=false
+   the error string is stored verbatim. Either way the inflight slot
+   is freed and the result lands in completedJobs. */
+app.post('/api/connector/job/result', (req, res) => {
+  const { jobId, ok, envelope, error } = req.body ?? {};
+  if (!jobId || typeof jobId !== 'string') {
+    return res.status(400).json({ ok: false, message: 'Missing jobId.' });
+  }
+  const job = inflightJobs.get(jobId);
+  if (!job) {
+    /* Possible causes: TTL gc swept it, or duplicate POST (connector
+       retried after an ack got lost). Either way: idempotent 200 so
+       the connector stops retrying. */
+    return res.json({ ok: true, ignored: true });
+  }
+  inflightJobs.delete(jobId);
+  if (ok === false || ok === 'false') {
+    completedJobs.set(jobId, {
+      ok: false,
+      error: typeof error === 'string' ? error : 'Connector reported failure without an error message.',
+      completedAt: Date.now(),
+    });
+    return res.json({ ok: true });
+  }
+  const keyHex = connectorKeys.get(job.token);
+  if (!keyHex) {
+    completedJobs.set(jobId, {
+      ok: false,
+      error: 'No encryption key on file for this connector token; cannot decrypt result.',
+      completedAt: Date.now(),
+    });
+    return res.json({ ok: true });
+  }
+  try {
+    const payload = decryptEnvelope(envelope, keyHex);
+    completedJobs.set(jobId, { ok: true, payload, completedAt: Date.now() });
+    res.json({ ok: true });
+  } catch (e) {
+    completedJobs.set(jobId, {
+      ok: false,
+      error: e instanceof Error ? `Decrypt failed: ${e.message}` : 'Decrypt failed.',
+      completedAt: Date.now(),
+    });
+    res.json({ ok: true });
+  }
+});
+
+/* GET /api/connector/job/result?jobId=...
+   Caller: wizard (browser), polled every ~2s.
+   Returns 200 with { status: 'pending' } while the connector is
+   still working, or { ok, payload | error } once the result has
+   landed. Completed records are dropped after COMPLETED_JOB_TTL_MS,
+   so a wizard that polls very late will see 404 — that's intentional,
+   it indicates the wizard lost track of its own request. */
+app.get('/api/connector/job/result', (req, res) => {
+  const jobId = typeof req.query.jobId === 'string' ? req.query.jobId : '';
+  if (!jobId) {
+    return res.status(400).json({ ok: false, message: 'Missing jobId query param.' });
+  }
+  const done = completedJobs.get(jobId);
+  if (done) {
+    /* One-shot drain — once the wizard reads the result, drop it.
+       Stops the wizard from polling indefinitely after success. */
+    completedJobs.delete(jobId);
+    if (done.ok) return res.json({ status: 'done', ok: true, payload: done.payload });
+    return res.json({ status: 'done', ok: false, error: done.error });
+  }
+  if (inflightJobs.has(jobId)) {
+    return res.json({ status: 'pending', phase: 'inflight' });
+  }
+  /* Check pending queues — slow path, but only runs while result
+     isn't ready yet. Could be optimized with a reverse index later. */
+  for (const queue of pendingJobs.values()) {
+    if (queue.some((j) => j.jobId === jobId)) {
+      return res.json({ status: 'pending', phase: 'queued' });
+    }
+  }
+  res.status(404).json({ ok: false, message: 'Job not found. It may have expired (TTL) or never existed.' });
+});
+
+/* GC loop: walks pendingJobs + completedJobs every minute and drops
+   anything past its TTL. Pending TTL means the connector never picked
+   the job up; surface that as a synthetic failure so the wizard's
+   poll resolves instead of hanging. */
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, queue] of pendingJobs.entries()) {
+    let i = 0;
+    while (i < queue.length) {
+      if (now - queue[i].createdAt > PENDING_JOB_TTL_MS) {
+        const stale = queue.splice(i, 1)[0];
+        completedJobs.set(stale.jobId, {
+          ok: false,
+          error: `Job timed out in queue after ${PENDING_JOB_TTL_MS / 1000}s — no connector picked it up.`,
+          completedAt: now,
+        });
+      } else {
+        i++;
+      }
+    }
+    if (queue.length === 0) pendingJobs.delete(token);
+  }
+  for (const [jobId, rec] of completedJobs.entries()) {
+    if (now - rec.completedAt > COMPLETED_JOB_TTL_MS) {
+      completedJobs.delete(jobId);
+    }
+  }
+  /* Inflight TTL: defense against a connector that picked up a job
+     and never reported back. Use a longer window since some DLP
+     calls take real time. */
+  for (const [jobId, job] of inflightJobs.entries()) {
+    if (now - job.createdAt > PENDING_JOB_TTL_MS * 2) {
+      inflightJobs.delete(jobId);
+      completedJobs.set(jobId, {
+        ok: false,
+        error: `Job timed out in flight after ${PENDING_JOB_TTL_MS / 500}s — connector picked it up but never reported back.`,
+        completedAt: now,
+      });
+    }
+  }
+}, 60 * 1000).unref(); /* unref so the timer doesn't pin the process alive on shutdown */
+
 /* GET /api/connector/agent
    ───────────────────────────────────────────────────────────────────
    Serves the customer-side connector binary straight from the deploy
@@ -1082,6 +1723,14 @@ app.listen(PORT, HOST, () => {
   console.log('  POST /api/connector/heartbeat  — Customer Connector ping-in');
   // eslint-disable-next-line no-console
   console.log('  GET  /api/connector/status    — Customer Connector liveness');
+  // eslint-disable-next-line no-console
+  console.log('  POST /api/connector/job/queue  — wizard → enqueue Via-Connector job');
+  // eslint-disable-next-line no-console
+  console.log('  GET  /api/connector/job/next   — connector long-poll for next job (25s)');
+  // eslint-disable-next-line no-console
+  console.log('  POST /api/connector/job/result — connector → encrypted job result');
+  // eslint-disable-next-line no-console
+  console.log('  GET  /api/connector/job/result — wizard short-poll for completed result');
   // eslint-disable-next-line no-console
   console.log(`  GET  /api/connector/agent     — serve connector .exe from ${CONNECTOR_AGENT_PATH}`);
   // eslint-disable-next-line no-console

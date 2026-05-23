@@ -223,7 +223,17 @@ export interface DlpPostureSummary {
   forensicBytesBySeverity: { HIGH: number; MEDIUM: number; LOW: number };
 }
 
-/* Payload shape posted to the companion (mirrors ApiConnectorConfig). */
+/* Payload shape posted to the companion (mirrors ApiConnectorConfig).
+   Stage 3 of the Via-Connector rollout added `transport` + `connectorToken`:
+     • transport='direct' (default) — companion dials the customer FSM
+       with the url/username/password fields below.
+     • transport='via-connector' + connectorToken — companion enqueues
+       the underlying /deploy/status + /policy/enabled-names +
+       /incidents calls as `dlp.fetch` jobs on that token's queue;
+       the connector .exe executes them inside the customer network
+       and returns encrypted results. url/username/password are
+       ignored on the companion side in that mode (the connector
+       reads its own connector-secrets.json). */
 export interface DlpPostureFetchPayload {
   url: string;
   authType: 'apikey' | 'basic';
@@ -234,6 +244,10 @@ export interface DlpPostureFetchPayload {
   /* Optional pattern catalogue override. Companion uses defaults when
      omitted. */
   patterns?: DestinationPatterns;
+  /* Default 'direct' on the companion side, so omitting this field is
+     safe for older callers. */
+  transport?: 'direct' | 'via-connector';
+  connectorToken?: string;
 }
 
 /* Wraps the companion call so callers can `await fetchDlpPosture(cfg)` and

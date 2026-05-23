@@ -7,7 +7,7 @@ import { parseDlpAllLog, type DlpAllLogReport, type LogSeverity } from './dlpAll
 import { parseAuditSystemLogs, type AuditSystemLogsReport, type AuditSeverity } from './auditSystemLogsParser';
 import { parseDlpServiceLogs, isServiceLogFilename, type ServiceLogsReport, type ServiceLogSeverity, type ServiceLogFile } from './dlpServiceLogsParser';
 import { fetchDlpPosture, type DlpPostureSummary, type DlpPostureBlockId, type DestinationPatterns, DLP_POSTURE_BLOCKS, ALL_POSTURE_BLOCK_IDS, formatBytes } from './dlpPosture';
-import { type CustomerConnectorConfig, type CustomerConnectorStatus, randomHex256, fetchConnectorStatus, buildConnectorBundle, buildConnectorSecretsTemplate, registerConnectorAllowlist, deregisterConnectorToken } from './customerConnector';
+import { type CustomerConnectorConfig, type CustomerConnectorStatus, randomHex256, fetchConnectorStatus, buildConnectorBundle, buildConnectorSecretsTemplate, registerConnectorAllowlist, deregisterConnectorToken, runJobViaConnector } from './customerConnector';
 import { Key, Plug, RefreshCw, Activity, Globe2, Download } from 'lucide-react';
 
 /* Download URL for the customer connector .exe. The Ubuntu deploy
@@ -1326,16 +1326,20 @@ export function Step3DataCollectors({
       const ok = await registerConnectorAllowlist(
         next,
         customerConnector.allowedSourceIp || '',
+        customerConnector.encryptionKey || undefined,
       );
       if (ok) previouslyRegisteredTokenRef.current = next;
     };
     void sync();
     /* Re-push every 60s — companion in-memory state is cleared on
        restart, so this is the cheapest way to converge after an
-       outage without operator intervention. */
+       outage without operator intervention. The encryption key is
+       included in the dep array so a key rotation immediately
+       triggers a re-register; otherwise the companion would hold
+       the old key until the next 60s tick. */
     const id = setInterval(() => { void sync(); }, 60000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [customerConnector.enabled, customerConnector.token, customerConnector.allowedSourceIp]);
+  }, [customerConnector.enabled, customerConnector.token, customerConnector.allowedSourceIp, customerConnector.encryptionKey]);
 
   /* Manual revoke — clears server-side state for the current token
      so a deployed connector loses its session. Status pill returns to
@@ -1691,6 +1695,31 @@ export function Step3DataCollectors({
 
   const testApi = async (key: keyof ApiConnectorsConfig, endpoint: string) => {
     setApiStatus(prev => ({ ...prev, [key]: { state: 'testing' } }));
+    /* Via-Connector branch — only DLP API supports it. Instead of
+       hitting companion's /api/dlp/test (which would dial the
+       customer FSM directly), enqueue a `dlp.test` job; the
+       connector .exe runs the probe locally and returns the same
+       {ok, message, latencyMs} shape. */
+    if (key === 'dlpApi' && apiConnectors.dlpApi.transport === 'via-connector') {
+      try {
+        const payload = await runJobViaConnector<{ ok: boolean; message: string; latencyMs: number }>(
+          customerConnector.token,
+          'dlp.test',
+          null,
+          { timeoutMs: 30_000 },
+        );
+        const result: ConnStatus = payload.ok
+          ? { state: 'ok',    message: payload.message || 'Authenticated (via connector)' }
+          : { state: 'error', message: payload.message || 'Connector reported failure.' };
+        setApiStatus(prev => ({ ...prev, [key]: result }));
+      } catch (e) {
+        setApiStatus(prev => ({
+          ...prev,
+          [key]: { state: 'error', message: e instanceof Error ? e.message : 'Via-Connector test failed.' },
+        }));
+      }
+      return;
+    }
     const result = await runTest(endpoint, apiConnectors[key]);
     setApiStatus(prev => ({ ...prev, [key]: result }));
   };
@@ -1716,6 +1745,13 @@ export function Step3DataCollectors({
         /* Send the operator-managed pattern catalogue so the FSM's
            destination labels get bucketed using THEIR house style. */
         patterns: destinationPatterns,
+        /* Transport selection — when Via-Connector is active in the
+           wizard, the companion routes every DLP REST API call
+           through the customer Connector .exe instead of dialing the
+           customer FSM directly. companion ignores url/credentials
+           in that mode. */
+        transport: apiConnectors.dlpApi.transport ?? 'direct',
+        connectorToken: customerConnector.token,
       });
       setDlpPostureSummary(summary);
     } catch (e) {

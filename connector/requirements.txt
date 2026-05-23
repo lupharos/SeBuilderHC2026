@@ -5,6 +5,12 @@ requests==2.32.3
 urllib3==2.2.3
 certifi==2024.8.30
 
+# AES-256-GCM envelope encryption for "Via Connector" job results.
+# Stage 3 of the Via-Connector rollout — the wizard's connector.json
+# now carries a 32-byte symmetric key; this binary encrypts every job
+# result with it before POSTing back to the companion.
+cryptography==43.0.1
+
 # SQL Server authentication probe — used by the startup selftest. On
 # Windows hosts (FSM) this uses the bundled SQL Server ODBC driver
 # (ODBC Driver 17/18 for SQL Server, usually already installed). If

@@ -41,6 +41,20 @@ except ImportError:
     print("       Rebuild after running:  pip install -r requirements.txt")
     sys.exit(1)
 
+# AES-256-GCM encryption for the "Via Connector" job runner. Optional
+# at startup — if the operator only uses Direct mode there's no need
+# for crypto, so we degrade gracefully when the binary was built
+# without it instead of dying. The job poller thread skips itself when
+# the import failed.
+try:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    _HAS_AESGCM = True
+except ImportError:
+    AESGCM = None  # type: ignore[assignment]
+    _HAS_AESGCM = False
+
+import secrets as _secrets  # stdlib — used for 12-byte IV generation
+
 
 VERSION = "0.1.0"
 
@@ -602,6 +616,359 @@ def pause_if_double_clicked() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────
+#   "Via Connector" job runner
+# ─────────────────────────────────────────────────────────────────────
+#
+# The connector phones home with heartbeats every 30s, but separately
+# also long-polls the companion for ad-hoc work — DLP REST API calls
+# the HC wizard wants executed inside the customer network. The
+# protocol is symmetric to the companion's Stage 2 implementation:
+#
+#   GET  /api/connector/job/next?token=...   (25s long-poll)
+#        → 200 { jobId, kind, params }       — a job to execute
+#        → 204                                — no work, re-poll
+#
+#   POST /api/connector/job/result
+#        body { jobId, ok: true, envelope: {iv, ct, tag} }   (success)
+#        body { jobId, ok: false, error: "…" }               (failure)
+#
+# The envelope is AES-256-GCM ciphertext of a JSON payload, using the
+# 32-byte key the SE wrote into connector.json. Failures are sent in
+# plaintext (the error message itself is not sensitive — bad creds,
+# refused TCP, etc).
+#
+# Supported job kinds:
+#   • dlp.test    — re-run the DLP REST API auth probe on demand and
+#                   return {ok, message, latencyMs, serverVersion}.
+#   • dlp.fetch   — generic DLP REST API call. Params: {path, method,
+#                   body?, timeout?}. Connector handles auth transparently
+#                   (cached Bearer token, refreshed on 401). Returns
+#                   {status, body, headers}. The companion's posture
+#                   handler issues several of these in parallel and
+#                   aggregates the responses.
+
+# Cached DLP REST API bearer token. Refreshed lazily (first dlp.fetch
+# job) or eagerly on 401. Lifetime is conservative — the token itself
+# is valid for an hour per the DLP REST API reference, but we treat
+# it as 50min to leave headroom. Module-level so handlers across the
+# poller thread reuse the same token.
+_dlp_token_cache: dict = {
+    "access_token": None,
+    "expires_at": 0.0,   # epoch seconds
+    "base_url":    None, # tracks the URL we authed against
+}
+_dlp_token_lock = threading.Lock()
+
+
+def _aes_gcm_encrypt(plaintext_obj: dict, key_hex: str) -> dict:
+    """Encrypt a JSON-serialisable object as an AES-256-GCM envelope.
+
+    Returns {iv, ct, tag} with all three as lowercase hex strings —
+    matches the companion's decryptEnvelope() shape. Raises ValueError
+    when the AESGCM dependency is unavailable (binary built without
+    `cryptography`); caller is expected to surface that as a job
+    failure rather than crashing the poller.
+    """
+    if not _HAS_AESGCM:
+        raise ValueError("cryptography library not installed in this .exe build")
+    if not key_hex or len(key_hex) != 64:
+        raise ValueError("encryption key must be 64 hex chars (32 bytes)")
+    key = bytes.fromhex(key_hex)
+    iv = _secrets.token_bytes(12)
+    plaintext = json.dumps(plaintext_obj, separators=(",", ":")).encode("utf-8")
+    aesgcm = AESGCM(key)
+    ct_with_tag = aesgcm.encrypt(iv, plaintext, associated_data=None)
+    # AESGCM appends the 16-byte tag to the ciphertext. Split it so the
+    # envelope matches Node's setAuthTag() expectations.
+    ct = ct_with_tag[:-16]
+    tag = ct_with_tag[-16:]
+    return {
+        "iv":  iv.hex(),
+        "ct":  ct.hex(),
+        "tag": tag.hex(),
+    }
+
+
+def _dlp_base_url(api_cfg: dict) -> str:
+    """Normalise the configured URL to its DLP REST API base — tolerate
+    operators pasting bare host OR full /dlp/rest/v1 prefix. Mirrors
+    the companion's normaliseDlpBaseUrl()."""
+    url = (api_cfg.get("url") or "").strip().rstrip("/")
+    if not url:
+        return ""
+    return url if url.lower().endswith("/dlp/rest/v1") else url + "/dlp/rest/v1"
+
+
+def _dlp_acquire_token(api_cfg: dict, insecure: bool, force_refresh: bool = False) -> str:
+    """Return a cached DLP access token, refreshing on demand. Caller
+    handles ConnectionError / timeout; this function only raises
+    ValueError for bad config and requests exceptions on auth failure."""
+    if not api_cfg:
+        raise ValueError("no dlpApi block in connector-secrets.json")
+    base = _dlp_base_url(api_cfg)
+    if not base:
+        raise ValueError("dlpApi.url is empty")
+    username = api_cfg.get("username", "")
+    password = api_cfg.get("password", "")
+    if not username or not password:
+        raise ValueError("dlpApi.username or dlpApi.password missing")
+
+    with _dlp_token_lock:
+        now = time.time()
+        cached = _dlp_token_cache
+        # Cache miss / forced refresh / different base URL since last
+        # call → re-auth. Same base URL with a fresh-enough token →
+        # reuse.
+        if (
+            not force_refresh
+            and cached["access_token"]
+            and cached["base_url"] == base
+            and now < cached["expires_at"]
+        ):
+            return cached["access_token"]
+
+        if insecure:
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        r = requests.post(
+            f"{base}/auth/refresh-token",
+            headers={"username": username, "password": password},
+            timeout=15,
+            verify=False,  # FSM REST API certs are always self-signed
+        )
+        if r.status_code != 200:
+            body = (r.text or "").strip().splitlines()
+            body_one = body[0][:120] if body else ""
+            raise ValueError(f"refresh-token HTTP {r.status_code} — {body_one}")
+        access = (r.json() or {}).get("access_token", "")
+        if not access:
+            raise ValueError("refresh-token response missing access_token")
+        cached["access_token"] = access
+        cached["base_url"] = base
+        # 50 min lifetime — DLP tokens are good for 60 but we refresh
+        # early to avoid race conditions on the 60th minute.
+        cached["expires_at"] = now + (50 * 60)
+        return access
+
+
+def handle_dlp_test(_params: dict, secrets: dict | None, insecure: bool) -> dict:
+    """Run the DLP REST API auth probe and return a structured result.
+    Same shape the companion's POST /api/dlp/test produces, so the
+    wizard's existing 'ok/error' parsing works regardless of transport."""
+    api_cfg = (secrets or {}).get("dlpApi") or None
+    if not api_cfg:
+        return {
+            "ok": False,
+            "message": "Connector has no dlpApi block in connector-secrets.json. Add credentials and restart the .exe.",
+            "latencyMs": 0,
+        }
+    result = selftest_dlp_api(api_cfg, insecure=insecure)
+    if result is None:
+        return {"ok": False, "message": "dlpApi block present but empty", "latencyMs": 0}
+    status, message, latency = result
+    return {"ok": status == "ok", "message": message, "latencyMs": latency}
+
+
+def handle_dlp_fetch(params: dict, secrets: dict | None, insecure: bool) -> dict:
+    """Generic DLP REST API proxy. Params: {path, method, body?, timeout?}
+    where path is a string starting with '/' relative to /dlp/rest/v1.
+    Connector handles the Bearer token transparently — first try uses
+    the cached token, on 401 we refresh once and retry. Returns
+    {status, body, headers} (body parsed as JSON when possible, else
+    raw text)."""
+    api_cfg = (secrets or {}).get("dlpApi") or None
+    if not api_cfg:
+        return {
+            "ok": False,
+            "error": "Connector has no dlpApi block; cannot proxy REST API calls.",
+        }
+    path = (params or {}).get("path") or ""
+    method = ((params or {}).get("method") or "GET").upper()
+    body = (params or {}).get("body")
+    timeout = float((params or {}).get("timeout") or 60)
+    if not path.startswith("/"):
+        return {"ok": False, "error": "params.path must start with '/'."}
+
+    base = _dlp_base_url(api_cfg)
+    url = base + path
+
+    if insecure:
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    def _do_request(token: str):
+        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+        kwargs: dict = {"headers": headers, "timeout": timeout, "verify": False}
+        if body is not None:
+            # body may be a dict (we JSON-encode) or a pre-encoded str
+            if isinstance(body, (dict, list)):
+                kwargs["json"] = body
+            else:
+                kwargs["data"] = body
+                headers["Content-Type"] = "application/json"
+        return requests.request(method, url, **kwargs)
+
+    try:
+        token = _dlp_acquire_token(api_cfg, insecure)
+        r = _do_request(token)
+        if r.status_code == 401:
+            # Cached token went stale — refresh once and retry.
+            token = _dlp_acquire_token(api_cfg, insecure, force_refresh=True)
+            r = _do_request(token)
+    except ValueError as e:
+        return {"ok": False, "error": f"auth failure: {e}"}
+    except requests.exceptions.SSLError as e:
+        return {"ok": False, "error": f"TLS error: {e}"}
+    except requests.exceptions.ConnectionError:
+        return {"ok": False, "error": "cannot reach DLP REST API host"}
+    except requests.exceptions.Timeout:
+        return {"ok": False, "error": f"request timed out after {timeout:.0f}s"}
+    except requests.exceptions.RequestException as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    # Parse body once — JSON when possible, raw text otherwise so the
+    # companion can still see what came back from an unexpected error
+    # page.
+    try:
+        parsed = r.json()
+    except Exception:
+        parsed = r.text
+    return {
+        "ok": True,
+        "status": r.status_code,
+        "body": parsed,
+    }
+
+
+# Job-handler dispatch table. Add entries here when new kinds are
+# introduced — keeps the poller loop body trivial.
+_JOB_HANDLERS = {
+    "dlp.test":  handle_dlp_test,
+    "dlp.fetch": handle_dlp_fetch,
+}
+
+
+def job_poll_loop(cfg: dict, secrets: dict | None, insecure: bool, stop: threading.Event) -> None:
+    """Long-poll the companion for jobs and execute them locally.
+
+    Runs as a daemon thread alongside the heartbeat loop. Each
+    iteration:
+      1. GET /api/connector/job/next  (25s long-poll)
+      2. On 200: dispatch by `kind`, encrypt result, POST /result
+      3. On 204 / timeout: re-poll immediately
+      4. On any other failure: 3s back-off and continue
+
+    Bails out quietly when the binary was built without AESGCM —
+    Via-Connector mode is unavailable, but heartbeat keeps working.
+    """
+    if not _HAS_AESGCM:
+        print("[job-poll] AESGCM unavailable — Via-Connector job runner DISABLED.")
+        return
+    key_hex = cfg.get("encryptionKeyHex") or ""
+    if not key_hex or len(key_hex) != 64:
+        print("[job-poll] encryptionKeyHex missing / wrong length — Via-Connector job runner DISABLED.")
+        return
+
+    endpoint = cfg["hcEndpoint"].rstrip("/")
+    next_url   = f"{endpoint}/api/connector/job/next?token={cfg['token']}"
+    result_url = f"{endpoint}/api/connector/job/result"
+
+    session = requests.Session()
+    consecutive_fail = 0
+
+    print(f"[job-poll] active. Long-polling {next_url[:60]}…")
+
+    while not stop.is_set():
+        try:
+            r = session.get(next_url, timeout=30, verify=not insecure)
+        except requests.exceptions.Timeout:
+            # Long-poll timed out naturally; re-poll without back-off.
+            continue
+        except requests.exceptions.RequestException as e:
+            consecutive_fail += 1
+            if consecutive_fail <= 3 or consecutive_fail % 10 == 0:
+                print(f"[job-poll] /next failed: {type(e).__name__}: {e}")
+            # 3s back-off, interruptible
+            if stop.wait(3):
+                break
+            continue
+
+        if r.status_code == 204:
+            # No work — re-poll immediately.
+            consecutive_fail = 0
+            continue
+        if r.status_code != 200:
+            consecutive_fail += 1
+            body = (r.text or "").strip().splitlines()
+            body_one = body[0][:80] if body else ""
+            if consecutive_fail <= 3 or consecutive_fail % 10 == 0:
+                print(f"[job-poll] /next HTTP {r.status_code}: {body_one}")
+            if stop.wait(3):
+                break
+            continue
+        consecutive_fail = 0
+
+        try:
+            job = r.json() or {}
+        except Exception as e:
+            print(f"[job-poll] /next returned non-JSON: {type(e).__name__}: {e}")
+            continue
+
+        job_id = job.get("jobId")
+        kind   = job.get("kind")
+        params = job.get("params") or {}
+        if not job_id or not kind:
+            print(f"[job-poll] malformed job — missing jobId or kind: {job!r}")
+            continue
+
+        handler = _JOB_HANDLERS.get(kind)
+        if not handler:
+            _post_job_failure(session, result_url, job_id, f"unknown job kind: {kind}", insecure)
+            continue
+
+        ts = datetime.now().strftime("%H:%M:%S")
+        print(f"[{ts}] [job] {kind}  jobId={job_id[:8]}…  starting")
+        try:
+            payload = handler(params, secrets, insecure)
+        except Exception as e:  # noqa: BLE001 — never let one bad job kill the poller
+            _post_job_failure(session, result_url, job_id, f"handler crashed: {type(e).__name__}: {e}", insecure)
+            print(f"[{ts}] [job] {kind}  jobId={job_id[:8]}…  CRASH: {type(e).__name__}: {e}")
+            continue
+
+        # Encrypt result + POST back.
+        try:
+            envelope = _aes_gcm_encrypt(payload, key_hex)
+        except Exception as e:  # noqa: BLE001
+            _post_job_failure(session, result_url, job_id, f"encrypt failed: {type(e).__name__}: {e}", insecure)
+            print(f"[{ts}] [job] {kind}  jobId={job_id[:8]}…  ENCRYPT FAIL")
+            continue
+
+        try:
+            session.post(
+                result_url,
+                json={"jobId": job_id, "ok": True, "envelope": envelope},
+                timeout=15,
+                verify=not insecure,
+            )
+            print(f"[{ts}] [job] {kind}  jobId={job_id[:8]}…  done")
+        except requests.exceptions.RequestException as e:
+            print(f"[{ts}] [job] {kind}  jobId={job_id[:8]}…  /result POST failed: {type(e).__name__}: {e}")
+
+
+def _post_job_failure(session: requests.Session, result_url: str, job_id: str, error: str, insecure: bool) -> None:
+    """Best-effort plaintext failure report. Errors during the error
+    report itself are swallowed — there's nothing useful to do at
+    that point."""
+    try:
+        session.post(
+            result_url,
+            json={"jobId": job_id, "ok": False, "error": error},
+            timeout=15,
+            verify=not insecure,
+        )
+    except requests.exceptions.RequestException:
+        pass
+
+
+# ─────────────────────────────────────────────────────────────────────
 #   Heartbeat loop
 # ─────────────────────────────────────────────────────────────────────
 
@@ -803,6 +1170,21 @@ def main() -> int:
             name="selftest-bg",
         )
         bg.start()
+
+    # ── Via-Connector job poller ─────────────────────────────────────
+    # Long-polls the companion for ad-hoc DLP REST API jobs. Daemon
+    # thread — dies when main exits. Disabled (silently) when:
+    #   • the binary was built without `cryptography`, or
+    #   • connector.json has no / malformed encryptionKeyHex.
+    # See `job_poll_loop` for the wire protocol.
+    if "--no-job-poller" not in sys.argv:
+        jp = threading.Thread(
+            target=job_poll_loop,
+            args=(cfg, secrets, "--insecure" in sys.argv, stop),
+            daemon=True,
+            name="job-poller",
+        )
+        jp.start()
 
     # ── Run ─────────────────────────────────────────────────────────
     start_ts = time.time()
