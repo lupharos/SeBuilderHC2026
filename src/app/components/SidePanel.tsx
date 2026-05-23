@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { X, LogOut, Mail, Shield, AlertTriangle } from 'lucide-react';
 import type { PanelType } from './Dashboard';
-import { SystemMaintenanceCard, useUpgradePlatform } from './SystemUpgrade';
+import { SystemMaintenanceCard, useUpgradePlatform, VersionCheckCard, useVersionCheck } from './SystemUpgrade';
 
 interface SidePanelProps {
   panelType: PanelType;
@@ -121,11 +121,12 @@ const templateList = [
 
 export function SidePanel({ panelType, onClose, onNavigate, onLogout }: SidePanelProps) {
   const [showLogoutModal, setShowLogoutModal] = useState(false);
-  /* Probe the companion for self-upgrade capability. Only fetched when
-     the profile panel is mounted so the request doesn't fire from the
-     templates view; the hook itself is cheap (single GET) and the
-     result is memoised by React across re-renders of this panel. */
+  /* Probe the System API for self-upgrade capability + the latest
+     advertised version. Both hooks fire one-shot fetches on mount and
+     are cheap; their results drive the Version Check + System
+     Maintenance cards on the Profile panel. */
   const upgradeInfo = useUpgradePlatform();
+  const versionCheck = useVersionCheck();
 
   const handleLogoutConfirm = () => {
     setShowLogoutModal(false);
@@ -304,8 +305,15 @@ export function SidePanel({ panelType, onClose, onNavigate, onLogout }: SidePane
               ))}
             </div>
 
+            {/* Version Check — pulls /versioncheck.json from the host
+                and compares against the version baked into this bundle.
+                When they differ the green Upgrade button takes the
+                operator straight into the same self-upgrade flow as the
+                manual button below. */}
+            <VersionCheckCard info={upgradeInfo} state={versionCheck} />
+
             {/* System Maintenance — only renders the Upgrade button when
-                the companion reports it's running on Linux with a usable
+                the System API reports it's running on Linux with a usable
                 clone of the repo. On Windows / macOS dev hosts the card
                 stays visible but the button is disabled with the reason
                 shown beneath it. */}

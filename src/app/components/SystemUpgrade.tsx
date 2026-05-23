@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Download, RefreshCw, Server, AlertTriangle, CheckCircle2, XCircle, Terminal } from 'lucide-react';
+import { Download, RefreshCw, Server, AlertTriangle, CheckCircle2, XCircle, Terminal, Sparkles } from 'lucide-react';
 
 /* ─── System Upgrade ─────────────────────────────────────────────────
    Self-upgrade trigger for the Ubuntu-hosted companion. Talks to:
@@ -36,11 +36,234 @@ export function useUpgradePlatform(): UpgradePlatformInfo | null {
         if (!r.ok) return;
         const json = await r.json();
         if (!cancelled) setInfo(json);
-      } catch { /* companion offline — leave info null */ }
+      } catch { /* System API offline — leave info null */ }
     })();
     return () => { cancelled = true; };
   }, []);
   return info;
+}
+
+/* ─── Version check ──────────────────────────────────────────────────
+   Fetches /versioncheck.json from the deploy host and compares the
+   advertised version against the one baked into __BUILD_INFO__ at
+   build time. When they differ the host has a newer release ready
+   (deploy.sh ran more recently than this SPA bundle), and we surface
+   an "Upgrade available" banner that ties straight into the existing
+   self-upgrade flow. */
+export type VersionCheckPayload = {
+  productName?: string;
+  version?: string;
+  releasedAt?: string;
+  notes?: string;
+};
+
+export type VersionCheckState = {
+  current: { productName: string; version: string; releasedAt: string };
+  latest: VersionCheckPayload | null;
+  /** True when latest version differs from build-time version. */
+  hasUpdate: boolean;
+  loading: boolean;
+  error: string | null;
+  /** Force a re-fetch — used by the manual "Re-check" button. */
+  refresh: () => void;
+};
+
+/* Normalise "2025.05.01" / "v2025.05" → array of integers so we can
+   compare across the year.month.patch format the JSON uses. Anything
+   non-numeric collapses to 0 so a stray "rc1" suffix doesn't poison
+   the compare. */
+function compareVersions(a: string, b: string): number {
+  const norm = (s: string) =>
+    s.replace(/^v/i, '').split(/[.\-+]/).map((p) => {
+      const n = parseInt(p, 10);
+      return Number.isFinite(n) ? n : 0;
+    });
+  const A = norm(a);
+  const B = norm(b);
+  const len = Math.max(A.length, B.length);
+  for (let i = 0; i < len; i++) {
+    const ai = A[i] ?? 0;
+    const bi = B[i] ?? 0;
+    if (ai > bi) return 1;
+    if (ai < bi) return -1;
+  }
+  return 0;
+}
+
+export function useVersionCheck(): VersionCheckState {
+  const [latest, setLatest] = useState<VersionCheckPayload | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    (async () => {
+      try {
+        /* Cache-busting query param so the operator's browser doesn't
+           serve a stale versioncheck.json from disk after a redeploy. */
+        const r = await fetch(`/versioncheck.json?_=${Date.now()}`, { method: 'GET' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const json = (await r.json()) as VersionCheckPayload;
+        if (!cancelled) setLatest(json);
+      } catch (e) {
+        if (!cancelled) setError((e as Error).message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [tick]);
+
+  const current = {
+    productName: __BUILD_INFO__.productName,
+    /* __BUILD_INFO__.productVersion carries the "v" prefix; compare
+       in bare form so the JSON can stay prefix-free. */
+    version: __BUILD_INFO__.productVersion.replace(/^v/, ''),
+    releasedAt: __BUILD_INFO__.releasedAt,
+  };
+  const latestVersion = (latest?.version ?? '').replace(/^v/, '');
+  const hasUpdate = !!latestVersion && compareVersions(latestVersion, current.version) > 0;
+
+  return {
+    current,
+    latest,
+    hasUpdate,
+    loading,
+    error,
+    refresh: () => setTick((n) => n + 1),
+  };
+}
+
+/* ─── Version check card ─────────────────────────────────────────────
+   Sits above the System Maintenance card in the Profile panel. Shows
+   the current build's version, the latest version advertised by the
+   deploy host's versioncheck.json, and a one-click Upgrade button
+   when the two differ. Tied into the same UpgradeModal as the manual
+   "Check for Updates" button below it. */
+export function VersionCheckCard({ info, state }: { info: UpgradePlatformInfo | null; state: VersionCheckState }) {
+  const [showModal, setShowModal] = useState(false);
+  const supported = info?.upgradeAvailable === true;
+  const { current, latest, hasUpdate, loading, error, refresh } = state;
+  const latestVersionLabel = latest?.version ? (latest.version.startsWith('v') ? latest.version : `v${latest.version}`) : '—';
+  const currentLabel = current.version.startsWith('v') ? current.version : `v${current.version}`;
+
+  return (
+    <>
+      <div className="rounded-xl p-3 mb-3"
+        style={{ background: '#F8FAFC', border: '1px solid #EEF0F5' }}>
+        <div className="flex items-center gap-2 mb-2.5">
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center"
+            style={{ background: hasUpdate ? 'rgba(22,163,74,0.12)' : 'rgba(37,99,235,0.1)' }}>
+            <Sparkles size={13} style={{ color: hasUpdate ? '#16A34A' : '#2563EB' }} strokeWidth={2.5} />
+          </div>
+          <div className="flex-1">
+            <div style={{ fontSize: '11.5px', fontWeight: 700, color: '#0F172A' }}>Version Check</div>
+            <div style={{ fontSize: '10px', color: '#94A3B8' }}>
+              {loading ? 'Checking…' : error ? `Check failed: ${error}` : `Last checked ${new Date().toLocaleTimeString()}`}
+            </div>
+          </div>
+          <button
+            onClick={refresh}
+            title="Re-check versioncheck.json"
+            className="w-6 h-6 rounded-md flex items-center justify-center transition-all"
+            style={{ background: '#F1F5F9', color: '#64748B', border: '1px solid #E2E8F0' }}
+          >
+            <RefreshCw size={11} className={loading ? 'animate-spin' : ''} />
+          </button>
+        </div>
+
+        {/* Current + Latest pair */}
+        <div className="grid grid-cols-2 gap-2 mb-2">
+          <div className="rounded-lg p-2"
+            style={{ background: '#FFFFFF', border: '1px solid #E2E8F0' }}>
+            <div style={{ fontSize: '9px', fontWeight: 700, color: '#94A3B8', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+              Current
+            </div>
+            <div style={{ fontSize: '13px', fontWeight: 700, color: '#0F172A', fontFamily: 'JetBrains Mono, monospace', marginTop: 2 }}>
+              {currentLabel}
+            </div>
+            {current.releasedAt && (
+              <div style={{ fontSize: '9.5px', color: '#94A3B8', marginTop: 1 }}>
+                {current.releasedAt}
+              </div>
+            )}
+          </div>
+          <div className="rounded-lg p-2"
+            style={{
+              background: hasUpdate ? '#F0FDF4' : '#FFFFFF',
+              border: `1px solid ${hasUpdate ? '#BBF7D0' : '#E2E8F0'}`,
+            }}>
+            <div style={{ fontSize: '9px', fontWeight: 700, color: hasUpdate ? '#16A34A' : '#94A3B8', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+              Latest
+            </div>
+            <div style={{ fontSize: '13px', fontWeight: 700, color: hasUpdate ? '#15803D' : '#0F172A', fontFamily: 'JetBrains Mono, monospace', marginTop: 2 }}>
+              {latestVersionLabel}
+            </div>
+            {latest?.releasedAt && (
+              <div style={{ fontSize: '9.5px', color: hasUpdate ? '#16A34A' : '#94A3B8', marginTop: 1 }}>
+                {latest.releasedAt}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Status row */}
+        {!loading && !error && (
+          hasUpdate ? (
+            <>
+              <div className="px-2 py-2 rounded-md mb-2"
+                style={{ background: '#F0FDF4', border: '1px solid #BBF7D0' }}>
+                <div className="flex items-start gap-1.5">
+                  <Sparkles size={11} style={{ color: '#16A34A', flexShrink: 0, marginTop: 1 }} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#15803D' }}>
+                      Upgrade available
+                    </div>
+                    {latest?.notes && (
+                      <div style={{ fontSize: '10px', color: '#475569', marginTop: 3, lineHeight: 1.5 }}>
+                        {latest.notes}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => supported && setShowModal(true)}
+                disabled={!supported}
+                title={supported ? 'Run git pull && bash deploy.sh' : info?.reason || 'Upgrade not available'}
+                className="w-full flex items-center justify-center gap-2 py-2 rounded-lg font-semibold transition-all"
+                style={{
+                  fontSize: '12px',
+                  background: supported ? 'linear-gradient(135deg, #16A34A, #15803D)' : '#F1F5F9',
+                  color: supported ? '#fff' : '#94A3B8',
+                  border: '1px solid transparent',
+                  cursor: supported ? 'pointer' : 'not-allowed',
+                  boxShadow: supported ? '0 2px 8px rgba(22,163,74,0.3)' : 'none',
+                }}>
+                <Download size={12} />
+                Upgrade to {latestVersionLabel}
+              </button>
+            </>
+          ) : (
+            <div className="px-2 py-1.5 rounded-md flex items-center gap-1.5"
+              style={{ background: '#F0F9FF', border: '1px solid #BAE6FD', fontSize: '10.5px', color: '#075985' }}>
+              <CheckCircle2 size={11} style={{ color: '#0284C7' }} />
+              You're on the latest version.
+            </div>
+          )
+        )}
+      </div>
+
+      {showModal && info && (
+        <UpgradeModal
+          info={info}
+          onClose={() => setShowModal(false)}
+        />
+      )}
+    </>
+  );
 }
 
 /* ─── System Maintenance card ─────────────────────────────────────── */

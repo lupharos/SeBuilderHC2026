@@ -7,23 +7,39 @@ import react from '@vitejs/plugin-react'
 
 /* Build-time metadata baked into the bundle.
    ───────────────────────────────────────────────────────────────────
-   The wizard shows a tiny version chip in the nav rail so the SE can
-   tell at a glance which commit is deployed (handy when bug-reporting
-   from customer engagements). Four signals are exposed:
-     • productName    — UI product name ("HC Studio")
-     • productVersion — Human-facing release label ("v2025.05"). Bump
-                        this on each customer-visible release; the year
-                        / month scheme keeps it readable in screenshots
-                        and customer reports.
-     • commit         — git short SHA, the canonical "what code is live"
-     • builtAt        — UTC ISO timestamp of the build
-     • version        — package.json version, kept for tooling that wants
-                        a strict semver string
-   `git rev-parse` runs once at config time. If git isn't available
-   (e.g. building from a tarball without .git) we fall back to a
-   placeholder so the build doesn't fail. */
-const PRODUCT_NAME = 'HC Studio'
-const PRODUCT_VERSION = 'v2025.05'
+   Single source of truth: versioncheck.json at the repo root. Every
+   surface (login pill, nav-rail chip, Profile panel, in-app upgrade
+   banner) reads from it. The flow is:
+     1. At BUILD time, vite reads versioncheck.json and inlines the
+        version + release date into __BUILD_INFO__ — that snapshot
+        ships with the bundle, so the UI never goes blank when the
+        host is offline.
+     2. At BUILD time, vite ALSO emits versioncheck.json as a static
+        asset to dist/, so nginx serves it at /versioncheck.json on
+        the deploy host (see the versionCheckPlugin below).
+     3. At RUNTIME, the Profile panel fetches /versioncheck.json and
+        compares it to the baked-in __BUILD_INFO__.productVersion.
+        Mismatch → "Upgrade available, please click Upgrade" banner,
+        wired to the same self-upgrade endpoint as the manual button.
+   Bumping a release is now one edit to versioncheck.json + a deploy.
+   The deploy.sh rebuild copies the new JSON into dist/ automatically. */
+const VERSIONCHECK_PATH = path.resolve(__dirname, 'versioncheck.json')
+
+type VersionCheck = {
+  productName?: string
+  version?: string
+  releasedAt?: string
+  notes?: string
+}
+
+function readVersionCheck(): VersionCheck {
+  try {
+    const raw = readFileSync(VERSIONCHECK_PATH, 'utf8')
+    return JSON.parse(raw) as VersionCheck
+  } catch {
+    return {}
+  }
+}
 
 function readBuildInfo() {
   let commit = 'nogit'
@@ -42,12 +58,69 @@ function readBuildInfo() {
     const pkg = JSON.parse(readFileSync(path.resolve(__dirname, 'package.json'), 'utf8'))
     if (typeof pkg.version === 'string') version = pkg.version
   } catch { /* keep placeholder */ }
+  const vc = readVersionCheck()
+  const productName    = vc.productName    || 'HC Studio'
+  const rawProductVersion = vc.version     || '0.0.0'
+  /* Display label always carries a leading "v" — versioncheck.json
+     stores the bare number so an automated bumper can edit it without
+     worrying about the prefix. */
+  const productVersion = rawProductVersion.startsWith('v') ? rawProductVersion : `v${rawProductVersion}`
+  const releasedAt     = vc.releasedAt     || ''
+  const releaseNotes   = vc.notes          || ''
   return {
-    productName: PRODUCT_NAME,
-    productVersion: PRODUCT_VERSION,
+    productName,
+    productVersion,
+    releasedAt,
+    releaseNotes,
     commit: dirty ? `${commit}-dirty` : commit,
     builtAt: new Date().toISOString(),
     version,
+  }
+}
+
+/* Versioncheck plugin — copies the JSON into dist/ at build time AND
+   serves it from the dev middleware so /versioncheck.json works in
+   both `vite dev` and `vite build`. Without this the frontend would
+   only see the build-time snapshot and could never detect a newer
+   version on the host. */
+function versionCheckPlugin() {
+  return {
+    name: 'versioncheck-emitter',
+    /* Build: emit dist/versioncheck.json from the repo-root source so
+       nginx can serve it at the well-known URL after deploy. */
+    generateBundle() {
+      let source: string
+      try {
+        source = readFileSync(VERSIONCHECK_PATH, 'utf8')
+      } catch {
+        /* No file on disk — fall back to a synthesized minimal JSON
+           so the frontend's fetch doesn't 404. */
+        const info = readBuildInfo()
+        source = JSON.stringify({
+          productName: info.productName,
+          version: info.productVersion.replace(/^v/, ''),
+          releasedAt: '',
+          notes: '',
+        }, null, 2)
+      }
+      // @ts-expect-error rollup plugin context (added by vite)
+      this.emitFile({ type: 'asset', fileName: 'versioncheck.json', source })
+    },
+    /* Dev: serve the file directly so the Profile panel's fetch works
+       against `npm run dev` as well. */
+    configureServer(server: any) {
+      server.middlewares.use('/versioncheck.json', (_req: any, res: any) => {
+        try {
+          const source = readFileSync(VERSIONCHECK_PATH, 'utf8')
+          res.setHeader('Content-Type', 'application/json')
+          res.setHeader('Cache-Control', 'no-store')
+          res.end(source)
+        } catch {
+          res.statusCode = 404
+          res.end()
+        }
+      })
+    },
   }
 }
 
@@ -68,6 +141,7 @@ function figmaAssetResolver() {
 export default defineConfig({
   plugins: [
     figmaAssetResolver(),
+    versionCheckPlugin(),
     // The React and Tailwind plugins are both required for Make, even if
     // Tailwind is not being actively used – do not remove them
     react(),
