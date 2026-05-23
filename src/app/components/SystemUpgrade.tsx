@@ -19,6 +19,10 @@ export type UpgradePlatformInfo = {
   upgradeAvailable: boolean;
   repoPath: string | null;
   repoOwner: string | null;
+  /** True when the systemd unit still has ProtectHome=true — /home
+   *  is invisible to the System API and a one-time manual deploy.sh
+   *  refresh is required before in-app upgrades can run. */
+  homeHidden?: boolean;
   reason: string;
 };
 
@@ -88,6 +92,17 @@ export function SystemMaintenanceCard({ info }: { info: UpgradePlatformInfo | nu
           <div className="mt-2 px-2 py-1.5 rounded-md"
             style={{ background: '#FFFBEB', border: '1px solid #FDE68A', fontSize: '10px', color: '#92400E', lineHeight: 1.5 }}>
             {reason}
+          </div>
+        )}
+        {!supported && info?.homeHidden && (
+          <div className="mt-2 px-2 py-2 rounded-md"
+            style={{ background: '#0F172A', border: '1px solid #1E293B' }}>
+            <div style={{ fontSize: '9px', fontWeight: 700, color: '#94A3B8', fontFamily: 'monospace', letterSpacing: '0.08em', marginBottom: 4 }}>
+              ONE-TIME FIX
+            </div>
+            <code style={{ fontSize: '10px', color: '#86EFAC', fontFamily: 'JetBrains Mono, monospace', display: 'block', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+              cd ~/SeBuilderHC2026 &amp;&amp; git pull &amp;&amp; sudo bash deploy.sh
+            </code>
           </div>
         )}
       </div>

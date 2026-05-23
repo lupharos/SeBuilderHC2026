@@ -152,6 +152,13 @@ if [ -z "$NODE_BIN" ]; then
   exit 1
 fi
 
+# Self-upgrade log directory — survives service restarts (PrivateTmp
+# would make /tmp disappear between the old + new companion instance,
+# so the post-upgrade UI poll would see an empty log). Owned by root,
+# world-readable so the upgrade modal can tail it without privilege.
+sudo mkdir -p /var/log/forcepoint-hc
+sudo chmod 0755 /var/log/forcepoint-hc
+
 sudo bash -c "cat > /etc/systemd/system/${COMPANION_SERVICE}.service" <<EOL
 [Unit]
 Description=Forcepoint HC Companion (SQL + DLP REST API + Customer Connector broker)
@@ -167,6 +174,7 @@ Environment=PORT=${COMPANION_PORT}
 Environment=HOST=127.0.0.1
 Environment=NODE_ENV=production
 Environment=CONNECTOR_AGENT_PATH=${CONNECTOR_AGENT_DEST}
+Environment=HC_UPGRADE_LOG=/var/log/forcepoint-hc/upgrade.log
 ExecStart=${NODE_BIN} ${SERVER_DIR}/index.mjs
 Restart=on-failure
 RestartSec=5
@@ -174,12 +182,27 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=${COMPANION_SERVICE}
 
-# Hardening — companion only needs read access to its own folder and
-# outbound network. No file persistence, no inbound state on disk.
+# Hardening — companion needs outbound network for SQL Server / DLP
+# REST API connections, plus read access to the operator's repo checkout
+# (under /home/<user>/SeBuilderHC2026) so the Profile → "Check for
+# Updates" flow can run \`git pull && bash deploy.sh\` in-place.
+#
+# ProtectHome was previously \`true\` but that hid /home from this unit's
+# mount namespace — and every child process inherits the namespace, so
+# even \`su - student -c '...'\` couldn't see the repo. We can't tighten
+# this back without breaking self-upgrade or moving the SE checkout
+# outside \$HOME.
+#
+# PrivateTmp was previously \`true\` but that created a per-process /tmp
+# that vanished when deploy.sh restarted this unit mid-upgrade — the
+# new companion instance would lose the upgrade log right when the
+# frontend needs to tail it. Logs now live at /var/log/forcepoint-hc/
+# instead, which survives restarts independent of namespace flags.
 NoNewPrivileges=true
 ProtectSystem=full
-ProtectHome=true
-PrivateTmp=true
+ProtectHome=false
+PrivateTmp=false
+ReadWritePaths=/var/log/forcepoint-hc /var/lib/forcepoint-hc
 
 [Install]
 WantedBy=multi-user.target

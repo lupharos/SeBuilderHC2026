@@ -1,0 +1,4 @@
+{
+  "version": "2025.05.01",
+  "notes": "Added CONNECTOR_AGENT_PATH environment variable to deploy.sh and updated health indicator labels in NavigationRail.tsx."
+}

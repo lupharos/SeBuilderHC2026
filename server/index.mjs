@@ -1872,29 +1872,82 @@ app.get('/health', (_req, res) => {
    mid-flight; once spawned the child runs to completion regardless of
    what happens to this process. Output is appended to a log file the
    frontend can tail via /api/admin/upgrade/log. */
-const UPGRADE_LOG_PATH = process.env.HC_UPGRADE_LOG || '/tmp/forcepoint-hc-upgrade.log';
+/* Upgrade log path — first usable candidate wins. The systemd unit
+   sets HC_UPGRADE_LOG=/var/log/forcepoint-hc/upgrade.log, which is the
+   path that survives the service restart triggered by deploy.sh. On
+   dev hosts where /var/log/forcepoint-hc/ doesn't exist we fall back
+   to /tmp. */
+function resolveUpgradeLogPath() {
+  const candidates = [
+    process.env.HC_UPGRADE_LOG,
+    '/var/log/forcepoint-hc/upgrade.log',
+    '/tmp/forcepoint-hc-upgrade.log',
+  ].filter(Boolean);
+  for (const c of candidates) {
+    try {
+      const dir = path.dirname(c);
+      fs.accessSync(dir, fs.constants.W_OK);
+      return c;
+    } catch { /* try next */ }
+  }
+  return '/tmp/forcepoint-hc-upgrade.log';
+}
+const UPGRADE_LOG_PATH = resolveUpgradeLogPath();
 const UPGRADE_REPO_DEFAULTS = [
   process.env.HC_UPGRADE_REPO_PATH,
   '/home/student/SeBuilderHC2026',
   path.join(os.homedir() || '/root', 'SeBuilderHC2026'),
 ].filter(Boolean);
 
-/* Resolve which repo directory exists. Returns null when nothing is
-   on disk — frontend uses that to show "Upgrade not configured". */
+/* Resolve which repo directory exists. Returns { repo, diagnostic }:
+     - repo is non-null when we found a usable checkout
+     - diagnostic carries the per-candidate stat results so the platform
+       endpoint can produce an actionable error message instead of just
+       "set HC_UPGRADE_REPO_PATH" when the real problem is something
+       like systemd's ProtectHome=true hiding /home from this unit. */
 function resolveUpgradeRepo() {
+  const tried = [];
   for (const candidate of UPGRADE_REPO_DEFAULTS) {
+    const entry = { path: candidate, exists: false, isDir: false, hasDeploy: false, hasGit: false, errno: null };
     try {
       const st = fs.statSync(candidate);
-      if (st.isDirectory()) {
+      entry.exists = true;
+      entry.isDir = st.isDirectory();
+      if (entry.isDir) {
         const deploy = path.join(candidate, 'deploy.sh');
         const gitDir = path.join(candidate, '.git');
-        if (fs.existsSync(deploy) && fs.existsSync(gitDir)) {
-          return { path: candidate, deployScript: deploy, owner: st.uid };
+        entry.hasDeploy = fs.existsSync(deploy);
+        entry.hasGit = fs.existsSync(gitDir);
+        if (entry.hasDeploy && entry.hasGit) {
+          tried.push(entry);
+          return {
+            repo: { path: candidate, deployScript: deploy, owner: st.uid },
+            tried,
+          };
         }
       }
-    } catch { /* try next */ }
+    } catch (err) {
+      entry.errno = err.code || null;
+    }
+    tried.push(entry);
   }
-  return null;
+  return { repo: null, tried };
+}
+
+/* Heuristic: is the systemd hardening hiding /home from us? When the
+   companion runs under a unit with ProtectHome=true (the default until
+   the 2026-05 deploy.sh refresh) every path under /home returns ENOENT
+   regardless of what's actually on disk. We detect this by checking
+   /home itself — if even the parent directory is missing in our mount
+   namespace, almost certainly ProtectHome is in effect. */
+function isHomeNamespaceHidden() {
+  if (process.platform !== 'linux') return false;
+  try {
+    fs.statSync('/home');
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 /* Map a numeric uid to a username. Reads /etc/passwd directly — avoids
@@ -1913,7 +1966,26 @@ function uidToUsername(uid) {
 
 app.get('/api/admin/platform', (_req, res) => {
   const platform = process.platform;
-  const repo = platform === 'linux' ? resolveUpgradeRepo() : null;
+  const lookup = platform === 'linux' ? resolveUpgradeRepo() : { repo: null, tried: [] };
+  const repo = lookup.repo;
+  /* Diagnostic: if /home itself is invisible, the systemd unit still
+     has ProtectHome=true. Tell the operator exactly what to do rather
+     than the generic "set HC_UPGRADE_REPO_PATH" hint, which won't help
+     here because no path under /home would be visible. */
+  const homeHidden = platform === 'linux' && repo === null && isHomeNamespaceHidden();
+  let reason = '';
+  if (platform !== 'linux') {
+    reason = 'Self-upgrade only runs on Linux — the deploy script targets Ubuntu/nginx/systemd.';
+  } else if (repo === null && homeHidden) {
+    reason =
+      'The System API service can\'t see /home because its systemd unit still has ProtectHome=true. ' +
+      'Apply the deploy.sh refresh once manually:  cd ~/SeBuilderHC2026 && git pull && sudo bash deploy.sh — ' +
+      'after that the in-app Upgrade button will work for future updates.';
+  } else if (repo === null) {
+    reason =
+      'No SeBuilderHC2026 clone with deploy.sh + .git was found in the search path. ' +
+      'Set HC_UPGRADE_REPO_PATH in the systemd unit Environment= to point at the SE checkout.';
+  }
   res.json({
     platform,
     nodeVersion: process.version,
@@ -1921,11 +1993,9 @@ app.get('/api/admin/platform', (_req, res) => {
     upgradeAvailable: platform === 'linux' && repo !== null,
     repoPath: repo ? repo.path : null,
     repoOwner: repo ? uidToUsername(repo.owner) : null,
-    reason: platform !== 'linux'
-      ? 'Self-upgrade only runs on Linux — the deploy script targets Ubuntu/nginx/systemd.'
-      : repo === null
-        ? 'No SeBuilderHC2026 clone with deploy.sh + .git was found in the search path. Set HC_UPGRADE_REPO_PATH to point at the SE checkout.'
-        : '',
+    homeHidden,
+    searchPath: lookup.tried,
+    reason,
   });
 });
 
@@ -1938,9 +2008,15 @@ app.post('/api/admin/upgrade', (_req, res) => {
   if (process.platform !== 'linux') {
     return res.status(412).json({ ok: false, error: 'Self-upgrade is Linux-only.' });
   }
-  const repo = resolveUpgradeRepo();
+  const { repo } = resolveUpgradeRepo();
   if (!repo) {
-    return res.status(404).json({ ok: false, error: 'No SeBuilderHC2026 clone found on the search path.' });
+    const homeHidden = isHomeNamespaceHidden();
+    return res.status(404).json({
+      ok: false,
+      error: homeHidden
+        ? 'The systemd unit still has ProtectHome=true — /home is hidden from this service. Apply the deploy.sh refresh once manually (cd ~/SeBuilderHC2026 && git pull && sudo bash deploy.sh) to enable in-app upgrades.'
+        : 'No SeBuilderHC2026 clone found on the search path.',
+    });
   }
   const ownerUser = uidToUsername(repo.owner);
   const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
