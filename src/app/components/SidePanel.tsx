@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { X, LogOut, Mail, Shield, AlertTriangle } from 'lucide-react';
 import type { PanelType } from './Dashboard';
-import { SystemMaintenanceCard, useUpgradePlatform, VersionCheckCard, useVersionCheck } from './SystemUpgrade';
+import { VersionCheckCard, useVersionCheck } from './SystemUpgrade';
 
 interface SidePanelProps {
   panelType: PanelType;
@@ -121,11 +121,9 @@ const templateList = [
 
 export function SidePanel({ panelType, onClose, onNavigate, onLogout }: SidePanelProps) {
   const [showLogoutModal, setShowLogoutModal] = useState(false);
-  /* Probe the System API for self-upgrade capability + the latest
-     advertised version. Both hooks fire one-shot fetches on mount and
-     are cheap; their results drive the Version Check + System
-     Maintenance cards on the Profile panel. */
-  const upgradeInfo = useUpgradePlatform();
+  /* Single hook drives the Profile panel's release-management card.
+     Fires a one-shot fetch to GitHub for the latest versioncheck.json
+     and exposes a refresh() the operator can trigger manually. */
   const versionCheck = useVersionCheck();
 
   const handleLogoutConfirm = () => {
@@ -305,19 +303,12 @@ export function SidePanel({ panelType, onClose, onNavigate, onLogout }: SidePane
               ))}
             </div>
 
-            {/* Version Check — pulls /versioncheck.json from the host
-                and compares against the version baked into this bundle.
-                When they differ the green Upgrade button takes the
-                operator straight into the same self-upgrade flow as the
-                manual button below. */}
-            <VersionCheckCard info={upgradeInfo} state={versionCheck} />
-
-            {/* System Maintenance — only renders the Upgrade button when
-                the System API reports it's running on Linux with a usable
-                clone of the repo. On Windows / macOS dev hosts the card
-                stays visible but the button is disabled with the reason
-                shown beneath it. */}
-            <SystemMaintenanceCard info={upgradeInfo} />
+            {/* Version Check — pulls versioncheck.json straight from
+                the GitHub repo and compares against the version baked
+                into this bundle. When they differ the panel shows the
+                exact SSH command the operator runs on the Ubuntu host
+                to pull, redeploy, and statuscheck. */}
+            <VersionCheckCard state={versionCheck} />
 
             {/* Logout */}
             <button

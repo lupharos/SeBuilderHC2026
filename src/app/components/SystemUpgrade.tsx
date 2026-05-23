@@ -1,55 +1,31 @@
-import { useEffect, useRef, useState } from 'react';
-import { Download, RefreshCw, Server, AlertTriangle, CheckCircle2, XCircle, Terminal, Sparkles } from 'lucide-react';
-
-/* ─── System Upgrade ─────────────────────────────────────────────────
-   Self-upgrade trigger for the Ubuntu-hosted companion. Talks to:
-     GET  /api/admin/platform          → tells us whether the host can
-                                         actually run the upgrade.
-     POST /api/admin/upgrade           → kicks off a detached
-                                         `git pull && bash deploy.sh`.
-     GET  /api/admin/upgrade/log       → tail the upgrade log.
-   The button is hidden entirely when the companion responds that it's
-   not on Linux or no repo is configured — running these commands on a
-   Windows dev box would be nonsensical, so we don't expose them. */
-
-export type UpgradePlatformInfo = {
-  platform: string;
-  nodeVersion: string;
-  runningAsRoot: boolean;
-  upgradeAvailable: boolean;
-  repoPath: string | null;
-  repoOwner: string | null;
-  /** True when the systemd unit still has ProtectHome=true — /home
-   *  is invisible to the System API and a one-time manual deploy.sh
-   *  refresh is required before in-app upgrades can run. */
-  homeHidden?: boolean;
-  reason: string;
-};
-
-export function useUpgradePlatform(): UpgradePlatformInfo | null {
-  const [info, setInfo] = useState<UpgradePlatformInfo | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await fetch('/api/admin/platform', { method: 'GET' });
-        if (!r.ok) return;
-        const json = await r.json();
-        if (!cancelled) setInfo(json);
-      } catch { /* System API offline — leave info null */ }
-    })();
-    return () => { cancelled = true; };
-  }, []);
-  return info;
-}
+import { useEffect, useState } from 'react';
+import { RefreshCw, Sparkles, CheckCircle2, Terminal, Copy, Check } from 'lucide-react';
 
 /* ─── Version check ──────────────────────────────────────────────────
-   Fetches /versioncheck.json from the deploy host and compares the
-   advertised version against the one baked into __BUILD_INFO__ at
-   build time. When they differ the host has a newer release ready
-   (deploy.sh ran more recently than this SPA bundle), and we surface
-   an "Upgrade available" banner that ties straight into the existing
-   self-upgrade flow. */
+   Fetches versioncheck.json from the GitHub repo's main branch and
+   compares the advertised version against the one baked into the
+   bundle at build time. When they differ the operator has a newer
+   release waiting and we surface an "Upgrade recommended" panel that
+   tells them the exact SSH command to run on the deploy host —
+   intentionally NOT an in-app trigger, because executing
+   `sudo bash deploy.sh` end-to-end requires manual oversight (it
+   restarts the service mid-flight and may need attention if any
+   step fails). */
+
+/* Raw content URL on GitHub. Public file, CORS-friendly — fetchable
+   straight from the browser without proxying. */
+const GITHUB_VERSIONCHECK_URL =
+  'https://raw.githubusercontent.com/lupharos/SeBuilderHC2026/main/versioncheck.json';
+
+/* The single canonical upgrade command the operator runs on the
+   Ubuntu host. Mirrors the workflow used since the first deploy:
+     1. pull the latest tree
+     2. run deploy.sh under sudo (builds frontend, refreshes systemd,
+        redeploys to nginx, syncs the connector binary)
+     3. statuscheck.sh confirms each service is healthy. */
+export const UPGRADE_SHELL_COMMAND =
+  'cd ~/SeBuilderHC2026 && git pull && sudo bash deploy.sh && bash statuscheck.sh';
+
 export type VersionCheckPayload = {
   productName?: string;
   version?: string;
@@ -101,10 +77,13 @@ export function useVersionCheck(): VersionCheckState {
     setError(null);
     (async () => {
       try {
-        /* Cache-busting query param so the operator's browser doesn't
-           serve a stale versioncheck.json from disk after a redeploy. */
-        const r = await fetch(`/versioncheck.json?_=${Date.now()}`, { method: 'GET' });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        /* Cache-bust so the browser doesn't serve a stale copy after
+           the operator pushes a new release to GitHub. */
+        const r = await fetch(`${GITHUB_VERSIONCHECK_URL}?_=${Date.now()}`, {
+          method: 'GET',
+          cache: 'no-store',
+        });
+        if (!r.ok) throw new Error(`GitHub returned HTTP ${r.status}`);
         const json = (await r.json()) as VersionCheckPayload;
         if (!cancelled) setLatest(json);
       } catch (e) {
@@ -118,8 +97,6 @@ export function useVersionCheck(): VersionCheckState {
 
   const current = {
     productName: __BUILD_INFO__.productName,
-    /* __BUILD_INFO__.productVersion carries the "v" prefix; compare
-       in bare form so the JSON can stay prefix-free. */
     version: __BUILD_INFO__.productVersion.replace(/^v/, ''),
     releasedAt: __BUILD_INFO__.releasedAt,
   };
@@ -137,488 +114,157 @@ export function useVersionCheck(): VersionCheckState {
 }
 
 /* ─── Version check card ─────────────────────────────────────────────
-   Sits above the System Maintenance card in the Profile panel. Shows
-   the current build's version, the latest version advertised by the
-   deploy host's versioncheck.json, and a one-click Upgrade button
-   when the two differ. Tied into the same UpgradeModal as the manual
-   "Check for Updates" button below it. */
-export function VersionCheckCard({ info, state }: { info: UpgradePlatformInfo | null; state: VersionCheckState }) {
-  const [showModal, setShowModal] = useState(false);
-  const supported = info?.upgradeAvailable === true;
+   The single Profile-panel widget for release management. Shows the
+   current build's version, the latest version on GitHub, and (when
+   they differ) the exact SSH command the operator runs to upgrade. */
+export function VersionCheckCard({ state }: { state: VersionCheckState }) {
   const { current, latest, hasUpdate, loading, error, refresh } = state;
-  const latestVersionLabel = latest?.version ? (latest.version.startsWith('v') ? latest.version : `v${latest.version}`) : '—';
+  const [copied, setCopied] = useState(false);
+  const latestVersionLabel = latest?.version
+    ? (latest.version.startsWith('v') ? latest.version : `v${latest.version}`)
+    : '—';
   const currentLabel = current.version.startsWith('v') ? current.version : `v${current.version}`;
 
-  return (
-    <>
-      <div className="rounded-xl p-3 mb-3"
-        style={{ background: '#F8FAFC', border: '1px solid #EEF0F5' }}>
-        <div className="flex items-center gap-2 mb-2.5">
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center"
-            style={{ background: hasUpdate ? 'rgba(22,163,74,0.12)' : 'rgba(37,99,235,0.1)' }}>
-            <Sparkles size={13} style={{ color: hasUpdate ? '#16A34A' : '#2563EB' }} strokeWidth={2.5} />
-          </div>
-          <div className="flex-1">
-            <div style={{ fontSize: '11.5px', fontWeight: 700, color: '#0F172A' }}>Version Check</div>
-            <div style={{ fontSize: '10px', color: '#94A3B8' }}>
-              {loading ? 'Checking…' : error ? `Check failed: ${error}` : `Last checked ${new Date().toLocaleTimeString()}`}
-            </div>
-          </div>
-          <button
-            onClick={refresh}
-            title="Re-check versioncheck.json"
-            className="w-6 h-6 rounded-md flex items-center justify-center transition-all"
-            style={{ background: '#F1F5F9', color: '#64748B', border: '1px solid #E2E8F0' }}
-          >
-            <RefreshCw size={11} className={loading ? 'animate-spin' : ''} />
-          </button>
-        </div>
-
-        {/* Current + Latest pair */}
-        <div className="grid grid-cols-2 gap-2 mb-2">
-          <div className="rounded-lg p-2"
-            style={{ background: '#FFFFFF', border: '1px solid #E2E8F0' }}>
-            <div style={{ fontSize: '9px', fontWeight: 700, color: '#94A3B8', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-              Current
-            </div>
-            <div style={{ fontSize: '13px', fontWeight: 700, color: '#0F172A', fontFamily: 'JetBrains Mono, monospace', marginTop: 2 }}>
-              {currentLabel}
-            </div>
-            {current.releasedAt && (
-              <div style={{ fontSize: '9.5px', color: '#94A3B8', marginTop: 1 }}>
-                {current.releasedAt}
-              </div>
-            )}
-          </div>
-          <div className="rounded-lg p-2"
-            style={{
-              background: hasUpdate ? '#F0FDF4' : '#FFFFFF',
-              border: `1px solid ${hasUpdate ? '#BBF7D0' : '#E2E8F0'}`,
-            }}>
-            <div style={{ fontSize: '9px', fontWeight: 700, color: hasUpdate ? '#16A34A' : '#94A3B8', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-              Latest
-            </div>
-            <div style={{ fontSize: '13px', fontWeight: 700, color: hasUpdate ? '#15803D' : '#0F172A', fontFamily: 'JetBrains Mono, monospace', marginTop: 2 }}>
-              {latestVersionLabel}
-            </div>
-            {latest?.releasedAt && (
-              <div style={{ fontSize: '9.5px', color: hasUpdate ? '#16A34A' : '#94A3B8', marginTop: 1 }}>
-                {latest.releasedAt}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Status row */}
-        {!loading && !error && (
-          hasUpdate ? (
-            <>
-              <div className="px-2 py-2 rounded-md mb-2"
-                style={{ background: '#F0FDF4', border: '1px solid #BBF7D0' }}>
-                <div className="flex items-start gap-1.5">
-                  <Sparkles size={11} style={{ color: '#16A34A', flexShrink: 0, marginTop: 1 }} />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#15803D' }}>
-                      Upgrade available
-                    </div>
-                    {latest?.notes && (
-                      <div style={{ fontSize: '10px', color: '#475569', marginTop: 3, lineHeight: 1.5 }}>
-                        {latest.notes}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-              <button
-                onClick={() => supported && setShowModal(true)}
-                disabled={!supported}
-                title={supported ? 'Run git pull && bash deploy.sh' : info?.reason || 'Upgrade not available'}
-                className="w-full flex items-center justify-center gap-2 py-2 rounded-lg font-semibold transition-all"
-                style={{
-                  fontSize: '12px',
-                  background: supported ? 'linear-gradient(135deg, #16A34A, #15803D)' : '#F1F5F9',
-                  color: supported ? '#fff' : '#94A3B8',
-                  border: '1px solid transparent',
-                  cursor: supported ? 'pointer' : 'not-allowed',
-                  boxShadow: supported ? '0 2px 8px rgba(22,163,74,0.3)' : 'none',
-                }}>
-                <Download size={12} />
-                Upgrade to {latestVersionLabel}
-              </button>
-            </>
-          ) : (
-            <div className="px-2 py-1.5 rounded-md flex items-center gap-1.5"
-              style={{ background: '#F0F9FF', border: '1px solid #BAE6FD', fontSize: '10.5px', color: '#075985' }}>
-              <CheckCircle2 size={11} style={{ color: '#0284C7' }} />
-              You're on the latest version.
-            </div>
-          )
-        )}
-      </div>
-
-      {showModal && info && (
-        <UpgradeModal
-          info={info}
-          onClose={() => setShowModal(false)}
-        />
-      )}
-    </>
-  );
-}
-
-/* ─── System Maintenance card ─────────────────────────────────────── */
-export function SystemMaintenanceCard({ info }: { info: UpgradePlatformInfo | null }) {
-  const [showModal, setShowModal] = useState(false);
-  /* When info is null the companion is unreachable — we still render the
-     card but disable the button with a meaningful tooltip. */
-  const supported = info?.upgradeAvailable === true;
-  const reason = info?.reason || (info === null ? 'System API is unreachable — start the System API to enable upgrades.' : '');
-  return (
-    <>
-      <div
-        className="rounded-xl p-3 mb-4"
-        style={{ background: '#F8FAFC', border: '1px solid #EEF0F5' }}
-      >
-        <div className="flex items-center gap-2 mb-2.5">
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'rgba(124,58,237,0.1)' }}>
-            <Server size={13} style={{ color: '#7C3AED' }} strokeWidth={2.5} />
-          </div>
-          <div className="flex-1">
-            <div style={{ fontSize: '11.5px', fontWeight: 700, color: '#0F172A' }}>System Maintenance</div>
-            <div style={{ fontSize: '10px', color: '#94A3B8' }}>
-              {supported
-                ? `Linux host · ${info?.repoOwner ?? '—'}@${info?.repoPath ?? ''}`
-                : 'Self-upgrade unavailable on this host'}
-            </div>
-          </div>
-        </div>
-
-        <button
-          onClick={() => supported && setShowModal(true)}
-          disabled={!supported}
-          title={supported ? 'git pull && bash deploy.sh on the Ubuntu host' : reason}
-          className="w-full flex items-center justify-center gap-2 py-2 rounded-lg font-semibold transition-all"
-          style={{
-            fontSize: '12px',
-            background: supported ? 'linear-gradient(135deg, #2563EB, #7C3AED)' : '#F1F5F9',
-            color: supported ? '#fff' : '#94A3B8',
-            border: '1px solid transparent',
-            cursor: supported ? 'pointer' : 'not-allowed',
-            boxShadow: supported ? '0 2px 8px rgba(124,58,237,0.25)' : 'none',
-          }}
-        >
-          <Download size={12} />
-          Check for Updates
-        </button>
-
-        {!supported && reason && (
-          <div className="mt-2 px-2 py-1.5 rounded-md"
-            style={{ background: '#FFFBEB', border: '1px solid #FDE68A', fontSize: '10px', color: '#92400E', lineHeight: 1.5 }}>
-            {reason}
-          </div>
-        )}
-        {!supported && info?.homeHidden && (
-          <div className="mt-2 px-2 py-2 rounded-md"
-            style={{ background: '#0F172A', border: '1px solid #1E293B' }}>
-            <div style={{ fontSize: '9px', fontWeight: 700, color: '#94A3B8', fontFamily: 'monospace', letterSpacing: '0.08em', marginBottom: 4 }}>
-              ONE-TIME FIX
-            </div>
-            <code style={{ fontSize: '10px', color: '#86EFAC', fontFamily: 'JetBrains Mono, monospace', display: 'block', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-              cd ~/SeBuilderHC2026 &amp;&amp; git pull &amp;&amp; sudo bash deploy.sh
-            </code>
-          </div>
-        )}
-      </div>
-
-      {showModal && (
-        <UpgradeModal
-          info={info!}
-          onClose={() => setShowModal(false)}
-        />
-      )}
-    </>
-  );
-}
-
-/* ─── Upgrade modal ────────────────────────────────────────────────── */
-type Phase = 'confirm' | 'running' | 'restarting' | 'done' | 'failed';
-
-function UpgradeModal({ info, onClose }: { info: UpgradePlatformInfo; onClose: () => void }) {
-  const [phase, setPhase] = useState<Phase>('confirm');
-  const [log, setLog] = useState<string>('');
-  const [startedAt, setStartedAt] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const logBoxRef = useRef<HTMLPreElement>(null);
-  /* Counter of consecutive failed log polls — used to flip into the
-     "restarting" phase when deploy.sh kills our own service. */
-  const consecutiveFails = useRef(0);
-
-  const startUpgrade = async () => {
+  const copyCommand = async () => {
     try {
-      const r = await fetch('/api/admin/upgrade', { method: 'POST' });
-      const json = await r.json();
-      if (!r.ok || !json.ok) {
-        setError(json.error || `System API returned ${r.status}`);
-        setPhase('failed');
-        return;
-      }
-      setStartedAt(json.startedAt || new Date().toISOString());
-      setPhase('running');
-    } catch (e) {
-      setError((e as Error).message);
-      setPhase('failed');
-    }
+      await navigator.clipboard.writeText(UPGRADE_SHELL_COMMAND);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch { /* clipboard unavailable — operator can still select + copy */ }
   };
 
-  /* Poll the log every 2s while we're running/restarting. The companion
-     itself gets restarted mid-run, so a /log call returning a network
-     error doesn't mean the upgrade failed — it means deploy.sh is
-     swapping our process. Wait for it to come back. */
-  useEffect(() => {
-    if (phase !== 'running' && phase !== 'restarting') return;
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const r = await fetch('/api/admin/upgrade/log?bytes=131072', { method: 'GET' });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const json = await r.json();
-        if (cancelled) return;
-        consecutiveFails.current = 0;
-        if (typeof json.log === 'string') setLog(json.log);
-        if (phase === 'restarting' && !json.running) {
-          /* Companion answered after a restart cycle — upgrade is done.
-             Decide success vs failure based on the tail of the log. */
-          const tail = (json.log || '').slice(-2000).toLowerCase();
-          if (/deploy.*complete|✓ deploy|✔ done|successfully|completed/.test(tail)) {
-            setPhase('done');
-          } else if (/error|failed|fatal|abort/.test(tail)) {
-            setPhase('failed');
-          } else {
-            /* Couldn't tell — call it done since the service is back. */
-            setPhase('done');
-          }
-        } else if (phase === 'running' && !json.running && json.exists) {
-          /* Companion didn't restart yet — could be the early git-pull
-             phase finishing instantly, or deploy.sh hasn't started yet.
-             Give it one more cycle before declaring done. */
-          consecutiveFails.current += 1;
-          if (consecutiveFails.current >= 3) setPhase('done');
-        }
-      } catch {
-        /* Companion went away — deploy.sh is restarting us. Flip into
-           restarting phase and keep polling; we'll detect the come-back
-           on the next successful response. */
-        if (cancelled) return;
-        consecutiveFails.current += 1;
-        if (consecutiveFails.current >= 1 && phase === 'running') {
-          setPhase('restarting');
-        }
-      }
-    };
-    const id = setInterval(tick, 2000);
-    tick(); // immediate first poll
-    return () => { cancelled = true; clearInterval(id); };
-  }, [phase]);
-
-  /* Stick scroll to bottom as new log lines come in. */
-  useEffect(() => {
-    const el = logBoxRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [log]);
-
   return (
-    <div
-      className="fixed inset-0 z-[60] flex items-center justify-center"
-      style={{ background: 'rgba(10,18,35,0.6)', backdropFilter: 'blur(4px)' }}
-      onClick={phase === 'confirm' || phase === 'done' || phase === 'failed' ? onClose : undefined}
-    >
-      <div
-        className="rounded-2xl overflow-hidden"
-        style={{
-          width: phase === 'confirm' ? 460 : 720,
-          maxWidth: 'calc(100vw - 32px)',
-          maxHeight: 'calc(100vh - 48px)',
-          background: '#fff',
-          boxShadow: '0 24px 60px rgba(10,18,35,0.25)',
-          border: '1px solid #E2E8F0',
-          display: 'flex',
-          flexDirection: 'column',
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center gap-3 px-5 py-4 flex-shrink-0"
-          style={{ background: 'linear-gradient(135deg, #0F172A 0%, #1E293B 100%)' }}>
-          <div className="w-8 h-8 rounded-lg flex items-center justify-center"
-            style={{ background: 'rgba(124,58,237,0.18)', border: '1px solid rgba(124,58,237,0.35)' }}>
-            {phase === 'running' || phase === 'restarting'
-              ? <RefreshCw size={14} className="text-violet-300 animate-spin" />
-              : phase === 'done' ? <CheckCircle2 size={14} className="text-emerald-300" />
-              : phase === 'failed' ? <XCircle size={14} className="text-red-300" />
-              : <Server size={14} className="text-violet-300" />}
-          </div>
-          <div className="flex-1">
-            <div style={{ fontSize: '13px', fontWeight: 700, color: '#fff', letterSpacing: '0.01em' }}>
-              {phase === 'confirm'   && 'Confirm System Upgrade'}
-              {phase === 'running'   && 'Upgrade in Progress'}
-              {phase === 'restarting'&& 'System API Restarting'}
-              {phase === 'done'      && 'Upgrade Complete'}
-              {phase === 'failed'    && 'Upgrade Failed'}
-            </div>
-            <div style={{ fontSize: '10.5px', color: 'rgba(255,255,255,0.55)', fontFamily: 'monospace', letterSpacing: '0.04em' }}>
-              {phase === 'confirm'    && 'GIT PULL · BASH DEPLOY.SH'}
-              {phase === 'running'    && (startedAt ? `STARTED ${new Date(startedAt).toLocaleTimeString()}` : 'WORKING…')}
-              {phase === 'restarting' && 'WAITING FOR SERVICE TO COME BACK'}
-              {phase === 'done'       && 'SERVICE READY · PAGE RELOAD RECOMMENDED'}
-              {phase === 'failed'     && 'SEE LOG BELOW'}
-            </div>
+    <div className="rounded-xl p-3 mb-4"
+      style={{ background: '#F8FAFC', border: '1px solid #EEF0F5' }}>
+      <div className="flex items-center gap-2 mb-2.5">
+        <div className="w-7 h-7 rounded-lg flex items-center justify-center"
+          style={{ background: hasUpdate ? 'rgba(22,163,74,0.12)' : 'rgba(37,99,235,0.1)' }}>
+          <Sparkles size={13} style={{ color: hasUpdate ? '#16A34A' : '#2563EB' }} strokeWidth={2.5} />
+        </div>
+        <div className="flex-1">
+          <div style={{ fontSize: '11.5px', fontWeight: 700, color: '#0F172A' }}>Version Check</div>
+          <div style={{ fontSize: '10px', color: '#94A3B8' }}>
+            {loading
+              ? 'Checking GitHub…'
+              : error
+                ? `Check failed: ${error}`
+                : `Source: lupharos/SeBuilderHC2026 · main`}
           </div>
         </div>
+        <button
+          onClick={refresh}
+          title="Re-check versioncheck.json on GitHub"
+          className="w-6 h-6 rounded-md flex items-center justify-center transition-all"
+          style={{ background: '#F1F5F9', color: '#64748B', border: '1px solid #E2E8F0' }}
+        >
+          <RefreshCw size={11} className={loading ? 'animate-spin' : ''} />
+        </button>
+      </div>
 
-        {/* Body */}
-        <div className="px-5 py-4 flex-1 overflow-hidden flex flex-col">
-          {phase === 'confirm' && (
-            <>
-              <div className="flex items-start gap-3 mb-4">
-                <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-                  style={{ background: '#FFFBEB', border: '1.5px solid #FDE68A' }}>
-                  <AlertTriangle size={18} style={{ color: '#B58800' }} />
-                </div>
-                <div>
-                  <div style={{ fontSize: '14px', fontWeight: 700, color: '#0F172A', marginBottom: 4 }}>
-                    This will redeploy the application.
-                  </div>
-                  <div style={{ fontSize: '12px', color: '#475569', lineHeight: 1.6 }}>
-                    The System API service will restart during deploy. Active sessions
-                    keep their wizard state, but expect a few seconds of API downtime.
-                  </div>
-                </div>
-              </div>
-              <div className="rounded-lg p-3 mb-4"
-                style={{ background: '#0F172A', border: '1px solid #1E293B' }}>
-                <div className="flex items-center gap-2 mb-2">
-                  <Terminal size={12} className="text-emerald-400" />
-                  <span style={{ fontSize: '10px', fontWeight: 700, color: '#94A3B8', fontFamily: 'monospace', letterSpacing: '0.08em' }}>
-                    REMOTE COMMAND
-                  </span>
-                </div>
-                <code style={{ fontSize: '11.5px', color: '#86EFAC', fontFamily: 'JetBrains Mono, monospace', display: 'block', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                  cd {info.repoPath ?? '<repo>'} &amp;&amp; git pull &amp;&amp; sudo bash deploy.sh
-                </code>
-                <div style={{ fontSize: '10px', color: '#64748B', marginTop: 8, fontFamily: 'monospace' }}>
-                  Repo owner: <span style={{ color: '#CBD5E1' }}>{info.repoOwner ?? '—'}</span>
-                  {' · '}
-                  System API uid: <span style={{ color: '#CBD5E1' }}>{info.runningAsRoot ? 'root' : 'non-root'}</span>
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={onClose}
-                  className="flex-1 py-2.5 rounded-xl font-semibold transition-all"
-                  style={{ fontSize: '13px', background: '#F1F5F9', color: '#334155', border: '1px solid #E2E8F0' }}
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={startUpgrade}
-                  className="flex-1 py-2.5 rounded-xl font-semibold transition-all"
-                  style={{ fontSize: '13px', background: 'linear-gradient(135deg, #2563EB, #7C3AED)', color: '#fff', border: '1px solid transparent', boxShadow: '0 2px 8px rgba(124,58,237,0.3)' }}
-                >
-                  Start Upgrade
-                </button>
-              </div>
-            </>
+      {/* Current + Latest pair */}
+      <div className="grid grid-cols-2 gap-2 mb-2">
+        <div className="rounded-lg p-2"
+          style={{ background: '#FFFFFF', border: '1px solid #E2E8F0' }}>
+          <div style={{ fontSize: '9px', fontWeight: 700, color: '#94A3B8', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+            Current
+          </div>
+          <div style={{ fontSize: '13px', fontWeight: 700, color: '#0F172A', fontFamily: 'JetBrains Mono, monospace', marginTop: 2 }}>
+            {currentLabel}
+          </div>
+          {current.releasedAt && (
+            <div style={{ fontSize: '9.5px', color: '#94A3B8', marginTop: 1 }}>
+              {current.releasedAt}
+            </div>
           )}
-
-          {(phase === 'running' || phase === 'restarting' || phase === 'done' || phase === 'failed') && (
-            <>
-              {phase === 'restarting' && (
-                <div className="mb-3 px-3 py-2 rounded-lg flex items-center gap-2"
-                  style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
-                  <RefreshCw size={12} className="text-amber-600 animate-spin" />
-                  <span style={{ fontSize: '11.5px', color: '#92400E', fontWeight: 500 }}>
-                    deploy.sh restarted the System API service. Reconnecting…
-                  </span>
-                </div>
-              )}
-              {phase === 'done' && (
-                <div className="mb-3 px-3 py-2 rounded-lg flex items-center gap-2"
-                  style={{ background: '#F0FDF4', border: '1px solid #BBF7D0' }}>
-                  <CheckCircle2 size={12} className="text-emerald-600" />
-                  <span style={{ fontSize: '11.5px', color: '#15803D', fontWeight: 500 }}>
-                    Service is back online. Reload the page to pick up the new build.
-                  </span>
-                </div>
-              )}
-              {phase === 'failed' && error && (
-                <div className="mb-3 px-3 py-2 rounded-lg flex items-center gap-2"
-                  style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}>
-                  <XCircle size={12} className="text-red-600" />
-                  <span style={{ fontSize: '11.5px', color: '#991B1B', fontWeight: 500 }}>
-                    {error}
-                  </span>
-                </div>
-              )}
-              <pre
-                ref={logBoxRef}
-                className="flex-1 rounded-lg p-3 overflow-auto"
-                style={{
-                  background: '#0F172A',
-                  border: '1px solid #1E293B',
-                  color: '#86EFAC',
-                  fontSize: '11px',
-                  fontFamily: 'JetBrains Mono, monospace',
-                  lineHeight: 1.5,
-                  maxHeight: 360,
-                  minHeight: 240,
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                }}
-              >
-                {log || '(waiting for output…)'}
-              </pre>
-              <div className="flex gap-2 mt-4">
-                {(phase === 'running' || phase === 'restarting') && (
-                  <button
-                    disabled
-                    className="flex-1 py-2.5 rounded-xl font-semibold"
-                    style={{ fontSize: '13px', background: '#F1F5F9', color: '#94A3B8', border: '1px solid #E2E8F0', cursor: 'not-allowed' }}
-                  >
-                    Running — please wait
-                  </button>
-                )}
-                {phase === 'done' && (
-                  <>
-                    <button
-                      onClick={onClose}
-                      className="flex-1 py-2.5 rounded-xl font-semibold"
-                      style={{ fontSize: '13px', background: '#F1F5F9', color: '#334155', border: '1px solid #E2E8F0' }}
-                    >
-                      Close
-                    </button>
-                    <button
-                      onClick={() => window.location.reload()}
-                      className="flex-1 py-2.5 rounded-xl font-semibold"
-                      style={{ fontSize: '13px', background: 'linear-gradient(135deg, #16A34A, #15803D)', color: '#fff', border: '1px solid transparent' }}
-                    >
-                      Reload Now
-                    </button>
-                  </>
-                )}
-                {phase === 'failed' && (
-                  <button
-                    onClick={onClose}
-                    className="flex-1 py-2.5 rounded-xl font-semibold"
-                    style={{ fontSize: '13px', background: '#F1F5F9', color: '#334155', border: '1px solid #E2E8F0' }}
-                  >
-                    Close
-                  </button>
-                )}
-              </div>
-            </>
+        </div>
+        <div className="rounded-lg p-2"
+          style={{
+            background: hasUpdate ? '#F0FDF4' : '#FFFFFF',
+            border: `1px solid ${hasUpdate ? '#BBF7D0' : '#E2E8F0'}`,
+          }}>
+          <div style={{ fontSize: '9px', fontWeight: 700, color: hasUpdate ? '#16A34A' : '#94A3B8', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+            Latest (GitHub)
+          </div>
+          <div style={{ fontSize: '13px', fontWeight: 700, color: hasUpdate ? '#15803D' : '#0F172A', fontFamily: 'JetBrains Mono, monospace', marginTop: 2 }}>
+            {latestVersionLabel}
+          </div>
+          {latest?.releasedAt && (
+            <div style={{ fontSize: '9.5px', color: hasUpdate ? '#16A34A' : '#94A3B8', marginTop: 1 }}>
+              {latest.releasedAt}
+            </div>
           )}
         </div>
       </div>
+
+      {/* Status row */}
+      {!loading && !error && (
+        hasUpdate ? (
+          <>
+            <div className="px-2 py-2 rounded-md mb-2"
+              style={{ background: '#F0FDF4', border: '1px solid #BBF7D0' }}>
+              <div className="flex items-start gap-1.5">
+                <Sparkles size={11} style={{ color: '#16A34A', flexShrink: 0, marginTop: 1 }} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#15803D' }}>
+                    Upgrade recommended
+                  </div>
+                  {latest?.notes && (
+                    <div style={{ fontSize: '10px', color: '#475569', marginTop: 3, lineHeight: 1.5 }}>
+                      {latest.notes}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* SSH command card — the operator runs this on the
+                Ubuntu deploy host to pull + redeploy + verify. */}
+            <div className="rounded-md p-2"
+              style={{ background: '#0F172A', border: '1px solid #1E293B' }}>
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center gap-1.5">
+                  <Terminal size={11} className="text-emerald-400" />
+                  <span style={{ fontSize: '9px', fontWeight: 700, color: '#94A3B8', fontFamily: 'monospace', letterSpacing: '0.08em' }}>
+                    RUN ON DEPLOY HOST
+                  </span>
+                </div>
+                <button
+                  onClick={copyCommand}
+                  title="Copy command to clipboard"
+                  className="flex items-center gap-1 px-1.5 py-0.5 rounded transition-all"
+                  style={{
+                    fontSize: '9.5px',
+                    fontWeight: 600,
+                    background: copied ? 'rgba(22,163,74,0.18)' : 'rgba(255,255,255,0.06)',
+                    color: copied ? '#86EFAC' : '#CBD5E1',
+                    border: `1px solid ${copied ? 'rgba(134,239,172,0.35)' : 'rgba(255,255,255,0.12)'}`,
+                  }}
+                >
+                  {copied ? <Check size={10} /> : <Copy size={10} />}
+                  {copied ? 'COPIED' : 'COPY'}
+                </button>
+              </div>
+              <code style={{
+                fontSize: '10.5px',
+                color: '#86EFAC',
+                fontFamily: 'JetBrains Mono, monospace',
+                display: 'block',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-all',
+                lineHeight: 1.55,
+              }}>
+                {UPGRADE_SHELL_COMMAND}
+              </code>
+            </div>
+          </>
+        ) : (
+          <div className="px-2 py-1.5 rounded-md flex items-center gap-1.5"
+            style={{ background: '#F0F9FF', border: '1px solid #BAE6FD', fontSize: '10.5px', color: '#075985' }}>
+            <CheckCircle2 size={11} style={{ color: '#0284C7' }} />
+            You're on the latest version.
+          </div>
+        )
+      )}
     </div>
   );
 }
