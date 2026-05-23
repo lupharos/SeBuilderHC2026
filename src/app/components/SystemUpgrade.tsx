@@ -12,9 +12,18 @@ import { RefreshCw, Sparkles, CheckCircle2, Terminal, Copy, Check } from 'lucide
    restarts the service mid-flight and may need attention if any
    step fails). */
 
-/* Raw content URL on GitHub. Public file, CORS-friendly — fetchable
-   straight from the browser without proxying. */
-const GITHUB_VERSIONCHECK_URL =
+/* GitHub Contents API URL — chosen over raw.githubusercontent.com
+   because the raw CDN (Fastly) can serve stale content for several
+   minutes after a push despite `cache: 'no-store'` + query-string
+   cache-busting. The Contents API invalidates aggressively on push
+   and supports `Accept: application/vnd.github.raw` so we get the
+   file body directly without base64 unwrapping. Rate limit is
+   60 requests/hour per IP unauthenticated, which is plenty for a
+   manual "Re-check" button. */
+const GITHUB_API_VERSIONCHECK_URL =
+  'https://api.github.com/repos/lupharos/SeBuilderHC2026/contents/versioncheck.json?ref=main';
+/* Fallback when the API call fails (rate-limit, transient 5xx, etc.). */
+const GITHUB_RAW_VERSIONCHECK_URL =
   'https://raw.githubusercontent.com/lupharos/SeBuilderHC2026/main/versioncheck.json';
 
 /* The single canonical upgrade command the operator runs on the
@@ -40,6 +49,12 @@ export type VersionCheckState = {
   hasUpdate: boolean;
   loading: boolean;
   error: string | null;
+  /** Which source actually delivered the latest payload — useful for
+   *  the operator when debugging a stuck re-check. */
+  source: 'github-api' | 'github-raw' | null;
+  /** ISO timestamp of the last successful fetch — drives the "Last
+   *  checked at HH:MM:SS" line in the UI. */
+  fetchedAt: string | null;
   /** Force a re-fetch — used by the manual "Re-check" button. */
   refresh: () => void;
 };
@@ -66,10 +81,52 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
+/* Try the GitHub Contents API first; if it 5xxs / rate-limits, fall
+   back to raw.githubusercontent.com. Both end up parsing the same
+   JSON envelope. Each attempt adds a fresh cache-buster + the
+   `cache: 'no-store'` fetch option to bypass every cache layer we
+   can influence from the browser. */
+async function fetchLatestVersionCheck(): Promise<{ payload: VersionCheckPayload; source: 'github-api' | 'github-raw' }> {
+  const stamp = Date.now();
+  /* Primary path: GitHub Contents API + raw Accept header. */
+  try {
+    const r = await fetch(`${GITHUB_API_VERSIONCHECK_URL}&_=${stamp}`, {
+      method: 'GET',
+      cache: 'no-store',
+      headers: {
+        'Accept': 'application/vnd.github.raw',
+        /* `no-cache` (vs `no-store`) on the request asks any
+           intermediary to revalidate with the origin before serving. */
+        'Cache-Control': 'no-cache',
+      },
+    });
+    if (r.ok) {
+      const json = (await r.json()) as VersionCheckPayload;
+      return { payload: json, source: 'github-api' };
+    }
+    /* 403 here usually means rate-limit; everything else is treated
+       as a transient API failure and falls through to the raw URL. */
+  } catch { /* network error — fall through */ }
+
+  /* Fallback: raw CDN. Cache-buster query string is honored by Fastly
+     as part of the cache key, so a fresh ?_= each time avoids the
+     edge-cache copy in nearly every case. */
+  const r = await fetch(`${GITHUB_RAW_VERSIONCHECK_URL}?_=${stamp}`, {
+    method: 'GET',
+    cache: 'no-store',
+    headers: { 'Cache-Control': 'no-cache' },
+  });
+  if (!r.ok) throw new Error(`GitHub returned HTTP ${r.status}`);
+  const json = (await r.json()) as VersionCheckPayload;
+  return { payload: json, source: 'github-raw' };
+}
+
 export function useVersionCheck(): VersionCheckState {
   const [latest, setLatest] = useState<VersionCheckPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [source, setSource] = useState<'github-api' | 'github-raw' | null>(null);
+  const [fetchedAt, setFetchedAt] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   useEffect(() => {
     let cancelled = false;
@@ -77,15 +134,11 @@ export function useVersionCheck(): VersionCheckState {
     setError(null);
     (async () => {
       try {
-        /* Cache-bust so the browser doesn't serve a stale copy after
-           the operator pushes a new release to GitHub. */
-        const r = await fetch(`${GITHUB_VERSIONCHECK_URL}?_=${Date.now()}`, {
-          method: 'GET',
-          cache: 'no-store',
-        });
-        if (!r.ok) throw new Error(`GitHub returned HTTP ${r.status}`);
-        const json = (await r.json()) as VersionCheckPayload;
-        if (!cancelled) setLatest(json);
+        const { payload, source: src } = await fetchLatestVersionCheck();
+        if (cancelled) return;
+        setLatest(payload);
+        setSource(src);
+        setFetchedAt(new Date().toISOString());
       } catch (e) {
         if (!cancelled) setError((e as Error).message);
       } finally {
@@ -109,6 +162,8 @@ export function useVersionCheck(): VersionCheckState {
     hasUpdate,
     loading,
     error,
+    source,
+    fetchedAt,
     refresh: () => setTick((n) => n + 1),
   };
 }
@@ -118,12 +173,23 @@ export function useVersionCheck(): VersionCheckState {
    current build's version, the latest version on GitHub, and (when
    they differ) the exact SSH command the operator runs to upgrade. */
 export function VersionCheckCard({ state }: { state: VersionCheckState }) {
-  const { current, latest, hasUpdate, loading, error, refresh } = state;
+  const { current, latest, hasUpdate, loading, error, source, fetchedAt, refresh } = state;
   const [copied, setCopied] = useState(false);
   const latestVersionLabel = latest?.version
     ? (latest.version.startsWith('v') ? latest.version : `v${latest.version}`)
     : '—';
   const currentLabel = current.version.startsWith('v') ? current.version : `v${current.version}`;
+  /* Operator-visible source label — distinguishes Contents API (fresh)
+     from raw CDN fallback (possibly stale) so a stuck re-check is
+     immediately diagnosable. */
+  const sourceLabel = source === 'github-api'
+    ? 'Source: GitHub API · main'
+    : source === 'github-raw'
+      ? 'Source: GitHub raw · main (fallback)'
+      : 'Source: GitHub · main';
+  const checkedTimeLabel = fetchedAt
+    ? `Checked ${new Date(fetchedAt).toLocaleTimeString()}`
+    : '';
 
   const copyCommand = async () => {
     try {
@@ -148,7 +214,7 @@ export function VersionCheckCard({ state }: { state: VersionCheckState }) {
               ? 'Checking GitHub…'
               : error
                 ? `Check failed: ${error}`
-                : `Source: lupharos/SeBuilderHC2026 · main`}
+                : `${sourceLabel}${checkedTimeLabel ? ` · ${checkedTimeLabel}` : ''}`}
           </div>
         </div>
         <button
