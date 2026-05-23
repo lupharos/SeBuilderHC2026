@@ -1,6 +1,6 @@
 {
   "productName": "HC Studio",
-  "version": "2025.05.24.B1",
+  "version": "2025.05.24.B2",
   "releasedAt": "2026-05-24",
   "notes": "Added CONNECTOR_AGENT_PATH environment variable to deploy.sh and updated health indicator labels in NavigationRail.tsx."
 }
