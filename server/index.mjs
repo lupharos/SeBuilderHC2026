@@ -977,30 +977,56 @@ app.get('/api/connector/status', (req, res) => {
 /* GET /api/connector/agent
    ───────────────────────────────────────────────────────────────────
    Serves the customer-side connector binary straight from the deploy
-   host's filesystem. The Ubuntu deploy already `git pull`s the repo
-   into /home/student/SeBuilderHC2026, which includes the prebuilt
-   ConnectorAgent/forcepoint-hc-connector.exe — so we don't need to
-   bundle it in the wizard JS or proxy a github.com download. The SE
-   just clicks "Download" in the wizard and the customer's browser
-   pulls it from the same host the wizard runs on.
+   host's filesystem. The wizard exposes this through nginx as
+   GET /api/connector/agent; the customer's browser downloads the .exe
+   from the same origin the wizard runs on — no GitHub round-trip,
+   no static asset on the SPA tree.
 
-   Path is hard-coded to the deploy layout; CONNECTOR_AGENT_PATH env
-   var overrides it for local dev / test machines that hold the binary
-   somewhere else. The endpoint is intentionally GET-only and serves
-   nothing else — no path-traversal surface. */
+   `deploy.sh` copies the binary out of the repo into
+   /var/lib/forcepoint-hc/ on every deploy, AND injects the absolute
+   path into this service via CONNECTOR_AGENT_PATH=... so the systemd
+   unit (ProtectHome=true, ProtectSystem=full) can read it.
+
+   The default below matches deploy.sh — works out of the box for any
+   Ubuntu host provisioned through that script. For local dev set
+   CONNECTOR_AGENT_PATH explicitly. The endpoint is GET-only and
+   serves only this one fixed path — no path-traversal surface. */
 const CONNECTOR_AGENT_PATH =
   process.env.CONNECTOR_AGENT_PATH ||
-  '/home/student/SeBuilderHC2026/ConnectorAgent/forcepoint-hc-connector.exe';
+  '/var/lib/forcepoint-hc/forcepoint-hc-connector.exe';
 
 app.get('/api/connector/agent', (_req, res) => {
+  /* Use accessSync(R_OK) instead of existsSync so we get the actual
+     errno back when the file *exists* but the node process can't
+     read it (EACCES — typically when /home/student is 700 and node
+     runs as a different user). existsSync swallows EACCES and just
+     returns false, which produces the misleading "not found" message
+     even when the binary is sitting right there on disk. */
   try {
-    if (!fs.existsSync(CONNECTOR_AGENT_PATH)) {
-      res.status(404).json({
-        ok: false,
-        message: `Connector binary not found on this host. Expected at ${CONNECTOR_AGENT_PATH}. Set CONNECTOR_AGENT_PATH or run \`git pull\` in the deploy dir.`,
-      });
-      return;
-    }
+    fs.accessSync(CONNECTOR_AGENT_PATH, fs.constants.R_OK);
+  } catch (err) {
+    const code = (err && typeof err === 'object' && 'code' in err) ? err.code : 'UNKNOWN';
+    const runtimeUid = typeof process.getuid === 'function' ? process.getuid() : null;
+    const runtimeGid = typeof process.getgid === 'function' ? process.getgid() : null;
+    /* Surface enough detail for the SE to triage from the JSON
+       response alone — they shouldn't need to ssh in to diagnose. */
+    const detail =
+      code === 'ENOENT'
+        ? 'File does not exist at this path. `git pull` in the deploy dir, or set CONNECTOR_AGENT_PATH to where the .exe actually lives.'
+      : code === 'EACCES'
+        ? `The node process (uid=${runtimeUid}, gid=${runtimeGid}) cannot read this path. Check permissions on every directory in the chain (\`namei -l <path>\`) and on the file itself — /home/student is often 700 and only traversable by the student user.`
+      : `Filesystem error: ${code}.`;
+    res.status(404).json({
+      ok: false,
+      code,
+      path: CONNECTOR_AGENT_PATH,
+      runtimeUid,
+      runtimeGid,
+      message: `Connector binary not accessible. ${detail}`,
+    });
+    return;
+  }
+  try {
     const stat = fs.statSync(CONNECTOR_AGENT_PATH);
     const fileName = path.basename(CONNECTOR_AGENT_PATH);
     res.setHeader('Content-Type', 'application/octet-stream');

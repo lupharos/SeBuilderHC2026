@@ -34,6 +34,20 @@ REPO_URL="https://github.com/lupharos/SeBuilderHC2026.git"
 COMPANION_SERVICE="sebuilderhc-companion"
 COMPANION_PORT=3001
 
+# Connector binary deploy layout.
+#   • Source path (inside the repo): $APP_DIR/ConnectorAgent/...
+#   • Target path (system, served by the companion):
+#       /var/lib/forcepoint-hc/forcepoint-hc-connector.exe
+# The companion has ProtectHome=true / ProtectSystem=full in its systemd
+# unit, so it can't reach the repo path under /home or /var/www reliably
+# (and /home is invisible to it even as root). Copying the exe to
+# /var/lib/forcepoint-hc/ keeps it on a path the hardened service can
+# actually read.
+CONNECTOR_AGENT_DIR="/var/lib/forcepoint-hc"
+CONNECTOR_AGENT_BIN="forcepoint-hc-connector.exe"
+CONNECTOR_AGENT_SRC="$APP_DIR/ConnectorAgent/$CONNECTOR_AGENT_BIN"
+CONNECTOR_AGENT_DEST="$CONNECTOR_AGENT_DIR/$CONNECTOR_AGENT_BIN"
+
 echo "🚀 FULL DEPLOY STARTING..."
 
 # --------------------------------------------------
@@ -106,6 +120,28 @@ sudo rm -rf $DIST_DIR/*
 sudo cp -r $APP_DIR/dist/* $DIST_DIR/
 
 # --------------------------------------------------
+# 5b. Sync the customer connector binary to /var/lib/forcepoint-hc/
+# --------------------------------------------------
+# The companion serves the .exe via GET /api/connector/agent, reading
+# from CONNECTOR_AGENT_DEST. systemd hardening (ProtectHome=true) hides
+# /home, and the SPA dist tree is publicly served by nginx (we don't
+# want the binary directly addressable as a static asset), so we keep
+# the binary in /var/lib/ — outside nginx's docroot, readable by the
+# companion's root user.
+echo "📥 Syncing customer connector binary to ${CONNECTOR_AGENT_DEST}..."
+
+if [ ! -f "$CONNECTOR_AGENT_SRC" ]; then
+  echo "⚠️  Connector binary missing from repo: $CONNECTOR_AGENT_SRC"
+  echo "   The /api/connector/agent endpoint will return 404 until you commit"
+  echo "   ConnectorAgent/${CONNECTOR_AGENT_BIN} to the SeBuilderHC2026 repo."
+else
+  sudo mkdir -p "$CONNECTOR_AGENT_DIR"
+  sudo cp -f "$CONNECTOR_AGENT_SRC" "$CONNECTOR_AGENT_DEST"
+  sudo chmod 0644 "$CONNECTOR_AGENT_DEST"
+  echo "   ✓ Copied $(stat -c '%s bytes' "$CONNECTOR_AGENT_DEST") → ${CONNECTOR_AGENT_DEST}"
+fi
+
+# --------------------------------------------------
 # 6. Create / refresh the companion systemd service
 # --------------------------------------------------
 echo "🛠️ Registering companion as systemd service..."
@@ -130,6 +166,7 @@ WorkingDirectory=${SERVER_DIR}
 Environment=PORT=${COMPANION_PORT}
 Environment=HOST=127.0.0.1
 Environment=NODE_ENV=production
+Environment=CONNECTOR_AGENT_PATH=${CONNECTOR_AGENT_DEST}
 ExecStart=${NODE_BIN} ${SERVER_DIR}/index.mjs
 Restart=on-failure
 RestartSec=5
