@@ -1,6 +1,7 @@
 import {
   Cloud, FileText, Users, CreditCard, Ticket, Lightbulb,
   Server, Upload, Plus, Trash2, Edit2, Check, X, AlertCircle, FileJson, Sparkles, Shield, ChevronDown, ChevronRight,
+  HelpCircle, Copy, CheckCircle2,
 } from 'lucide-react';
 import React, { useState, useRef, useEffect } from 'react';
 import type { SessionData, LicenseItem, CaseItem, FeatureRequestItem, HardwareItem, EntitlementItem, ComplianceFrameworkItem } from '../Dashboard';
@@ -274,6 +275,13 @@ export function Step1CustomerInfo({ sessionData, updateSessionData, versionData,
   const [importError, setImportError] = useState('');
   const [importedFileName, setImportedFileName] = useState('');
   const [importSummary, setImportSummary] = useState<ReturnType<typeof mapSalesforceJsonToSession>['summary'] | null>(null);
+  /* "How do I generate this JSON?" prompt-help panel. Toggled by the
+     small (?) icon next to the SF EXPORT pill. When open, shows the
+     SE the prompt template they can paste into Claude — assumes the
+     Salesforce Connector is enabled and the WBSN customer ID is at
+     hand. Collapses by default so the import panel stays compact. */
+  const [showSfPromptHelp, setShowSfPromptHelp] = useState(false);
+  const [sfPromptCopied, setSfPromptCopied] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { licenses, cases, featureRequests, hardware } = sessionData;
@@ -385,17 +393,158 @@ export function Step1CustomerInfo({ sessionData, updateSessionData, versionData,
             </div>
             <span style={{ fontSize: '13px', fontWeight: 700, color: '#0F172A' }}>Import JSON from Salesforce</span>
           </div>
-          <span className="inline-flex items-center gap-1.5 px-2 py-1 bg-[rgba(1,118,211,0.1)] text-[#0176D3] rounded"
-            style={{ fontSize: '10px', fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>
-            <FileJson size={11} /> SF EXPORT
-          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => { setShowSfPromptHelp((v) => !v); setSfPromptCopied(false); }}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded transition-colors"
+              style={{
+                fontSize: '10.5px', fontWeight: 600,
+                background: showSfPromptHelp ? 'rgba(1,118,211,0.18)' : '#F1F5F9',
+                color: showSfPromptHelp ? '#0C4A6E' : '#475569',
+                border: `1px solid ${showSfPromptHelp ? 'rgba(1,118,211,0.35)' : '#E2E8F0'}`,
+                cursor: 'pointer',
+              }}
+              title="Show the prompt template you can paste into Claude (with the Salesforce Connector enabled) to generate this JSON.">
+              <HelpCircle size={11} /> How to generate
+            </button>
+            <span className="inline-flex items-center gap-1.5 px-2 py-1 bg-[rgba(1,118,211,0.1)] text-[#0176D3] rounded"
+              style={{ fontSize: '10px', fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>
+              <FileJson size={11} /> SF EXPORT
+            </span>
+          </div>
         </div>
 
         <div style={{ fontSize: '11.5px', color: '#64748B', marginBottom: '12px' }}>
           Drop or select the Salesforce account JSON export (e.g.{' '}
-          <span style={{ fontFamily: 'monospace', background: '#F1F5F9', padding: '1px 5px', borderRadius: '3px' }}>akbank_hc.json</span>).
+          <span style={{ fontFamily: 'monospace', background: '#F1F5F9', padding: '1px 5px', borderRadius: '3px' }}>customerx_hc.json</span>).
           Customer info, licenses, hardware, recent cases, and feature requests will be auto-filled below — every field stays editable afterwards.
         </div>
+
+        {/* Prompt help panel — collapsed by default; opened via the
+            (?) "How to generate" button. Shows the SE the canonical
+            Claude prompt for producing this JSON via the Salesforce
+            Connector, gated on having the WBSN customer ID handy.
+            Copy-to-clipboard button so they don't have to hand-select. */}
+        {showSfPromptHelp && (() => {
+          const promptTemplate = `Using the Salesforce Connector, look up the customer account by WBSN ID = <PASTE_WBSN_ID_HERE> and produce a single JSON file matching the structure below. Save it as customerx_hc.json. Use the customer's real Salesforce data — do not invent values; leave fields blank when the source record is empty.
+
+{
+  "customer": {
+    "customerName":   "<Account.Name>",
+    "forcepointId":   "<WBSN customer ID>",
+    "industry":       "<Account.Industry>",
+    "country":        "<Account.BillingCountry>",
+    "city":           "<Account.BillingCity>",
+    "theatre":        "<EMEA | NA | LATAM | APAC>",
+    "region":         "<sub-region>",
+    "supportLevel":   "<Essential | Enhanced | Enterprise>",
+    "recommendedSupportLevel": "<Forcepoint recommendation, optional>",
+    "csm":              "<CSM full name>",
+    "accountOwner":     "<Account Owner full name>",
+    "salesEngineer":    "<Assigned SE full name>",
+    "partner":          "<Channel partner, optional>",
+    "channelAccountManager": "<CAM full name, optional>",
+    "distributor":      "<Distributor, optional>"
+  },
+  "licenses": [
+    { "product": "...", "productCode": "...", "quantity": "...",
+      "status": "ACTIVE | EXPIRED | PENDING",
+      "expiry": "YYYY-MM-DD", "startDate": "YYYY-MM-DD",
+      "deploymentType": "On-Premise | Hybrid | Cloud | N/A",
+      "supportLevel":   "Essential | Enhanced | Enterprise" }
+  ],
+  "entitlements": [
+    { "name": "...", "type": "...", "status": "ACTIVE | EXPIRED",
+      "startDate": "YYYY-MM-DD", "endDate": "YYYY-MM-DD" }
+  ],
+  "hardware": [
+    { "model": "...", "productCode": "...", "units": 0,
+      "warranty": "...", "warrantyStatus": "ACTIVE | EXPIRED",
+      "status": "ACTIVE | RMA | DECOMMISSIONED" }
+  ],
+  "active_cases_last5": [
+    { "caseNumber": "...", "severity": "1 | 2 | 3 | 4",
+      "subject": "...", "openedBy": "...",
+      "createdDate": "YYYY-MM-DD", "status": "NEW | IN_PROCESS | CLOSED" }
+  ],
+  "feature_requests": [
+    { "title": "...", "product": "...", "status": "...",
+      "disposition": "...", "createdDate": "YYYY-MM-DD" }
+  ]
+}
+
+Return only the JSON file content — no commentary, no markdown fences.`;
+          return (
+            <div className="rounded-lg overflow-hidden mb-3"
+              style={{ border: '1px solid rgba(1,118,211,0.35)' }}>
+              <div className="flex items-center justify-between px-3 py-2"
+                style={{ background: '#0176D3', color: '#fff' }}>
+                <div className="flex items-center gap-2">
+                  <Sparkles size={12} />
+                  <span style={{ fontSize: '11.5px', fontWeight: 700 }}>Claude prompt — Salesforce Connector required</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(promptTemplate);
+                        setSfPromptCopied(true);
+                        setTimeout(() => setSfPromptCopied(false), 1800);
+                      } catch { /* clipboard blocked — ignore */ }
+                    }}
+                    className="flex items-center gap-1.5 px-2 py-1 rounded font-semibold"
+                    style={{
+                      fontSize: '10.5px',
+                      background: 'rgba(255,255,255,0.18)',
+                      color: '#fff',
+                      border: '1px solid rgba(255,255,255,0.28)',
+                      cursor: 'pointer',
+                    }}
+                    title="Copy the prompt to the clipboard.">
+                    {sfPromptCopied ? <><CheckCircle2 size={11} /> Copied</> : <><Copy size={11} /> Copy</>}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowSfPromptHelp(false)}
+                    className="flex items-center justify-center rounded"
+                    style={{
+                      width: 22, height: 22,
+                      background: 'rgba(255,255,255,0.15)',
+                      color: '#fff',
+                      border: '1px solid rgba(255,255,255,0.25)',
+                      cursor: 'pointer',
+                    }}
+                    title="Hide.">
+                    <X size={11} />
+                  </button>
+                </div>
+              </div>
+              <div className="px-3 py-2.5" style={{ background: '#F0F9FF', borderBottom: '1px solid rgba(1,118,211,0.18)' }}>
+                <div style={{ fontSize: '10.5px', color: '#0C4A6E', lineHeight: 1.55 }}>
+                  <strong>Prereqs:</strong> Salesforce Connector is enabled on your Claude account, and you have the customer's <strong>WBSN ID</strong>.
+                  Paste the prompt below into Claude, replace <span style={{ fontFamily: 'monospace', background: '#fff', padding: '0 4px', borderRadius: 3 }}>&lt;PASTE_WBSN_ID_HERE&gt;</span> with the real ID,
+                  send. Claude returns the JSON file content; save it as <span style={{ fontFamily: 'monospace', background: '#fff', padding: '0 4px', borderRadius: 3 }}>customerx_hc.json</span> and drop it into the dropzone below.
+                </div>
+              </div>
+              <pre className="font-mono"
+                style={{
+                  margin: 0,
+                  padding: '12px 14px',
+                  fontSize: '10.5px',
+                  lineHeight: 1.55,
+                  color: '#0F172A',
+                  background: '#F8FAFC',
+                  maxHeight: 360,
+                  overflow: 'auto',
+                  whiteSpace: 'pre',
+                }}>
+                {promptTemplate}
+              </pre>
+            </div>
+          );
+        })()}
 
         {/* Drop zone */}
         {importState !== 'loaded' && (

@@ -1,4 +1,4 @@
-// Maps a Salesforce-exported customer JSON file (akbank_hc.json style) into the
+// Maps a Salesforce-exported customer JSON file (customerx_hc.json style) into the
 // SessionData shape used across the wizard. The JSON is treated as a snapshot
 // from Salesforce — we don't hit the network, just read what the user uploads.
 
