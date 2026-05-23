@@ -509,21 +509,28 @@ function buildReportHTML(p: {
      Executive variant strips Part II + IV and keeps only Licensing + Enhancements
      from the roadmap; HealthCheck variant strips Part 0. */
   type TocEntry = { kind: 'part'; label: string } | { kind: 'item'; label: string };
-  const roadmapPartLabel = isExec ? 'Part 2 · Roadmap &amp; Strategy' : 'Part III · Roadmap &amp; Strategy';
+  const roadmapPartLabel = isExec ? 'Part 3 · Roadmap &amp; Strategy' : 'Part III · Roadmap &amp; Strategy';
   const tocEntries: TocEntry[] = [
     { kind: 'part', label: 'Foreword' },
     { kind: 'item', label: 'Purpose of This Report' },
 
     ...(isExec ? [
-      { kind: 'part' as const, label: 'Part 0 · Executive Briefing' },
-      { kind: 'item' as const, label: 'Risk Posture &amp; CISO Dashboard' },
+      /* Executive Risk Briefing TOC — mirrors what the EXEC_ONLY
+         blocks actually render. The TECH-only Part I (Customer
+         Account, Introduction, Board Briefing) is intentionally
+         absent here; surfacing those rows in the TOC would imply
+         clickable content the exec render never produces. */
+      { kind: 'part' as const, label: 'Part 1 · Executive Briefing' },
+      { kind: 'item' as const, label: 'Risk Posture &amp; Executive Summary' },
       { kind: 'item' as const, label: 'Compliance Exposure' },
-    ] : []),
-
-    { kind: 'part', label: isExec ? 'Part 1 · Executive Overview' : 'Part I · Executive Overview' },
-    { kind: 'item', label: 'Introduction' },
-    ...(hasAccountSection ? [{ kind: 'item' as const, label: 'Customer Account &amp; Licensing' }] : []),
-    { kind: 'item', label: 'Executive Details' },
+      ...((p.sessionData.licenses && p.sessionData.licenses.length > 0) || p.sessionData.supportLevel
+        ? [{ kind: 'item' as const, label: 'Current Licensing Posture' }] : []),
+    ] : [
+      { kind: 'part' as const, label: 'Part I · Executive Overview' },
+      { kind: 'item' as const, label: 'Introduction' },
+      ...(hasAccountSection ? [{ kind: 'item' as const, label: 'Customer Account &amp; Licensing' }] : []),
+      { kind: 'item' as const, label: 'Executive Details' },
+    ]),
 
     ...(isTech ? [
       { kind: 'part' as const, label: 'Part II · Technical Assessment' },
@@ -543,6 +550,15 @@ function buildReportHTML(p: {
       ...(hasWeb                    ? [{ kind: 'item' as const, label: 'Web Security Usage' }] : []),
       ...(hasDLP && !dlpSqlSuppressed ? [{ kind: 'item' as const, label: 'Data Security Usage' }] : []),
       ...(hasEmail                  ? [{ kind: 'item' as const, label: 'Email Security Usage' }] : []),
+    ] : []),
+
+    /* Executive Posture chapter — only shown when there's actual
+       posture data to render. Mirrors the EXEC_ONLY Part 2 block in
+       the HTML output. Without this entry, TOC jumps directly from
+       Part 1 to Part 3 even though Part 2 renders. */
+    ...((isExec && p.dlpPostureSummary && Object.values(p.dlpPostureSections).some(Boolean)) ? [
+      { kind: 'part' as const, label: 'Part 2 · Security Posture' },
+      { kind: 'item' as const, label: 'Information Security Posture Dashboard' },
     ] : []),
 
     { kind: 'part', label: roadmapPartLabel },
@@ -775,7 +791,7 @@ function buildReportHTML(p: {
   
     return `
   <div class="section">
-    <div class="section-eyebrow">${isExec ? 'Section 3 · Part 2 · Posture Telemetry' : 'Section 13 · Part II · Posture Telemetry'}</div>
+    <div class="section-eyebrow">${isExec ? 'Section 4 · Part 2 · Posture Telemetry' : 'Section 13 · Part II · Posture Telemetry'}</div>
     <div class="section-title">Information Security Posture Dashboard</div>
     <p class="section-lead">
       Live posture snapshot pulled from the customer's Forcepoint DLP REST API over the last
@@ -1966,7 +1982,7 @@ tr:last-child td{border-bottom:none;}
 ══════════════════════════════════════ -->
 <div class="section">
   <div class="section-eyebrow">Section 1 · Part 1 · Risk Posture</div>
-  <div class="section-title">Risk Posture &amp; CISO Dashboard</div>
+  <div class="section-title">Risk Posture &amp; Executive Summary</div>
 
   <div class="brief-intro">
     <div class="brief-intro-label">Executive Position</div>
@@ -2102,6 +2118,25 @@ tr:last-child td{border-bottom:none;}
              folders were uploaded. */
           const parsedFileTotal = p.dlpBundles.reduce((sum, b) => sum + (b.parsedFiles?.length ?? 0), 0);
           bars.push({ label: 'DLP Telemetry Files', value: parsedFileTotal, max: Math.max(parsedFileTotal, 20), color: '#B58800' });
+        }
+        /* SQL Reports — counted only if the operator picked some in
+           Step 3. Same logic as the Step 10 preview: completed = how
+           many `reportRuns[id].state === 'ok'`. */
+        if (p.selectedReports.length > 0) {
+          const completed = p.selectedReports.reduce(
+            (sum, id) => sum + ((p.reportRuns?.[id]?.state === 'ok') ? 1 : 0),
+            0,
+          );
+          bars.push({ label: 'SQL Reports run', value: completed, max: p.selectedReports.length, color: '#2563EB' });
+        }
+        /* DLP REST API posture — one binary bar. Only when DLP is in
+           scope and at least one posture section is enabled (mirrors
+           the Section 13 visibility rule so the coverage stat doesn't
+           promise content that won't render). */
+        if (hasDLP && (p.dlpPostureSummary && Object.values(p.dlpPostureSections).some(Boolean))) {
+          bars.push({ label: 'DLP REST API posture', value: 1, max: 1, color: '#0D9488' });
+        } else if (hasDLP) {
+          bars.push({ label: 'DLP REST API posture', value: 0, max: 1, color: '#0D9488' });
         }
         if (p.certificates.length > 0) bars.push({ label: 'Certificates', value: p.certificates.length, max: Math.max(p.certificates.length, 5), color: '#7C3AED' });
         if (p.endpointAgentSummary) bars.push({ label: 'Endpoints (current)', value: p.endpointAgentSummary.totalRecords - p.endpointAgentSummary.outdatedCount, max: p.endpointAgentSummary.totalRecords || 1, color: '#16A34A' });
@@ -2406,7 +2441,151 @@ tr:last-child td{border-bottom:none;}
   </p>
 </div>
 
-</div><!-- /content (Part 0 closes here) -->
+<!-- ══════════════════════════════════════
+     PART 1 · 03 CURRENT LICENSING POSTURE
+     CxO-facing license inventory: how many licenses are active,
+     how many are about to expire (≤90 days), and how many have
+     already lapsed. Pairs the support-level summary so the
+     executive sees both the entitlement strength AND the renewal
+     risk on a single page. Forward-looking "what should we buy?"
+     stays in Part 3 / Recommended License Extension — this section
+     is intentionally backward-looking ("what do we own today?").
+══════════════════════════════════════ -->
+${(() => {
+  const lics = p.sessionData.licenses ?? [];
+  const hasSupportInfo = !!(p.sessionData.supportLevel || p.sessionData.recommendedSupportLevel);
+  if (lics.length === 0 && !hasSupportInfo) return '';
+
+  /* Bucket licenses by lifecycle state. EXPIRED takes precedence
+     over ACTIVE when the date says so — the wizard's stored
+     `status` field may lag the actual date, so we trust the date. */
+  const now = new Date();
+  const ninetyDays = 90 * 24 * 3600 * 1000;
+  const parseDate = (s: string): Date | null => {
+    if (!s) return null;
+    const d = new Date(s);
+    return Number.isNaN(d.getTime()) ? null : d;
+  };
+  type LicBucket = 'expired' | 'expiring' | 'active' | 'pending' | 'unknown';
+  const bucketOf = (l: typeof lics[0]): LicBucket => {
+    if ((l.status || '').toUpperCase() === 'PENDING') return 'pending';
+    const exp = parseDate(l.expiry || '');
+    if (!exp) return ((l.status || '').toUpperCase() === 'ACTIVE') ? 'active' : 'unknown';
+    if (exp.getTime() < now.getTime()) return 'expired';
+    if (exp.getTime() - now.getTime() <= ninetyDays) return 'expiring';
+    return 'active';
+  };
+  let cActive = 0, cExpiring = 0, cExpired = 0, cPending = 0;
+  for (const l of lics) {
+    const b = bucketOf(l);
+    if (b === 'active') cActive++;
+    else if (b === 'expiring') cExpiring++;
+    else if (b === 'expired') cExpired++;
+    else if (b === 'pending') cPending++;
+  }
+
+  /* Sort for the table: expired first (operator needs to renew),
+     expiring next (planning horizon), active last. */
+  const bucketRank: Record<LicBucket, number> = { expired: 0, expiring: 1, pending: 2, active: 3, unknown: 4 };
+  const sorted = [...lics].sort((a, b) => {
+    const ra = bucketRank[bucketOf(a)];
+    const rb = bucketRank[bucketOf(b)];
+    if (ra !== rb) return ra - rb;
+    const da = parseDate(a.expiry || '')?.getTime() ?? Number.POSITIVE_INFINITY;
+    const db = parseDate(b.expiry || '')?.getTime() ?? Number.POSITIVE_INFINITY;
+    return da - db;
+  });
+
+  const tile = (label: string, value: number, color: string, bg: string, border: string) => `
+    <div style="background:${bg};border:1px solid ${border};border-left:3px solid ${color};border-radius:6px;padding:11px 14px;">
+      <div style="font-size:9px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;color:${color};">${label}</div>
+      <div style="font-size:24px;font-weight:800;color:${color};letter-spacing:-0.01em;margin-top:2px;">${value}</div>
+    </div>`;
+
+  const supportUpgradeNeeded = !!p.sessionData.supportLevel && !!p.sessionData.recommendedSupportLevel
+    && p.sessionData.supportLevel.trim().toLowerCase() !== p.sessionData.recommendedSupportLevel.trim().toLowerCase();
+
+  const bucketBadge = (b: LicBucket): string => {
+    const cfg: Record<LicBucket, { label: string; bg: string; color: string }> = {
+      expired:  { label: 'EXPIRED',  bg: '#FEE2E2', color: '#991B1B' },
+      expiring: { label: 'EXPIRING', bg: '#FEF3C7', color: '#92400E' },
+      active:   { label: 'ACTIVE',   bg: '#F0FDF4', color: '#15803D' },
+      pending:  { label: 'PENDING',  bg: '#F1F5F9', color: '#475569' },
+      unknown:  { label: '—',        bg: '#F1F5F9', color: '#94A3B8' },
+    };
+    const c = cfg[b];
+    return `<span style="display:inline-block;font-size:8.5px;font-weight:800;letter-spacing:0.08em;background:${c.bg};color:${c.color};padding:2px 7px;border-radius:3px;font-family:'JetBrains Mono',monospace;">${c.label}</span>`;
+  };
+
+  return `
+<div class="section">
+  <div class="section-eyebrow">Section 3 · Part 1 · Licensing</div>
+  <div class="section-title">Current Licensing Posture</div>
+  <p class="section-lead">
+    Snapshot of the customer's current Forcepoint entitlements as captured during this engagement.
+    The table below is sorted by renewal urgency — anything expired sits at the top, expiring-within-90-days next.
+    Forward-looking license recommendations live in <em>Recommended License Extension</em> further down; this section
+    is intentionally backward-looking, so the CxO sees exactly what they own today.
+  </p>
+
+  ${lics.length > 0 ? `
+  <div style="display:grid;grid-template-columns:repeat(${cPending > 0 ? 4 : 3},1fr);gap:10px;margin-bottom:14px;page-break-inside:avoid;">
+    ${tile('Active', cActive, '#15803D', '#F0FDF4', '#BBF7D0')}
+    ${tile('Expiring ≤90d', cExpiring, '#92400E', '#FEF3C7', '#FDE68A')}
+    ${tile('Expired', cExpired, '#991B1B', '#FEE2E2', '#FECACA')}
+    ${cPending > 0 ? tile('Pending', cPending, '#475569', '#F1F5F9', '#E2E8F0') : ''}
+  </div>` : ''}
+
+  ${supportUpgradeNeeded ? `
+  <div style="background:#FFFBEB;border:1px solid #FDE68A;border-left:4px solid #D97706;border-radius:8px;padding:12px 16px;margin-bottom:14px;page-break-inside:avoid;">
+    <div style="font-size:9.5px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;color:#92400E;margin-bottom:6px;">Support Level Recommendation</div>
+    <div style="font-size:12px;color:#0F2952;line-height:1.6;">
+      Current support: <strong>${esc(p.sessionData.supportLevel || '—')}</strong> → recommended:
+      <strong style="color:#D97706;">${esc(p.sessionData.recommendedSupportLevel || '—')}</strong>.
+      Forcepoint recommends this upgrade given the deployment scope; full rationale appears in the technical assessment (Part II of the full Health Check report).
+    </div>
+  </div>` : (p.sessionData.supportLevel ? `
+  <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:6px;padding:9px 14px;margin-bottom:14px;font-size:11px;color:#15803D;">
+    <strong>Support level:</strong> ${esc(p.sessionData.supportLevel)} — aligned with deployment scope.
+  </div>` : '')}
+
+  ${lics.length > 0 ? `
+  <table style="margin-bottom:0;">
+    <thead>
+      <tr>
+        <th>Product</th>
+        <th style="width:60px;text-align:right;">Qty</th>
+        <th style="width:90px;">Deployment</th>
+        <th style="width:80px;">Support</th>
+        <th style="width:95px;">Expiry</th>
+        <th style="width:80px;text-align:center;">Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${sorted.slice(0, 12).map(l => {
+        const b = bucketOf(l);
+        const exp = parseDate(l.expiry || '');
+        const expStr = exp ? exp.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : (l.expiry || '—');
+        const dStyle = b === 'expired' ? 'color:#991B1B;font-weight:700;'
+                      : b === 'expiring' ? 'color:#92400E;font-weight:600;'
+                      : 'color:var(--fp-ink-muted);';
+        return `<tr>
+          <td style="font-weight:600;color:#023E8A;font-size:11px;">${esc(l.product || '—')}${l.productCode ? `<div style="font-family:'JetBrains Mono',monospace;font-size:9.5px;color:#94A3B8;font-weight:400;">${esc(l.productCode)}</div>` : ''}</td>
+          <td style="font-family:'JetBrains Mono',monospace;text-align:right;font-weight:600;">${esc(l.quantity || '—')}</td>
+          <td style="font-size:10px;color:var(--fp-ink-muted);">${esc(l.deploymentType || '—')}</td>
+          <td style="font-size:10px;color:var(--fp-ink-muted);">${esc(l.supportLevel || '—')}</td>
+          <td style="font-family:'JetBrains Mono',monospace;font-size:10px;${dStyle}">${esc(expStr)}</td>
+          <td style="text-align:center;">${bucketBadge(b)}</td>
+        </tr>`;
+      }).join('')}
+    </tbody>
+  </table>
+  ${sorted.length > 12 ? `<div style="margin-top:8px;font-size:10px;color:var(--fp-ink-faint);font-style:italic;">+${sorted.length - 12} additional license${sorted.length - 12 === 1 ? '' : 's'} not shown — full list is in the technical assessment.</div>` : ''}
+  ` : `<p style="font-size:11px;color:var(--fp-ink-muted);font-style:italic;margin:0;">No licenses captured in this engagement.</p>`}
+</div>`;
+})()}
+
+</div><!-- /content (Part 1 closes here) -->
 <!--VARIANT:EXEC_ONLY:END-->
 
 <!-- ══════════════════════════════════════
@@ -4986,7 +5165,7 @@ ${(() => {
   const sorted = [...gaps].sort((a, b) => (PRIO[a.priority ?? 'medium'] ?? 9) - (PRIO[b.priority ?? 'medium'] ?? 9));
   return `
 <div class="section">
-  <div class="section-eyebrow">${isExec ? 'Section 4 · Part 3 · Licensing Roadmap' : 'Section 17 · Part III · Licensing Roadmap'}</div>
+  <div class="section-eyebrow">${isExec ? 'Section 5 · Part 3 · Licensing Roadmap' : 'Section 17 · Part III · Licensing Roadmap'}</div>
   <div class="section-title">Recommended License Extension <span style="font-weight:400;color:var(--fp-ink-faint);font-size:14px;letter-spacing:0;">(${gaps.length})</span></div>
   <p class="section-lead">
     Products where Forcepoint recommends the customer expand their entitlement count, based on the deployment scope, headcount growth, and operational coverage observed in this assessment. Each line below proposes the additional licenses needed per product — quantities are not aggregated, as each product carries its own licensing unit.
@@ -5029,7 +5208,7 @@ ${(() => {
 ══════════════════════════════════════ -->
 ${p.selectedEnhancements.length > 0 ? `
 <div class="section">
-  <div class="section-eyebrow">${isExec ? 'Section 5 · Part 3 · Strategic Initiatives' : 'Section 18 · Part III · Strategic Initiatives'}</div>
+  <div class="section-eyebrow">${isExec ? 'Section 6 · Part 3 · Strategic Initiatives' : 'Section 18 · Part III · Strategic Initiatives'}</div>
   <div class="section-title">Recommended Enhancements</div>
   <p style="margin-bottom:18px;color:#475569;line-height:1.7;font-size:11px;">
     The following Forcepoint product enhancements are proposed as next-step initiatives to strengthen the customer's overall security posture. Each recommendation is selected based on the health check findings, current scope, and identified gaps. The business value commentary below should be reviewed jointly with the customer's security and compliance stakeholders.

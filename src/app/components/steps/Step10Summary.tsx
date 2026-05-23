@@ -17,6 +17,8 @@ import type { EndpointAgentSummary } from './endpointAgentParser';
 import type { DlpServerBundle } from './dlpServerInfoParser';
 import type { VersionUpgradeProposal } from './StepVersionUpgrades';
 import type { EndpointCompatibilityAssessment } from '../../utils/endpointCompatibilityEngine';
+import type { DlpPostureSummary } from './dlpPosture';
+import type { ReportRunResult } from '../../constants/reportDefinitions';
 import { PRODUCT_ID_MAP } from './report/constants';
 import { computeHealthScore } from './report/healthScore';
 
@@ -37,6 +39,20 @@ interface Step10Props {
   endpointAgentSummary: EndpointAgentSummary | null;
   dlpBundles: DlpServerBundle[];
   endpointCompatAssessment: EndpointCompatibilityAssessment | null;
+  /* Live runtime data feeding the Coverage Stats card:
+       reportRuns         — per-report SQL run results from Step 3
+                            (state = 'running' | 'ok' | 'error').
+                            We count `ok` runs as "completed".
+       selectedReports    — ids the operator picked, regardless of run
+                            state — gives the "X of Y reports done"
+                            denominator.
+       dlpPostureSummary  — non-null once the operator fetched DLP REST
+                            API posture data. We show a single Yes /
+                            No coverage bar since posture is a one-shot
+                            block, not a per-row run. */
+  reportRuns?: Record<string, ReportRunResult>;
+  selectedReports?: string[];
+  dlpPostureSummary?: DlpPostureSummary | null;
 }
 
 const SEV_CFG: Record<QuestionSeverity, { color: string; bg: string; border: string; label: string }> = {
@@ -76,7 +92,20 @@ export function Step10Summary({
   recommendations, actionItems, featureRequests, serverDetails, certificates,
   selectedEnhancements, licenseGaps, versionUpgrades, endpointAgentSummary,
   dlpBundles, endpointCompatAssessment,
+  reportRuns = {}, selectedReports = [], dlpPostureSummary = null,
 }: Step10Props) {
+  /* SQL Report completion stats — counts runs whose state is `ok`.
+     Both the per-row Run button and the bulk "Run N Selected" feed
+     into the same reportRuns map, so a mixed (some-direct, some-via-
+     connector) run set still rolls up correctly. */
+  const sqlReportsTotal = selectedReports.length;
+  const sqlReportsCompleted = selectedReports.reduce(
+    (sum, id) => sum + (reportRuns[id]?.state === 'ok' ? 1 : 0),
+    0,
+  );
+  /* DLP REST API posture is a one-shot section: either you fetched it
+     (Yes) or you didn't (No). One coverage row, "1 of 1" when filled. */
+  const apiPostureFetched = !!dlpPostureSummary;
   /* Selected templates (mirrors Step11Summary so health scores match). */
   const selectedTemplates = useMemo(() => {
     const ids = new Set<string>();
@@ -343,6 +372,21 @@ export function Step10Summary({
           <CoverageBar label="Servers reviewed"  value={serverDetails.filter((s) => s.applicable).length} max={serverDetails.length || 1} color="#0EA5E9" />
           <CoverageBar label="Version entries"   value={versionList.length} max={Math.max(versionList.length, 10)} color="#A30080" />
           <CoverageBar label="DLP Telemetry Files" value={dlpBundles.reduce((sum, b) => sum + (b.parsedFiles?.length ?? 0), 0)} max={Math.max(dlpBundles.reduce((sum, b) => sum + (b.parsedFiles?.length ?? 0), 0), 20)} color="#B58800" />
+          {/* SQL Report runs — only shown when the operator picked
+              at least one report in Step 3. Counts successful runs
+              against the selected total so a partial completion is
+              visible immediately (e.g. 8 of 12 done). */}
+          {sqlReportsTotal > 0 && (
+            <CoverageBar label="SQL Reports run" value={sqlReportsCompleted} max={sqlReportsTotal} color="#2563EB" />
+          )}
+          {/* DLP REST API posture — single binary block. The bar is
+              full when the operator clicked Fetch on Step 3, empty
+              otherwise. Hidden when DLP isn't in scope at all so a
+              Web-only assessment doesn't look like it's missing a
+              row. */}
+          {selectedProducts.data && (
+            <CoverageBar label="DLP REST API posture" value={apiPostureFetched ? 1 : 0} max={1} color="#0D9488" />
+          )}
           <CoverageBar label="Certificates"      value={certificates.length} max={Math.max(certificates.length, 5)} color="#7C3AED" />
           {endpointAgentSummary && (
             <CoverageBar label="Endpoints (current)" value={endpointAgentSummary.totalRecords - endpointAgentSummary.outdatedCount} max={endpointAgentSummary.totalRecords || 1} color="#16A34A" />

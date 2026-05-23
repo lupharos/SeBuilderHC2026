@@ -233,6 +233,9 @@ export function MainContent({
               endpointAgentSummary={endpointAgentSummary}
               dlpBundles={dlpBundles}
               endpointCompatAssessment={endpointCompatAssessment}
+              reportRuns={reportRuns}
+              selectedReports={selectedReports}
+              dlpPostureSummary={dlpPostureSummary}
             />
           )}
           {currentStep === 18 && (
