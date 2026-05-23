@@ -190,23 +190,34 @@ StandardError=journal
 SyslogIdentifier=${COMPANION_SERVICE}
 
 # Hardening — companion needs outbound network for SQL Server / DLP
-# REST API connections, plus read access to the operator's repo checkout
-# (under /home/<user>/SeBuilderHC2026) so the Profile → "Check for
-# Updates" flow can run \`git pull && bash deploy.sh\` in-place.
+# REST API connections, plus read+write access to the deploy host so
+# the Profile → "Check for Updates" flow can run \`git pull && bash
+# deploy.sh\` in-place.
 #
-# ProtectHome was previously \`true\` but that hid /home from this unit's
-# mount namespace — and every child process inherits the namespace, so
-# even \`su - student -c '...'\` couldn't see the repo. We can't tighten
-# this back without breaking self-upgrade or moving the SE checkout
-# outside \$HOME.
+# All three namespace-tightening flags below were previously \`true\` /
+# \`full\` but each one broke a step of the self-upgrade chain:
+#   • ProtectHome=true   → hid /home from the unit's mount namespace,
+#                          so even \`su - student -c '...'\` couldn't
+#                          see the operator's SeBuilderHC2026 checkout.
+#   • PrivateTmp=true    → created a per-process /tmp that disappeared
+#                          when deploy.sh restarted this unit mid-flight,
+#                          erasing the upgrade log right when the UI
+#                          needed to tail it. Logs now live at
+#                          /var/log/forcepoint-hc/ which survives across
+#                          restarts.
+#   • ProtectSystem=full → made /etc and /usr read-only inside the
+#                          namespace; deploy.sh writes to
+#                          /etc/systemd/system/<unit>.service AND
+#                          /etc/nginx/sites-available/<site> AND
+#                          /var/www/sebuilderhc/dist — too many carve-
+#                          outs to be worth enumerating with
+#                          ReadWritePaths. Dropped entirely.
 #
-# PrivateTmp was previously \`true\` but that created a per-process /tmp
-# that vanished when deploy.sh restarted this unit mid-upgrade — the
-# new companion instance would lose the upgrade log right when the
-# frontend needs to tail it. Logs now live at /var/log/forcepoint-hc/
-# instead, which survives restarts independent of namespace flags.
+# NoNewPrivileges=true is kept — that's the directive that actually
+# blocks the bulk of privilege-escalation threats, independent of
+# whether deploy.sh has write access to /etc.
 NoNewPrivileges=true
-ProtectSystem=full
+ProtectSystem=false
 ProtectHome=false
 PrivateTmp=false
 ReadWritePaths=/var/log/forcepoint-hc /var/lib/forcepoint-hc
