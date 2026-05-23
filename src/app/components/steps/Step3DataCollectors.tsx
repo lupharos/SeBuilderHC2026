@@ -10,14 +10,16 @@ import { fetchDlpPosture, type DlpPostureSummary, type DlpPostureBlockId, type D
 import { type CustomerConnectorConfig, type CustomerConnectorStatus, randomHex256, fetchConnectorStatus, buildConnectorBundle, buildConnectorSecretsTemplate, registerConnectorAllowlist, deregisterConnectorToken } from './customerConnector';
 import { Key, Plug, RefreshCw, Activity, Globe2, Download, ExternalLink } from 'lucide-react';
 
-/* Public URL the customer connector .exe is published at. Points at
-   the GitHub Releases "latest" asset so the wizard never has to ship
-   the binary in its own JS bundle (a 15-25 MB exe in a static SPA
-   chunk would tank load time and break any cache budget). Each
-   connector build → new GitHub release → this `latest` redirect
-   automatically resolves to the newest asset, no wizard rebuild
-   required. Update the path here if the asset filename changes. */
-const CONNECTOR_EXE_URL = 'https://github.com/lupharos/SeBuilderHC2026/releases/latest/download/connector.exe';
+/* Public URL the customer connector .exe is published at. The binary
+   lives at a fixed path inside the SeBuilderHC2026 repo's `main`
+   branch, so the wizard never has to ship a 15-25 MB exe in its own
+   JS bundle (which would tank SPA load time and blow any cache
+   budget). `/raw/` (not `/blob/`) serves the binary directly so a
+   click triggers a normal browser download from github.com — kept
+   that way so SmartScreen / EDR see a trusted github.com origin,
+   not a synthetic blob from the wizard. Update the path here if the
+   exe is moved or renamed. */
+const CONNECTOR_EXE_URL = 'https://github.com/lupharos/SeBuilderHC2026/raw/main/ConnectorAgent/forcepoint-hc-connector.exe';
 
 // ── SQL Server config ────────────────────────────────────────────────────────
 export interface SqlConfig {
@@ -2200,15 +2202,19 @@ export function Step3DataCollectors({
                     title="Download a connector-secrets.json template the customer fills with their local SQL + DLP REST API credentials. Pre-filled from this wizard's SQL config + REST API config where available.">
                     <FileText size={12} /> Download connector-secrets.json
                   </button>
-                  {/* Connector binary download — opens GitHub Releases'
-                      `latest` redirect in a new tab so the customer
-                      always pulls the newest signed asset. Kept as a
-                      plain anchor (not a fetch) so SmartScreen / EDR
-                      see a normal download from github.com, not a
-                      synthetic blob from the wizard origin. */}
+                  {/* Connector binary download — points at the fixed
+                      `/raw/` path inside the SeBuilderHC2026 repo so a
+                      click triggers a normal browser download from
+                      github.com. Kept as a plain anchor (not a fetch)
+                      so SmartScreen / EDR see a trusted github.com
+                      origin instead of a synthetic blob from the
+                      wizard. The `download` attribute makes Chrome /
+                      Edge save with the original filename rather than
+                      a hashed temp name. */}
                   <a href={CONNECTOR_EXE_URL}
                     target="_blank"
                     rel="noopener noreferrer"
+                    download="forcepoint-hc-connector.exe"
                     className="flex items-center gap-1.5 px-4 py-2 rounded-lg font-semibold transition-all"
                     style={{
                       fontSize: '12px',
@@ -2219,8 +2225,8 @@ export function Step3DataCollectors({
                       boxShadow: '0 4px 14px rgba(15,41,82,0.30)',
                       textDecoration: 'none',
                     }}
-                    title="Download the latest connector.exe from GitHub Releases. Opens in a new tab — SmartScreen will treat it as a normal github.com download.">
-                    <Download size={12} /> Download connector.exe
+                    title="Download forcepoint-hc-connector.exe from the GitHub repo (raw path). Opens in a new tab — SmartScreen treats it as a normal github.com download.">
+                    <Download size={12} /> Download forcepoint-hc-connector.exe
                     <ExternalLink size={10} style={{ opacity: 0.75 }} />
                   </a>
                   <button onClick={revokeConnectorAccess}
@@ -2240,7 +2246,7 @@ export function Step3DataCollectors({
                     Hand the customer all three artifacts:
                     {' '}<span className="font-mono" style={{ color: '#0F2952' }}>connector.json</span> (identity / HC endpoint),
                     {' '}<span className="font-mono" style={{ color: '#0F2952' }}>connector-secrets.json</span> (local SQL + DLP-API creds — they fill / verify the pre-fill),
-                    and{' '}<span className="font-mono" style={{ color: '#0F2952' }}>connector.exe</span> (from GitHub Releases).
+                    and{' '}<span className="font-mono" style={{ color: '#0F2952' }}>forcepoint-hc-connector.exe</span> (from the repo).
                     Customer drops all three in the same folder and starts the service. Once it phones home, the status pill above turns <span style={{ color: '#16A34A', fontWeight: 700 }}>ONLINE</span>.
                   </span>
                 </div>
