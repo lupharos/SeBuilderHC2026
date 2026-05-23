@@ -55,15 +55,18 @@ export type VersionCheckState = {
   refresh: () => void;
 };
 
-/* Normalise "2025.05.01" / "v2025.05" → array of integers so we can
-   compare across the year.month.patch format the JSON uses. Anything
-   non-numeric collapses to 0 so a stray "rc1" suffix doesn't poison
-   the compare. */
+/* Normalise "2025.05.24.B1" / "v2025.05" → array of integers so we
+   can compare across the YYYY.MM.DD.BN format the JSON uses. We
+   extract the FIRST run of digits from each dot-separated segment
+   instead of using parseInt directly — that's the only way "B1"
+   and "B3" stay distinguishable (parseInt("B1") is NaN, so the
+   previous version of this code lost the build-number component
+   entirely and reported every build of the same day as equal). */
 function compareVersions(a: string, b: string): number {
   const norm = (s: string) =>
     s.replace(/^v/i, '').split(/[.\-+]/).map((p) => {
-      const n = parseInt(p, 10);
-      return Number.isFinite(n) ? n : 0;
+      const m = p.match(/\d+/);
+      return m ? parseInt(m[0], 10) : 0;
     });
   const A = norm(a);
   const B = norm(b);
