@@ -1026,11 +1026,17 @@ function encryptEnvelope(plaintextObj, keyHex) {
 /* Connector liveness probe used by the /queue endpoint to refuse
    work when nobody's home — the operator gets an immediate 503
    instead of wizard-side polling that never resolves. Mirrors the
-   logic in GET /api/connector/status. */
+   logic in GET /api/connector/status: heartbeats land as an ISO
+   string in `state.lastSeen` (not `lastHeartbeatAt`, which was the
+   name I used in an earlier draft and which doesn't exist on the
+   actual record). The total > 0 guard catches the
+   "registered-but-no-successful-beat-yet" case where the state row
+   exists only because an allowlist-rejected beat created it. */
 function isConnectorOnline(token) {
   const state = connectorState.get(token);
-  if (!state || !state.lastHeartbeatAt) return false;
-  return (Date.now() - state.lastHeartbeatAt) < CONNECTOR_ONLINE_WINDOW_MS;
+  if (!state || !state.lastSeen || !state.total) return false;
+  const ageMs = Date.now() - new Date(state.lastSeen).getTime();
+  return Number.isFinite(ageMs) && ageMs < CONNECTOR_ONLINE_WINDOW_MS;
 }
 
 /* In-process job enqueue for use by other endpoints (e.g. /api/dlp/posture
