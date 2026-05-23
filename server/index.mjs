@@ -1852,6 +1852,64 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'forcepoint-hc-sql-companion', port: PORT });
 });
 
+/* ─── /api/admin/versioncheck ───────────────────────────────────────
+   Server-side proxy for the GitHub versioncheck.json fetch. The SPA
+   used to hit api.github.com directly from the browser, but that fails
+   on customer networks that block outbound to GitHub or sit behind a
+   corporate proxy ("Failed to fetch" in the browser console). The
+   System API host always has outbound network for its `git pull`
+   workflow, so we route the check through here — same-origin from
+   the browser's perspective, no CORS, no proxy juggling.
+   Primary path: GitHub Contents API (invalidates on push). Fallback:
+   raw.githubusercontent.com (CDN, may lag by a few minutes). */
+const GITHUB_API_URL = 'https://api.github.com/repos/lupharos/SeBuilderHC2026/contents/versioncheck.json?ref=main';
+const GITHUB_RAW_URL = 'https://raw.githubusercontent.com/lupharos/SeBuilderHC2026/main/versioncheck.json';
+
+app.get('/api/admin/versioncheck', async (_req, res) => {
+  const stamp = Date.now();
+  /* Try Contents API first. */
+  try {
+    const r = await fetch(`${GITHUB_API_URL}&_=${stamp}`, {
+      headers: {
+        'Accept': 'application/vnd.github.raw',
+        'Cache-Control': 'no-cache',
+        'User-Agent': 'forcepoint-hc-companion/1.0',
+      },
+    });
+    if (r.ok) {
+      const text = await r.text();
+      try {
+        const json = JSON.parse(text);
+        return res.json({ ok: true, source: 'github-api', fetchedAt: new Date().toISOString(), payload: json });
+      } catch (parseErr) {
+        return res.status(502).json({ ok: false, error: `GitHub API returned unparseable JSON: ${parseErr.message}` });
+      }
+    }
+    /* 403 = rate-limit, 404 = repo/file moved — both fall through to raw. */
+  } catch { /* network or DNS failure — try raw */ }
+
+  /* Fallback: raw CDN. */
+  try {
+    const r = await fetch(`${GITHUB_RAW_URL}?_=${stamp}`, {
+      headers: {
+        'Cache-Control': 'no-cache',
+        'User-Agent': 'forcepoint-hc-companion/1.0',
+      },
+    });
+    if (!r.ok) {
+      return res.status(502).json({ ok: false, error: `GitHub raw returned HTTP ${r.status}` });
+    }
+    const text = await r.text();
+    const json = JSON.parse(text);
+    return res.json({ ok: true, source: 'github-raw', fetchedAt: new Date().toISOString(), payload: json });
+  } catch (err) {
+    return res.status(502).json({
+      ok: false,
+      error: `Could not reach GitHub from the System API host: ${err.message}`,
+    });
+  }
+});
+
 /* ═══════════════════════════════════════════════════════════════════
    ADMIN — Self-upgrade
    ───────────────────────────────────────────────────────────────────

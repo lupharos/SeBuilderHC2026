@@ -12,19 +12,15 @@ import { RefreshCw, Sparkles, CheckCircle2, Terminal, Copy, Check } from 'lucide
    restarts the service mid-flight and may need attention if any
    step fails). */
 
-/* GitHub Contents API URL — chosen over raw.githubusercontent.com
-   because the raw CDN (Fastly) can serve stale content for several
-   minutes after a push despite `cache: 'no-store'` + query-string
-   cache-busting. The Contents API invalidates aggressively on push
-   and supports `Accept: application/vnd.github.raw` so we get the
-   file body directly without base64 unwrapping. Rate limit is
-   60 requests/hour per IP unauthenticated, which is plenty for a
-   manual "Re-check" button. */
-const GITHUB_API_VERSIONCHECK_URL =
-  'https://api.github.com/repos/lupharos/SeBuilderHC2026/contents/versioncheck.json?ref=main';
-/* Fallback when the API call fails (rate-limit, transient 5xx, etc.). */
-const GITHUB_RAW_VERSIONCHECK_URL =
-  'https://raw.githubusercontent.com/lupharos/SeBuilderHC2026/main/versioncheck.json';
+/* Same-origin proxy on the System API. The server fetches
+   versioncheck.json from GitHub (Contents API primary, raw CDN
+   fallback) and forwards the payload. Routing through the System API
+   sidesteps the entire class of browser-side failures: corporate
+   proxies that block GitHub, customer firewalls with strict egress,
+   "Failed to fetch" CORS edge cases. The deploy host already has
+   outbound network for its `git pull` workflow, so this fetch
+   always works wherever the rest of the app does. */
+const PROXIED_VERSIONCHECK_URL = '/api/admin/versioncheck';
 
 /* The single canonical upgrade command the operator runs on the
    Ubuntu host. Mirrors the workflow used since the first deploy:
@@ -81,44 +77,35 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-/* Try the GitHub Contents API first; if it 5xxs / rate-limits, fall
-   back to raw.githubusercontent.com. Both end up parsing the same
-   JSON envelope. Each attempt adds a fresh cache-buster + the
-   `cache: 'no-store'` fetch option to bypass every cache layer we
-   can influence from the browser. */
+/* Hit the System API's proxy. The server decides primary vs fallback
+   (Contents API vs raw CDN) and tells us which one delivered via the
+   `source` field on the envelope. The browser never has to reach
+   GitHub directly. */
 async function fetchLatestVersionCheck(): Promise<{ payload: VersionCheckPayload; source: 'github-api' | 'github-raw' }> {
-  const stamp = Date.now();
-  /* Primary path: GitHub Contents API + raw Accept header. */
-  try {
-    const r = await fetch(`${GITHUB_API_VERSIONCHECK_URL}&_=${stamp}`, {
-      method: 'GET',
-      cache: 'no-store',
-      headers: {
-        'Accept': 'application/vnd.github.raw',
-        /* `no-cache` (vs `no-store`) on the request asks any
-           intermediary to revalidate with the origin before serving. */
-        'Cache-Control': 'no-cache',
-      },
-    });
-    if (r.ok) {
-      const json = (await r.json()) as VersionCheckPayload;
-      return { payload: json, source: 'github-api' };
-    }
-    /* 403 here usually means rate-limit; everything else is treated
-       as a transient API failure and falls through to the raw URL. */
-  } catch { /* network error — fall through */ }
-
-  /* Fallback: raw CDN. Cache-buster query string is honored by Fastly
-     as part of the cache key, so a fresh ?_= each time avoids the
-     edge-cache copy in nearly every case. */
-  const r = await fetch(`${GITHUB_RAW_VERSIONCHECK_URL}?_=${stamp}`, {
+  const r = await fetch(`${PROXIED_VersionCheckUrlBust()}`, {
     method: 'GET',
     cache: 'no-store',
     headers: { 'Cache-Control': 'no-cache' },
   });
-  if (!r.ok) throw new Error(`GitHub returned HTTP ${r.status}`);
-  const json = (await r.json()) as VersionCheckPayload;
-  return { payload: json, source: 'github-raw' };
+  if (!r.ok) {
+    const text = await r.text().catch(() => '');
+    throw new Error(text ? `${r.status}: ${text}` : `HTTP ${r.status}`);
+  }
+  const json = (await r.json()) as {
+    ok: boolean;
+    error?: string;
+    source: 'github-api' | 'github-raw';
+    fetchedAt: string;
+    payload: VersionCheckPayload;
+  };
+  if (!json.ok) throw new Error(json.error || 'System API rejected the version check.');
+  return { payload: json.payload, source: json.source };
+}
+
+/* Helper kept inline so the cache-busting query is computed at fetch
+   time (otherwise React would close over a stale stamp). */
+function PROXIED_VersionCheckUrlBust(): string {
+  return `${PROXIED_VERSIONCHECK_URL}?_=${Date.now()}`;
 }
 
 export function useVersionCheck(): VersionCheckState {
@@ -181,11 +168,11 @@ export function VersionCheckCard({ state }: { state: VersionCheckState }) {
   const currentLabel = current.version.startsWith('v') ? current.version : `v${current.version}`;
   /* Operator-visible source label — distinguishes Contents API (fresh)
      from raw CDN fallback (possibly stale) so a stuck re-check is
-     immediately diagnosable. */
+     immediately diagnosable. Always proxied through the System API. */
   const sourceLabel = source === 'github-api'
-    ? 'Source: GitHub API · main'
+    ? 'Source: GitHub API · main (via System API)'
     : source === 'github-raw'
-      ? 'Source: GitHub raw · main (fallback)'
+      ? 'Source: GitHub raw · main (fallback, via System API)'
       : 'Source: GitHub · main';
   const checkedTimeLabel = fetchedAt
     ? `Checked ${new Date(fetchedAt).toLocaleTimeString()}`
