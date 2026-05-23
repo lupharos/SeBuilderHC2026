@@ -7,8 +7,17 @@ import { parseDlpAllLog, type DlpAllLogReport, type LogSeverity } from './dlpAll
 import { parseAuditSystemLogs, type AuditSystemLogsReport, type AuditSeverity } from './auditSystemLogsParser';
 import { parseDlpServiceLogs, isServiceLogFilename, type ServiceLogsReport, type ServiceLogSeverity, type ServiceLogFile } from './dlpServiceLogsParser';
 import { fetchDlpPosture, type DlpPostureSummary, type DlpPostureBlockId, type DestinationPatterns, DLP_POSTURE_BLOCKS, ALL_POSTURE_BLOCK_IDS, formatBytes } from './dlpPosture';
-import { type CustomerConnectorConfig, type CustomerConnectorStatus, randomHex256, fetchConnectorStatus, buildConnectorBundle, registerConnectorAllowlist, deregisterConnectorToken } from './customerConnector';
-import { Key, Plug, RefreshCw, Activity, Globe2 } from 'lucide-react';
+import { type CustomerConnectorConfig, type CustomerConnectorStatus, randomHex256, fetchConnectorStatus, buildConnectorBundle, buildConnectorSecretsTemplate, registerConnectorAllowlist, deregisterConnectorToken } from './customerConnector';
+import { Key, Plug, RefreshCw, Activity, Globe2, Download, ExternalLink } from 'lucide-react';
+
+/* Public URL the customer connector .exe is published at. Points at
+   the GitHub Releases "latest" asset so the wizard never has to ship
+   the binary in its own JS bundle (a 15-25 MB exe in a static SPA
+   chunk would tank load time and break any cache budget). Each
+   connector build → new GitHub release → this `latest` redirect
+   automatically resolves to the newest asset, no wizard rebuild
+   required. Update the path here if the asset filename changes. */
+const CONNECTOR_EXE_URL = 'https://github.com/lupharos/SeBuilderHC2026/releases/latest/download/connector.exe';
 
 // ── SQL Server config ────────────────────────────────────────────────────────
 export interface SqlConfig {
@@ -1345,7 +1354,41 @@ export function Step3DataCollectors({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `forcepoint-hc-connector-${new Date().toISOString().slice(0,10)}.json`;
+    a.download = `connector.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  /* Pre-fill the secrets template with whatever the wizard already
+     knows — saves the customer from re-typing credentials they've
+     already given the SE. SQL block maps onto sql_Data because the
+     wizard's single sqlConfig pin is wbsn-data-security; sql_Web and
+     sql_Email stay as CHANGE_ME placeholders unless / until we grow
+     a per-DB SQL UI. */
+  const downloadConnectorSecretsTemplate = () => {
+    const sqlPrefill = sqlConfig.enabled && sqlConfig.server
+      ? {
+          server: sqlConfig.server,
+          port: sqlConfig.port,
+          database: sqlConfig.database || 'wbsn-data-security',
+          authMode: sqlConfig.authType === 'windows' ? 'windows' as const : 'sql' as const,
+          username: sqlConfig.username,
+          password: sqlConfig.password,
+          trustServerCertificate: true,
+        }
+      : undefined;
+    const apiCfg = apiConnectors.dlpApi;
+    const apiPrefill = apiCfg.enabled && apiCfg.url
+      ? { url: apiCfg.url, username: apiCfg.username, password: apiCfg.password }
+      : undefined;
+    const template = buildConnectorSecretsTemplate({ sqlData: sqlPrefill, dlpApi: apiPrefill });
+    const blob = new Blob([JSON.stringify(template, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `connector-secrets.json`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -2127,8 +2170,8 @@ export function Step3DataCollectors({
                   </div>
                 </div>
 
-                {/* Action row — download connector.json + revoke */}
-                <div className="flex items-center gap-3 pt-2"
+                {/* Action row — download connector.json + secrets template + revoke */}
+                <div className="flex flex-wrap items-center gap-3 pt-2"
                   style={{ borderTop: '1px dashed #E2E8F0' }}>
                   <button onClick={downloadConnectorBundle}
                     disabled={!tokenOk || !keyOk}
@@ -2141,9 +2184,45 @@ export function Step3DataCollectors({
                       border: '1.5px solid transparent',
                       boxShadow: !tokenOk || !keyOk ? 'none' : '0 4px 14px rgba(124,58,237,0.3)',
                     }}
-                    title="Download the connector.json config the customer drops into the connector binary folder.">
+                    title="Download the connector.json config (HC endpoint + token + AES-256 key + IP allowlist).">
                     <Key size={12} /> Download connector.json
                   </button>
+                  <button onClick={downloadConnectorSecretsTemplate}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg font-semibold transition-all"
+                    style={{
+                      fontSize: '12px',
+                      background: 'linear-gradient(135deg,#0D9488,#0F766E)',
+                      color: '#fff',
+                      cursor: 'pointer',
+                      border: '1.5px solid transparent',
+                      boxShadow: '0 4px 14px rgba(13,148,136,0.30)',
+                    }}
+                    title="Download a connector-secrets.json template the customer fills with their local SQL + DLP REST API credentials. Pre-filled from this wizard's SQL config + REST API config where available.">
+                    <FileText size={12} /> Download connector-secrets.json
+                  </button>
+                  {/* Connector binary download — opens GitHub Releases'
+                      `latest` redirect in a new tab so the customer
+                      always pulls the newest signed asset. Kept as a
+                      plain anchor (not a fetch) so SmartScreen / EDR
+                      see a normal download from github.com, not a
+                      synthetic blob from the wizard origin. */}
+                  <a href={CONNECTOR_EXE_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg font-semibold transition-all"
+                    style={{
+                      fontSize: '12px',
+                      background: 'linear-gradient(135deg,#0F2952,#1E40AF)',
+                      color: '#fff',
+                      cursor: 'pointer',
+                      border: '1.5px solid transparent',
+                      boxShadow: '0 4px 14px rgba(15,41,82,0.30)',
+                      textDecoration: 'none',
+                    }}
+                    title="Download the latest connector.exe from GitHub Releases. Opens in a new tab — SmartScreen will treat it as a normal github.com download.">
+                    <Download size={12} /> Download connector.exe
+                    <ExternalLink size={10} style={{ opacity: 0.75 }} />
+                  </a>
                   <button onClick={revokeConnectorAccess}
                     disabled={!tokenOk}
                     className="flex items-center gap-1.5 px-3 py-2 rounded-lg font-semibold transition-all"
@@ -2157,10 +2236,12 @@ export function Step3DataCollectors({
                     title="Clear server-side state for this token — a deployed connector will lose its session.">
                     <Trash2 size={12} /> Revoke access
                   </button>
-                  <span style={{ fontSize: '10.5px', color: '#64748B', lineHeight: 1.5, flex: 1 }}>
-                    The bundle contains the HC endpoint, token, AES-256-GCM key, and IP allowlist.
-                    Hand it to the customer; they drop it next to the connector binary and start the service.
-                    Once it phones home, the status pill above turns <span style={{ color: '#16A34A', fontWeight: 700 }}>ONLINE</span>.
+                  <span style={{ fontSize: '10.5px', color: '#64748B', lineHeight: 1.5, flex: 1, minWidth: 240 }}>
+                    Hand the customer all three artifacts:
+                    {' '}<span className="font-mono" style={{ color: '#0F2952' }}>connector.json</span> (identity / HC endpoint),
+                    {' '}<span className="font-mono" style={{ color: '#0F2952' }}>connector-secrets.json</span> (local SQL + DLP-API creds — they fill / verify the pre-fill),
+                    and{' '}<span className="font-mono" style={{ color: '#0F2952' }}>connector.exe</span> (from GitHub Releases).
+                    Customer drops all three in the same folder and starts the service. Once it phones home, the status pill above turns <span style={{ color: '#16A34A', fontWeight: 700 }}>ONLINE</span>.
                   </span>
                 </div>
               </div>

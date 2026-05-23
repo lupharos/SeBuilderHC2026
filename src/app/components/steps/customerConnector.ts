@@ -204,3 +204,87 @@ export function buildConnectorBundle(cfg: CustomerConnectorConfig): ConnectorBun
     heartbeatIntervalSeconds: 30,
   };
 }
+
+/* Shape of a single SQL block inside `connector-secrets.json`. The
+   connector binary reads these with `pyodbc` using the field names
+   below — must stay in lockstep with `connector/main.py:209+`. */
+export interface ConnectorSecretsSqlBlock {
+  server: string;                  // hostname or IP of the SQL Server
+  port: number;                    // typically 1433
+  database: string;                // wbsn-data-security / wslogdb70 / esglogdb76
+  authMode: 'sql' | 'windows';     // sql = UID/PWD; windows = Trusted_Connection
+  username: string;                // ignored when authMode = "windows"
+  password: string;                // ignored when authMode = "windows"
+  trustServerCertificate: boolean; // most DLP deployments use self-signed certs
+}
+
+/* DLP REST API block — `connector/main.py` calls
+   `{url}/dlp/rest/v1/auth/refresh-token` with Basic auth. */
+export interface ConnectorSecretsApiBlock {
+  url: string;
+  username: string;
+  password: string;
+}
+
+/* Top-level shape of `connector-secrets.json`. Lives next to the
+   connector .exe on the customer host; the operator (or customer
+   admin) fills in any blocks they want probed and leaves the rest
+   as null. The connector only runs selftests against populated
+   blocks — empty/null blocks are silently skipped. */
+export interface ConnectorSecretsTemplate {
+  _format: 'forcepoint-hc-customer-connector-secrets';
+  _version: 1;
+  _generatedAt: string;
+  /* Three discrete SQL blocks — one per DLP-stack DB. Leave null
+     when the customer can't / won't expose that DB to the connector
+     (e.g. no Email Security stack). */
+  sql_Data:  ConnectorSecretsSqlBlock | null;
+  sql_Web:   ConnectorSecretsSqlBlock | null;
+  sql_Email: ConnectorSecretsSqlBlock | null;
+  /* DLP REST API block. Null when the customer hasn't provisioned
+     an API user yet. */
+  dlpApi:    ConnectorSecretsApiBlock | null;
+}
+
+function blankSqlBlock(database: string): ConnectorSecretsSqlBlock {
+  return {
+    server: 'CHANGE_ME — SQL Server hostname or IP',
+    port: 1433,
+    database,
+    authMode: 'sql',
+    username: 'CHANGE_ME',
+    password: 'CHANGE_ME',
+    trustServerCertificate: true,
+  };
+}
+
+/* Build a fresh `connector-secrets.json` template the SE hands to
+   the customer alongside connector.json + the .exe. Optional
+   `prefill` lets the wizard pre-populate the DLP-API block from
+   the wizard's own REST API config and the DLP SQL block from the
+   wizard's SQL config — saves the customer from re-typing the same
+   credentials. Pass `prefill = undefined` for a pure template
+   (all CHANGE_ME placeholders). */
+export function buildConnectorSecretsTemplate(prefill?: {
+  sqlData?: Partial<ConnectorSecretsSqlBlock>;
+  dlpApi?:  Partial<ConnectorSecretsApiBlock>;
+}): ConnectorSecretsTemplate {
+  const sqlData = blankSqlBlock('wbsn-data-security');
+  const sqlWeb  = blankSqlBlock('wslogdb70');
+  const sqlEmail = blankSqlBlock('esglogdb76');
+  if (prefill?.sqlData) Object.assign(sqlData, prefill.sqlData);
+  const dlpApi: ConnectorSecretsApiBlock = {
+    url: prefill?.dlpApi?.url ?? 'https://FSMServer:9443',
+    username: prefill?.dlpApi?.username ?? 'CHANGE_ME — DLP API Application Administrator',
+    password: prefill?.dlpApi?.password ?? 'CHANGE_ME',
+  };
+  return {
+    _format: 'forcepoint-hc-customer-connector-secrets',
+    _version: 1,
+    _generatedAt: new Date().toISOString(),
+    sql_Data:  sqlData,
+    sql_Web:   sqlWeb,
+    sql_Email: sqlEmail,
+    dlpApi:    dlpApi,
+  };
+}
