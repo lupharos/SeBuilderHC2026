@@ -36,6 +36,24 @@ export const DEFAULT_SQL_CONFIG: SqlConfig = {
 };
 
 // ── REST API connectors ──────────────────────────────────────────────────────
+/* Transport options for a REST API connector. Currently only the DLP
+   REST API supports both modes — V Series and NGFW SMC always go
+   `direct` because the SE typically has L3 reachability to those
+   appliances already.
+     • direct        — companion (or browser) fetches the customer's
+                       API endpoint over the SE's own network path.
+                       Requires line-of-sight to the customer FSM
+                       host on the API port (9443 for DLP).
+     • via-connector — companion enqueues each API call as an
+                       encrypted job; the Customer Connector .exe
+                       running INSIDE the customer environment
+                       picks it up, hits the API from there, and
+                       returns the result back through the same
+                       outbound-only HTTPS heartbeat channel. Used
+                       when the SE has no direct route to the
+                       customer FSM, only to the connector. */
+export type ApiTransport = 'direct' | 'via-connector';
+
 export interface ApiConnectorConfig {
   enabled: boolean;
   url: string;
@@ -43,6 +61,13 @@ export interface ApiConnectorConfig {
   apiKey: string;
   username: string;
   password: string;
+  /* Only meaningful when `enabled` is true. Absent / undefined on
+     legacy sessions → treat as 'direct' so existing wizards keep
+     their behavior. Honored by the wizard's runDlpTest / posture /
+     report-run code paths once Stage 3 of the Via-Connector rollout
+     ships; in the meantime the toggle persists state but the
+     transport itself stays 'direct'. */
+  transport?: ApiTransport;
 }
 export interface ApiConnectorsConfig {
   dlpApi: ApiConnectorConfig;
@@ -50,7 +75,7 @@ export interface ApiConnectorsConfig {
   ngfwSmc: ApiConnectorConfig;
 }
 const BLANK_API: ApiConnectorConfig = {
-  enabled: false, url: '', authType: 'apikey', apiKey: '', username: '', password: '',
+  enabled: false, url: '', authType: 'apikey', apiKey: '', username: '', password: '', transport: 'direct',
 };
 export const DEFAULT_API_CONNECTORS: ApiConnectorsConfig = {
   dlpApi:  { ...BLANK_API, authType: 'basic' },
@@ -2840,6 +2865,111 @@ export function Step3DataCollectors({
                     onFocus={e => (e.currentTarget.style.border = '1.5px solid #93C5FD')}
                     onBlur={e =>  (e.currentTarget.style.border = '1.5px solid #E2E8F0')} />
                 </div>
+
+                {/* Transport mode picker — DLP REST API only. Two paths
+                    to the customer's API:
+                      • direct        — companion fetches the BASE URL
+                                        directly. Default. Works when
+                                        the SE has line-of-sight to the
+                                        customer FSM:9443.
+                      • via-connector — companion enqueues each request
+                                        as an encrypted job, the
+                                        Customer Connector .exe picks
+                                        it up over its outbound HTTPS
+                                        heartbeat channel, executes the
+                                        call inside the customer
+                                        network, and returns the
+                                        result. Use when the SE has no
+                                        direct route to the FSM, only
+                                        to the connector.
+                    V-Series and NGFW SMC don't get this toggle —
+                    those appliances are always reached directly. */}
+                {def.key === 'dlpApi' && (() => {
+                  const transport: ApiTransport = (cfg.transport ?? 'direct');
+                  const connEnabled = customerConnector.enabled && !!customerConnector.token;
+                  const connOnline  = !!connectorStatus?.online;
+                  return (
+                    <div>
+                      <label style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.04em', display: 'block', marginBottom: '8px' }}>
+                        TRANSPORT
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {([
+                          { id: 'direct'        as const, title: 'Direct',        sub: 'Companion → customer API (current)' },
+                          { id: 'via-connector' as const, title: 'Via Connector', sub: 'Companion → connector → customer API' },
+                        ]).map((opt) => {
+                          const active = transport === opt.id;
+                          return (
+                            <button key={opt.id} type="button"
+                              onClick={() => updApi('dlpApi', { transport: opt.id })}
+                              className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-all text-left"
+                              style={{
+                                background: active ? 'rgba(37,99,235,0.06)' : '#F8FAFC',
+                                border: active ? '2px solid rgba(37,99,235,0.35)' : '1.5px solid #E2E8F0',
+                                cursor: 'pointer',
+                              }}>
+                              <div className="w-4 h-4 rounded-full flex-shrink-0 flex items-center justify-center"
+                                style={{ border: `2px solid ${active ? '#2563EB' : '#CBD5E1'}`, background: active ? '#2563EB' : 'transparent' }}>
+                                {active && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                              </div>
+                              <div>
+                                <div style={{ fontSize: '12px', fontWeight: 600, color: active ? '#2563EB' : '#334155' }}>
+                                  {opt.title}
+                                </div>
+                                <div style={{ fontSize: '10px', color: '#94A3B8' }}>
+                                  {opt.sub}
+                                </div>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Inline guard rails — Via Connector requires
+                          the Customer Connector card to be enabled
+                          AND the .exe to be phoning home. We don't
+                          auto-fall-back to Direct (silent transport
+                          swaps surprise the operator); we just block
+                          forward progress with a visible warning. */}
+                      {transport === 'via-connector' && !connEnabled && (
+                        <div className="mt-2 flex items-start gap-2 px-3 py-2 rounded-lg"
+                          style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
+                          <XCircle size={13} style={{ color: '#B45309', flexShrink: 0, marginTop: 1 }} />
+                          <span style={{ fontSize: '11px', color: '#92400E', lineHeight: 1.5 }}>
+                            <strong>Customer Connector is OFF.</strong>{' '}
+                            Enable the Customer Connector card above and complete the token /
+                            encryption-key setup; Via-Connector mode can't route requests until the
+                            connector is registered.
+                          </span>
+                        </div>
+                      )}
+                      {transport === 'via-connector' && connEnabled && !connOnline && (
+                        <div className="mt-2 flex items-start gap-2 px-3 py-2 rounded-lg"
+                          style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}>
+                          <XCircle size={13} style={{ color: '#DC2626', flexShrink: 0, marginTop: 1 }} />
+                          <span style={{ fontSize: '11px', color: '#991B1B', lineHeight: 1.5 }}>
+                            <strong>Connector OFFLINE.</strong>{' '}
+                            The customer hasn't started <span style={{ fontFamily: 'monospace' }}>forcepoint-hc-connector.exe</span> yet,
+                            or it's stuck. Via-Connector mode will fail until the status pill in the
+                            Customer Connector card turns <span style={{ color: '#16A34A', fontWeight: 700 }}>ONLINE</span>.
+                          </span>
+                        </div>
+                      )}
+                      {transport === 'via-connector' && connEnabled && connOnline && (
+                        <div className="mt-2 flex items-start gap-2 px-3 py-2 rounded-lg"
+                          style={{ background: '#F0FDF4', border: '1px solid #BBF7D0' }}>
+                          <CheckCircle2 size={13} style={{ color: '#16A34A', flexShrink: 0, marginTop: 1 }} />
+                          <span style={{ fontSize: '11px', color: '#15803D', lineHeight: 1.5 }}>
+                            <strong>Routing through connector.</strong>{' '}
+                            All DLP REST API calls (test, posture fetch, report runs) will be
+                            forwarded as encrypted jobs through the Customer Connector. Customer
+                            credentials never leave their host — companion only sees encrypted payloads.
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* Auth type toggle — DLP REST API only supports Application
                     Administrator username + password, so we hide the auth
