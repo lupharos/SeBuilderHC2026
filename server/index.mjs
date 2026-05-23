@@ -133,9 +133,16 @@ app.post('/api/sql/test', async (req, res) => {
     if (!done.ok) return res.status(400).json({ ok: false, message: done.error, latencyMs: ms });
     const p = done.payload || {};
     if (p.ok) {
+      /* Keep the response message intentionally bland — the connector
+         already sends "Authenticated" without the customer's host:port/
+         db + SQL Server banner (per the no-leak requirement). We just
+         add the via-connector tag so the operator knows which transport
+         answered. The `server` object DOES carry banner details for
+         the detected-server panel, but the wizard only renders the
+         non-sensitive fields. */
       return res.json({
         ok: true,
-        message: `Connected via connector · ${p.message || ''}`,
+        message: `Authenticated via connector (${ms} ms)`,
         server: p.server || {},
         latencyMs: ms,
       });

@@ -3539,7 +3539,18 @@ export function Step3DataCollectors({
                           windowDays={days}
                           runResult={run}
                           isLast={isLast}
-                          sqlReady={sqlConfig.enabled && !!sqlConfig.server.trim()}
+                          sqlReady={(() => {
+                            /* Run gate depends on transport:
+                                 direct        — SERVER / HOST must be filled (companion needs somewhere to dial).
+                                 via-connector — Customer Connector must be registered + ONLINE; the connector
+                                                 owns the SQL credentials in connector-secrets.json, so the
+                                                 wizard's `sqlConfig.server` is intentionally empty in that mode. */
+                            if (!sqlConfig.enabled) return false;
+                            if ((sqlConfig.transport ?? 'direct') === 'via-connector') {
+                              return customerConnector.enabled && !!customerConnector.token && !!connectorStatus?.online;
+                            }
+                            return !!sqlConfig.server.trim();
+                          })()}
                           onToggle={() => toggleReport(report.id)}
                           onChangeWindow={(d) => setReportWindows((prev) => ({ ...prev, [report.id]: d }))}
                           onRun={() => runReport(report.sqlKey, days)}

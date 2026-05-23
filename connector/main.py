@@ -880,24 +880,35 @@ def handle_sql_test(params: dict, secrets: dict | None, insecure: bool) -> dict:
     if result is None:
         return {"ok": False, "message": f"{key} block present but empty", "latencyMs": 0}
     status, message, latency = result
-    payload: dict = {
-        "ok": status == "ok",
+    # On success we MUST NOT pass `message` back unchanged — selftest_sql
+    # returns the customer's host:port/db + @@VERSION banner there, which
+    # would leak that to anyone reading the wizard's Test Connection
+    # result row. The customer asked specifically for that not to be
+    # exposed. The raw banner stays inside `server.versionBanner` for
+    # callers that genuinely need it (none today), but the top-level
+    # message goes generic.
+    if status == "ok":
+        return {
+            "ok": True,
+            "message": "Authenticated",
+            "latencyMs": latency,
+            "server": {
+                "host":          cfg.get("server", ""),
+                "port":          cfg.get("port", 1433),
+                "database":      cfg.get("database", ""),
+                "secretKey":     key,
+                "versionBanner": message,
+            },
+        }
+    # Failure path — keep selftest_sql's diagnostic message verbatim;
+    # the operator genuinely needs the failure detail (driver missing,
+    # auth refused, TCP timeout, etc.) to triage. These don't carry
+    # customer secrets, just product / driver diagnostics.
+    return {
+        "ok": False,
         "message": message,
         "latencyMs": latency,
     }
-    if status == "ok":
-        # Strip the noisy SQL Server banner from `message` — the wizard
-        # only needs to display a "Connected" pill, not the full
-        # @@VERSION. Keep enough metadata for the SQL Server info row
-        # that the direct-mode handler returns.
-        payload["server"] = {
-            "host":             cfg.get("server", ""),
-            "port":             cfg.get("port", 1433),
-            "database":         cfg.get("database", ""),
-            "secretKey":        key,
-            "versionBanner":    message,  # client decides what to show
-        }
-    return payload
 
 
 def handle_sql_query(params: dict, secrets: dict | None, insecure: bool) -> dict:
