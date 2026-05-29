@@ -2,16 +2,36 @@ import { useState } from 'react';
 import { X, LogOut, Mail, Shield, AlertTriangle } from 'lucide-react';
 import type { PanelType } from './Dashboard';
 import { VersionCheckCard, useVersionCheck } from './SystemUpgrade';
+import { MfaSecurityCard } from './MfaSecurity';
+import { useAuth } from '../auth/AuthContext';
 
 interface SidePanelProps {
   panelType: PanelType;
   onClose: () => void;
   onNavigate: (step: number) => void;
-  onLogout?: () => void;
+}
+
+/* Email helpers — keep the avatar + name labels readable for the
+   wider variety of names that now show up in the side panel. */
+function emailLocalPart(email: string | undefined): string {
+  if (!email) return '';
+  const at = email.indexOf('@');
+  return at > 0 ? email.slice(0, at) : email;
+}
+
+function emailInitials(email: string | undefined): string {
+  const local = emailLocalPart(email);
+  if (!local) return '··';
+  /* "kartikarslan" → "KA"; "k.artikarslan" → "KA"; "first.last" → "FL". */
+  const parts = local.split(/[.\-_]+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return (local.slice(0, 2)).toUpperCase();
 }
 
 /* ─── Corporate Logout Modal ─── */
-function LogoutModal({ onConfirm, onCancel }: { onConfirm: () => void; onCancel: () => void }) {
+function LogoutModal({ onConfirm, onCancel, user }: { onConfirm: () => void; onCancel: () => void; user: { email: string; role: 'admin' | 'user' } | null }) {
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center"
@@ -67,11 +87,13 @@ function LogoutModal({ onConfirm, onCancel }: { onConfirm: () => void; onCancel:
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-white flex-shrink-0"
                 style={{ fontSize: '11px', background: 'linear-gradient(135deg, #1D4ED8, #7C3AED)' }}>
-                FP
+                {emailInitials(user?.email)}
               </div>
-              <div>
-                <div style={{ fontSize: '12.5px', fontWeight: 600, color: '#0F172A' }}>Admin User</div>
-                <div style={{ fontSize: '11px', color: '#64748B' }}>admin@forcepoint.com · EMEA · SE</div>
+              <div className="min-w-0 flex-1">
+                <div style={{ fontSize: '12.5px', fontWeight: 600, color: '#0F172A', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{emailLocalPart(user?.email) || 'Signed in'}</div>
+                <div style={{ fontSize: '11px', color: '#64748B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {user?.email ?? '—'} · {user?.role === 'admin' ? 'ADMIN' : 'USER'}
+                </div>
               </div>
               <div className="ml-auto flex items-center gap-1.5 px-2 py-1 rounded-full flex-shrink-0"
                 style={{ background: '#DCFCE7', border: '1px solid #BBF7D0' }}>
@@ -119,8 +141,9 @@ const templateList = [
   { name: 'Classification HC',  desc: '51 questions · 7 sections', color: '#16A34A',  tag: 'CLASS',         step: 5 },
 ];
 
-export function SidePanel({ panelType, onClose, onNavigate, onLogout }: SidePanelProps) {
+export function SidePanel({ panelType, onClose, onNavigate }: SidePanelProps) {
   const [showLogoutModal, setShowLogoutModal] = useState(false);
+  const { user, logout } = useAuth();
   /* Single hook drives the Profile panel's release-management card.
      Fires a one-shot fetch to GitHub for the latest versioncheck.json
      and exposes a refresh() the operator can trigger manually. */
@@ -128,7 +151,10 @@ export function SidePanel({ panelType, onClose, onNavigate, onLogout }: SidePane
 
   const handleLogoutConfirm = () => {
     setShowLogoutModal(false);
-    onLogout ? onLogout() : window.location.reload();
+    /* Real logout: invalidates the session server-side and clears
+       the local token. AuthProvider unmounts Dashboard once the
+       user goes null, falling back to the LoginScreen. */
+    logout();
   };
 
   return (
@@ -137,6 +163,7 @@ export function SidePanel({ panelType, onClose, onNavigate, onLogout }: SidePane
       <LogoutModal
         onConfirm={handleLogoutConfirm}
         onCancel={() => setShowLogoutModal(false)}
+        user={user ? { email: user.email, role: user.role } : null}
       />
     )}
     <div
@@ -248,7 +275,10 @@ export function SidePanel({ panelType, onClose, onNavigate, onLogout }: SidePane
 
         {panelType === 'profile' && (
           <div>
-            {/* Avatar */}
+            {/* Avatar — derives initials + display name from the
+                signed-in user's email. Role badge swaps between
+                ADMIN (blue) and USER (grey) instead of the old
+                fixed "Active session" pill. */}
             <div className="flex flex-col items-center py-4 mb-4">
               <div
                 className="w-16 h-16 rounded-2xl flex items-center justify-center font-mono font-bold text-white mb-3"
@@ -258,42 +288,46 @@ export function SidePanel({ panelType, onClose, onNavigate, onLogout }: SidePane
                   boxShadow: '0 8px 24px rgba(29,78,216,0.3)',
                 }}
               >
-                AD
+                {emailInitials(user?.email)}
               </div>
               <div style={{ fontSize: '15px', fontWeight: 700, color: '#0F172A' }}>
-                Admin User
+                {emailLocalPart(user?.email) || 'Signed in'}
               </div>
               <div
                 className="flex items-center gap-1.5 mt-1"
                 style={{ fontSize: '12px', color: '#64748B' }}
               >
                 <Mail size={11} />
-                admin@forcepoint.com
+                {user?.email ?? '—'}
               </div>
               <div
                 className="mt-2 px-2.5 py-1 rounded-full flex items-center gap-1.5"
                 style={{
-                  background: '#DCFCE7',
-                  border: '1px solid #BBF7D0',
+                  background: user?.role === 'admin' ? '#EFF6FF' : '#DCFCE7',
+                  border: `1px solid ${user?.role === 'admin' ? '#BFDBFE' : '#BBF7D0'}`,
                   fontSize: '10px',
-                  fontWeight: 600,
-                  color: '#16A34A',
+                  fontWeight: 700,
+                  color: user?.role === 'admin' ? '#1D4ED8' : '#16A34A',
+                  letterSpacing: '0.06em',
                 }}
               >
-                <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                ACTIVE SESSION
+                <Shield size={9} />
+                {user?.role === 'admin' ? 'ADMINISTRATOR' : 'USER'}
               </div>
             </div>
 
-            {/* Info grid */}
+            {/* Info grid — pulls from the live session. Registered/
+                last sign-in are useful for the SE to verify which
+                account they're using on a shared lab machine. */}
             <div
               className="rounded-xl p-3 mb-4 space-y-2.5"
               style={{ background: '#F8FAFC', border: '1px solid #EEF0F5' }}
             >
               {[
-                { label: 'Role', value: 'System Engineer' },
-                { label: 'Region', value: 'EMEA' },
-                { label: 'License', value: 'Enterprise' },
+                { label: 'Status', value: user?.status ? user.status.toUpperCase() : '—' },
+                { label: 'Role', value: user?.role === 'admin' ? 'Administrator' : 'System Engineer' },
+                { label: 'Registered', value: user?.createdAt ? new Date(user.createdAt).toLocaleDateString() : '—' },
+                { label: 'Last sign-in', value: user?.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString() : '—' },
                 { label: 'Version', value: `${__BUILD_INFO__.productName} ${__BUILD_INFO__.productVersion}` },
               ].map((item) => (
                 <div key={item.label} className="flex justify-between items-center">
@@ -302,6 +336,13 @@ export function SidePanel({ panelType, onClose, onNavigate, onLogout }: SidePane
                 </div>
               ))}
             </div>
+
+            {/* Security — Two-Factor Authentication management.
+                Sits ABOVE Version Check so account security is the
+                first thing the user sees after the account info
+                grid. Enrollment, disable, and backup-code regen all
+                open dedicated modals over the panel. */}
+            <MfaSecurityCard />
 
             {/* Version Check — pulls versioncheck.json straight from
                 the GitHub repo and compares against the version baked

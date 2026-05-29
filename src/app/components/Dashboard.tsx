@@ -11,6 +11,7 @@ import { EndpointMatrixPage } from './EndpointMatrixPage';
 import { DestinationPatternsPage } from './DestinationPatternsPage';
 import { VersionUpgradeCatalogPage } from './VersionUpgradeCatalogPage';
 import { HelpGuidePage } from './HelpGuidePage';
+import { UserManagementPage } from './UserManagementPage';
 import { CancelSessionModal } from './CancelSessionModal';
 import type { Template } from './types/templates';
 import type { QuestionAnswer, TemplateAnswers } from './rules/ruleEngine';
@@ -270,7 +271,7 @@ function deserializeSessions(raw: unknown[]): HCSession[] {
   });
 }
 
-export function Dashboard({ onLogout }: { onLogout?: () => void }) {
+export function Dashboard() {
   /* Default landing view on logon is the Sessions list — operator
      usually wants to either resume an in-progress engagement or start
      a fresh one from there, rather than landing on a half-empty
@@ -857,11 +858,14 @@ export function Dashboard({ onLogout }: { onLogout?: () => void }) {
         <HelpGuidePage />
       )}
 
+      {activeView === 'user_management' && (
+        <UserManagementPage />
+      )}
+
       {showProfile && (
         <SidePanel
           panelType="profile"
           onClose={() => setShowProfile(false)}
-          onLogout={onLogout}
           onNavigate={(step) => {
             setCurrentStep(step);
             setActiveView('wizard');

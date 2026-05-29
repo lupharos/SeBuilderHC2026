@@ -26,6 +26,13 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
+import {
+  registerUser, loginUser, logoutUser, resolveSession, extractToken,
+  listUsers, setUserStatus, setUserRole, deleteUser, getAuthInfo,
+  requireAuth, requireAdmin,
+  verifyMfaChallenge, beginMfaEnrollment, confirmMfaEnrollment, cancelMfaEnrollment,
+  disableMfa, regenerateBackupCodes, adminResetMfa,
+} from './auth.mjs';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
@@ -1852,6 +1859,188 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'forcepoint-hc-sql-companion', port: PORT });
 });
 
+/* ═══════════════════════════════════════════════════════════════════
+   AUTH — Registration, login, sessions, admin user management
+   ───────────────────────────────────────────────────────────────────
+   See server/auth.mjs for the storage layer. Endpoints:
+     POST /api/auth/register   — public, @forcepoint.com only,
+                                 first user auto-becomes admin
+     POST /api/auth/login      — public, returns { token, user }
+     POST /api/auth/logout     — invalidates the caller's session
+     GET  /api/auth/me         — returns { user } for the bearer token
+     GET  /api/auth/info       — public bootstrap signals for the
+                                 login screen (allowed domain,
+                                 whether any users exist yet)
+     GET    /api/auth/users               — admin
+     POST   /api/auth/users/:id/approve   — admin
+     POST   /api/auth/users/:id/reject    — admin
+     POST   /api/auth/users/:id/suspend   — admin
+     POST   /api/auth/users/:id/role      — admin (toggle admin/user)
+     DELETE /api/auth/users/:id           — admin */
+
+app.get('/api/auth/info', (_req, res) => {
+  res.json({ ok: true, ...getAuthInfo() });
+});
+
+app.post('/api/auth/register', (req, res) => {
+  const { email, password } = req.body ?? {};
+  const result = registerUser({ email, password });
+  if (!result.ok) return res.status(result.code).json({ ok: false, error: result.error });
+  res.json({ ok: true, user: result.user, bootstrapAdmin: result.bootstrapAdmin });
+});
+
+app.post('/api/auth/login', (req, res) => {
+  const { email, password } = req.body ?? {};
+  const result = loginUser({ email, password });
+  if (!result.ok) {
+    return res.status(result.code).json({
+      ok: false,
+      status: result.code2 || undefined,
+      error: result.error,
+    });
+  }
+  /* MFA branch — loginUser may return {ok:true, mfaRequired:true,
+     challengeToken, challengeExpiresInSec} instead of a session
+     when the account has the authenticator enrolled. Forward
+     those fields verbatim so the frontend can swap into the
+     6-digit-code challenge view. Previous bug: this handler only
+     forwarded token + user, which collapsed every MFA response to
+     `{ok:true, token:undefined}` and made the login UI hang. */
+  if (result.mfaRequired) {
+    return res.json({
+      ok: true,
+      mfaRequired: true,
+      challengeToken: result.challengeToken,
+      challengeExpiresInSec: result.challengeExpiresInSec,
+    });
+  }
+  res.json({ ok: true, token: result.token, user: result.user });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  const token = extractToken(req);
+  logoutUser(token);
+  res.json({ ok: true });
+});
+
+app.get('/api/auth/me', requireAuth, (req, res) => {
+  res.json({ ok: true, user: req.user });
+});
+
+app.get('/api/auth/users', requireAdmin, (_req, res) => {
+  res.json({ ok: true, users: listUsers() });
+});
+
+app.post('/api/auth/users/:id/approve', requireAdmin, (req, res) => {
+  const result = setUserStatus(req.params.id, 'approved');
+  if (!result.ok) return res.status(result.code).json({ ok: false, error: result.error });
+  res.json(result);
+});
+
+app.post('/api/auth/users/:id/reject', requireAdmin, (req, res) => {
+  const result = setUserStatus(req.params.id, 'rejected');
+  if (!result.ok) return res.status(result.code).json({ ok: false, error: result.error });
+  res.json(result);
+});
+
+app.post('/api/auth/users/:id/suspend', requireAdmin, (req, res) => {
+  const result = setUserStatus(req.params.id, 'suspended');
+  if (!result.ok) return res.status(result.code).json({ ok: false, error: result.error });
+  res.json(result);
+});
+
+app.post('/api/auth/users/:id/role', requireAdmin, (req, res) => {
+  const target = (req.body && req.body.role) || 'user';
+  /* Last-admin guard — never let an admin demote the only remaining
+     admin via this endpoint, otherwise the system locks itself out. */
+  if (target !== 'admin') {
+    const admins = listUsers().filter(u => u.role === 'admin');
+    if (admins.length <= 1 && admins[0]?.id === req.params.id) {
+      return res.status(409).json({ ok: false, error: 'Cannot demote the last remaining admin.' });
+    }
+  }
+  const result = setUserRole(req.params.id, target);
+  if (!result.ok) return res.status(result.code).json({ ok: false, error: result.error });
+  res.json(result);
+});
+
+app.delete('/api/auth/users/:id', requireAdmin, (req, res) => {
+  /* Same last-admin guard for deletes. */
+  const admins = listUsers().filter(u => u.role === 'admin');
+  if (admins.length <= 1 && admins[0]?.id === req.params.id) {
+    return res.status(409).json({ ok: false, error: 'Cannot delete the last remaining admin.' });
+  }
+  const result = deleteUser(req.params.id);
+  if (!result.ok) return res.status(result.code).json({ ok: false, error: result.error });
+  res.json(result);
+});
+
+/* ─── MFA endpoints ──────────────────────────────────────────────
+   Two flows: (1) finishing a login when the user already has MFA
+   enabled (challenge token in hand), and (2) enrollment +
+   management for an already-signed-in user. Admins additionally
+   get a "reset MFA" power for stuck-without-phone users. */
+
+/* (1) Complete an MFA challenge — token came from a /login call
+   that returned { mfaRequired: true, challengeToken }. */
+app.post('/api/auth/mfa/verify', (req, res) => {
+  const { challengeToken, code } = req.body ?? {};
+  const result = verifyMfaChallenge({ challengeToken, code });
+  if (!result.ok) return res.status(result.code).json({ ok: false, error: result.error });
+  res.json({ ok: true, token: result.token, user: result.user });
+});
+
+/* (2a) Start an enrollment — generates a fresh secret + draft set
+   of backup codes, returns the QR-ready otpauth URI. */
+app.post('/api/auth/mfa/enroll/begin', requireAuth, (req, res) => {
+  const result = beginMfaEnrollment(req.user.id);
+  if (!result.ok) return res.status(result.code).json({ ok: false, error: result.error });
+  res.json(result);
+});
+
+/* (2b) Confirm enrollment with a fresh TOTP code from the user's
+   authenticator app. Returns the one-time backup codes. */
+app.post('/api/auth/mfa/enroll/confirm', requireAuth, (req, res) => {
+  const { code } = req.body ?? {};
+  const result = confirmMfaEnrollment(req.user.id, code);
+  if (!result.ok) return res.status(result.code).json({ ok: false, error: result.error });
+  res.json({ ok: true, user: result.user, backupCodes: result.backupCodes });
+});
+
+/* Cancel an in-flight enrollment (user clicks "Back" or closes the
+   modal). Idempotent — safe to call when no draft exists. */
+app.post('/api/auth/mfa/enroll/cancel', requireAuth, (req, res) => {
+  const result = cancelMfaEnrollment(req.user.id);
+  res.json(result);
+});
+
+/* Disable MFA — re-auth gated on the current password. */
+app.post('/api/auth/mfa/disable', requireAuth, (req, res) => {
+  const { password } = req.body ?? {};
+  const result = disableMfa(req.user.id, password);
+  if (!result.ok) return res.status(result.code).json({ ok: false, error: result.error });
+  res.json({ ok: true, user: result.user });
+});
+
+/* Regenerate backup codes (invalidates the previous set). Also
+   re-auth gated. */
+app.post('/api/auth/mfa/backup-codes/regenerate', requireAuth, (req, res) => {
+  const { password } = req.body ?? {};
+  const result = regenerateBackupCodes(req.user.id, password);
+  if (!result.ok) return res.status(result.code).json({ ok: false, error: result.error });
+  res.json({ ok: true, backupCodes: result.backupCodes, user: result.user });
+});
+
+/* Admin override — clears another user's MFA. Used when a user
+   loses their phone AND their backup codes. Last-admin guard isn't
+   relevant here (we're not changing role/status); the admin gets a
+   clean re-enroll on next login. */
+app.post('/api/auth/users/:id/mfa/reset', requireAdmin, (req, res) => {
+  const result = adminResetMfa(req.params.id);
+  if (!result.ok) return res.status(result.code).json({ ok: false, error: result.error });
+  res.json(result);
+});
+
 /* ─── /api/admin/versioncheck ───────────────────────────────────────
    Server-side proxy for the GitHub versioncheck.json fetch. The SPA
    used to hit api.github.com directly from the browser, but that fails
@@ -2204,6 +2393,13 @@ const HOST = process.env.HOST || '0.0.0.0';
 app.listen(PORT, HOST, () => {
   // eslint-disable-next-line no-console
   console.log(`Forcepoint HC companion listening on http://${HOST}:${PORT}`);
+  const info = getAuthInfo();
+  // eslint-disable-next-line no-console
+  console.log(`  Auth: ${info.userCount} user(s), ${info.adminCount} admin(s), ${info.pendingCount} pending — store ${info.storeDir}`);
+  if (info.bootstrapMode) {
+    // eslint-disable-next-line no-console
+    console.log('  Auth: no users yet — first @forcepoint.com registration auto-becomes admin.');
+  }
   // eslint-disable-next-line no-console
   console.log('  POST /api/sql/test       — SQL connection test');
   // eslint-disable-next-line no-console

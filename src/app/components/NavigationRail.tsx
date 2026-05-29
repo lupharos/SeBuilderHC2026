@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { FolderOpen, Braces, Layers, ClipboardCheck, MonitorSmartphone, Sparkles, Activity, ArrowUpCircle, BookOpen } from 'lucide-react';
+import { FolderOpen, Braces, Layers, ClipboardCheck, MonitorSmartphone, Sparkles, Activity, ArrowUpCircle, BookOpen, Users } from 'lucide-react';
+import { useAuth } from '../auth/AuthContext';
 
-export type ActiveView = 'wizard' | 'templates' | 'sessions' | 'versions' | 'endpoint_matrix' | 'destination_patterns' | 'version_upgrade_catalog' | 'help_guide';
+export type ActiveView = 'wizard' | 'templates' | 'sessions' | 'versions' | 'endpoint_matrix' | 'destination_patterns' | 'version_upgrade_catalog' | 'help_guide' | 'user_management';
 
 interface NavigationRailProps {
   activeView: ActiveView;
@@ -55,6 +56,11 @@ function useApiHealth(): HealthState {
 
 export function NavigationRail({ activeView, onChangeView, onOpenProfile, onStartWizardSession }: NavigationRailProps) {
   const health = useApiHealth();
+  /* Admin-only nav entry. The hook is unconditional (React rule) but
+     the rendered button is gated on user?.role === 'admin'. */
+  const { user, info } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const pendingCount = info?.pendingCount ?? 0;
   return (
     <div
       className="w-[60px] flex flex-col items-center py-4 gap-1 flex-shrink-0 relative z-20"
@@ -147,6 +153,19 @@ export function NavigationRail({ activeView, onChangeView, onOpenProfile, onStar
         onClick={() => onChangeView('help_guide')}
       />
 
+      {/* User Management — admin-only. Hidden for regular users; the
+          pending-count badge surfaces new registrations at a glance so
+          admins don't have to open the page to know there's work. */}
+      {isAdmin && (
+        <NavButton
+          icon={<Users size={16} />}
+          label={pendingCount > 0 ? `User Management — ${pendingCount} pending` : 'User Management'}
+          active={activeView === 'user_management'}
+          onClick={() => onChangeView('user_management')}
+          badge={pendingCount > 0 ? pendingCount : undefined}
+        />
+      )}
+
       <div className="flex-1" />
       <div className="w-8 h-px mb-3" style={{ background: 'rgba(255,255,255,0.06)' }} />
 
@@ -234,9 +253,12 @@ interface NavButtonProps {
   label: string;
   active?: boolean;
   onClick: () => void;
+  /** Optional numeric badge (e.g. pending approvals) shown in the
+   *  top-right corner of the icon. Hidden when undefined or zero. */
+  badge?: number;
 }
 
-function NavButton({ icon, label, active, onClick }: NavButtonProps) {
+function NavButton({ icon, label, active, onClick, badge }: NavButtonProps) {
   return (
     <div className="relative group">
       <button
@@ -267,6 +289,21 @@ function NavButton({ icon, label, active, onClick }: NavButtonProps) {
           />
         )}
         {icon}
+        {typeof badge === 'number' && badge > 0 && (
+          <span
+            className="absolute -top-1 -right-1 rounded-full flex items-center justify-center"
+            style={{
+              minWidth: 16, height: 16,
+              padding: '0 4px',
+              fontSize: '9px', fontWeight: 700,
+              background: '#DC2626', color: '#fff',
+              border: '2px solid #060E20',
+              lineHeight: 1,
+            }}
+          >
+            {badge > 99 ? '99+' : badge}
+          </span>
+        )}
       </button>
       <Tooltip>{label}</Tooltip>
     </div>
