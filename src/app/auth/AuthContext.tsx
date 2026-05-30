@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, useCallback, useMemo, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, useCallback, useMemo, type ReactNode } from 'react';
 
 /* ─── Authenticated user shape (returned by /api/auth/me) ────────── */
 export type AuthUser = {
@@ -64,6 +64,18 @@ type Ctx = {
 };
 
 const TOKEN_STORAGE_KEY = 'hc_auth_token';
+
+/* ─── Idle auto-logout ────────────────────────────────────────────
+   Sign the user out after 15 minutes with no interaction. The
+   "last activity" timestamp lives in localStorage so every open tab
+   shares one idle clock: activity in any tab keeps them all alive,
+   and once they've all been idle past the limit they sign out
+   together. The logout path hits /api/auth/logout, so the server
+   session is revoked too — not just the local token. */
+const IDLE_TIMEOUT_MS = 15 * 60 * 1000;
+const ACTIVITY_KEY = 'hc_last_activity';
+/* Read by LoginScreen to show a "signed out for inactivity" notice. */
+export const LOGOUT_REASON_KEY = 'hc_logout_reason';
 
 /* ─── Global fetch interceptor ────────────────────────────────────
    Attaches the stored bearer token to every same-origin /api/* call
@@ -281,6 +293,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     refreshInfo();
   }, [refreshInfo]);
+
+  /* Idle auto-logout — only armed while a user is actually signed in.
+     Re-arms whenever `user` changes (login / logout) so listeners and
+     the polling interval are torn down cleanly on sign-out. */
+  const lastActivityWriteRef = useRef(0);
+  useEffect(() => {
+    if (!user) return;
+
+    /* Seed the shared clock the moment a session becomes active. */
+    const seed = Date.now();
+    try { localStorage.setItem(ACTIVITY_KEY, String(seed)); } catch { /* storage blocked */ }
+    lastActivityWriteRef.current = seed;
+
+    /* Throttle writes to at most once every 5s — mousemove fires a lot. */
+    const bump = () => {
+      const now = Date.now();
+      if (now - lastActivityWriteRef.current > 5000) {
+        lastActivityWriteRef.current = now;
+        try { localStorage.setItem(ACTIVITY_KEY, String(now)); } catch { /* storage blocked */ }
+      }
+    };
+    const events: (keyof WindowEventMap)[] = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'click'];
+    events.forEach((e) => window.addEventListener(e, bump, { passive: true }));
+
+    /* Poll every 15s — fine-grained enough for a 15-minute window
+       without burning cycles. Reads the shared timestamp so a tab
+       that's been idle still respects activity in a sibling tab. */
+    const interval = window.setInterval(() => {
+      const raw = Number(localStorage.getItem(ACTIVITY_KEY));
+      const last = Number.isFinite(raw) && raw > 0 ? raw : Date.now();
+      if (Date.now() - last >= IDLE_TIMEOUT_MS) {
+        try { localStorage.setItem(LOGOUT_REASON_KEY, 'idle'); } catch { /* storage blocked */ }
+        logout();
+      }
+    }, 15000);
+
+    return () => {
+      events.forEach((e) => window.removeEventListener(e, bump));
+      window.clearInterval(interval);
+    };
+  }, [user, logout]);
 
   const value = useMemo<Ctx>(() => ({
     user, info, loading, login, verifyMfa, register, logout, refreshUser, refreshInfo,

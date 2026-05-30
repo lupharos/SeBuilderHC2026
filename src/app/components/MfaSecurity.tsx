@@ -13,7 +13,7 @@ import { useAuth } from '../auth/AuthContext';
    overlays so the small panel area doesn't get cramped. */
 export function MfaSecurityCard() {
   const { user, refreshUser } = useAuth();
-  const [open, setOpen] = useState<null | 'enroll' | 'disable' | 'regenerate'>(null);
+  const [open, setOpen] = useState<null | 'enroll' | 'disable' | 'regenerate' | 'password'>(null);
 
   if (!user) return null;
 
@@ -80,6 +80,15 @@ export function MfaSecurityCard() {
             <ShieldCheck size={12} /> Enable two-factor
           </button>
         )}
+
+        {/* Password is a separate concern from MFA but lives in the same
+            security card — always available regardless of MFA state. */}
+        <div style={{ height: 1, background: '#EEF0F5', margin: '10px 0' }} />
+        <button onClick={() => setOpen('password')}
+          className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg font-semibold transition-all"
+          style={{ fontSize: '11px', background: '#F1F5F9', color: '#475569', border: '1px solid #E2E8F0' }}>
+          <KeyRound size={11} /> Change password
+        </button>
       </div>
 
       {open === 'enroll' && (
@@ -91,7 +100,105 @@ export function MfaSecurityCard() {
       {open === 'regenerate' && (
         <RegenerateModal onDone={() => { refreshUser(); setOpen(null); }} onClose={() => setOpen(null)} />
       )}
+      {open === 'password' && (
+        <ChangePasswordModal onDone={() => setOpen(null)} onClose={() => setOpen(null)} />
+      )}
     </>
+  );
+}
+
+/* ─── Change-password modal (self-service) ───────────────────────────
+   Re-auth gated on the current password (same pattern as Disable MFA).
+   POST /api/auth/password — the server keeps this session alive and
+   revokes the account's other sessions. */
+function ChangePasswordModal({ onDone, onClose }: { onDone: () => void; onClose: () => void }) {
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [done, setDone] = useState(false);
+
+  const mismatch = confirm.length > 0 && next !== confirm;
+  const tooShort = next.length > 0 && next.length < 8;
+  const canSubmit = current.length > 0 && next.length >= 8 && next === confirm && !loading;
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canSubmit) return;
+    setError(''); setLoading(true);
+    try {
+      const r = await fetch('/api/auth/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPassword: current, newPassword: next }),
+      });
+      const json = await r.json();
+      if (!r.ok || !json.ok) {
+        setError(json.error || `Server returned ${r.status}`);
+        return;
+      }
+      setDone(true);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <ModalShell title="Change password" onClose={onClose}>
+      {done ? (
+        <>
+          <div className="px-3 py-2.5 rounded-md mb-3 flex items-start gap-2"
+            style={{ background: '#F0FDF4', border: '1px solid #BBF7D0' }}>
+            <Check size={14} style={{ color: '#16A34A', flexShrink: 0, marginTop: 2 }} />
+            <div style={{ fontSize: '11.5px', color: '#15803D', lineHeight: 1.5 }}>
+              Password updated. This session stays signed in; any other devices were signed out.
+            </div>
+          </div>
+          <button onClick={onDone}
+            className="w-full py-2.5 rounded-xl font-semibold text-white"
+            style={{ fontSize: '13px', background: 'linear-gradient(135deg, #16A34A, #15803D)' }}>
+            Done
+          </button>
+        </>
+      ) : (
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div>
+            <Label>Current password</Label>
+            <PasswordField value={current} onChange={setCurrent} autoComplete="current-password" />
+          </div>
+          <div>
+            <Label>New password</Label>
+            <PasswordField value={next} onChange={setNext} autoComplete="new-password" />
+            {tooShort && <div style={{ fontSize: '10.5px', color: '#DC2626', marginTop: 5 }}>Must be at least 8 characters.</div>}
+          </div>
+          <div>
+            <Label>Confirm new password</Label>
+            <PasswordField value={confirm} onChange={setConfirm} autoComplete="new-password" />
+            {mismatch && <div style={{ fontSize: '10.5px', color: '#DC2626', marginTop: 5 }}>Passwords don't match.</div>}
+          </div>
+          {error && <InlineError message={error} />}
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={onClose}
+              className="py-2 rounded-lg font-semibold"
+              style={{ fontSize: '12.5px', background: '#F1F5F9', color: '#334155', border: '1px solid #E2E8F0' }}>
+              Cancel
+            </button>
+            <button type="submit" disabled={!canSubmit}
+              className="py-2 rounded-lg font-semibold text-white"
+              style={{
+                fontSize: '12.5px',
+                background: !canSubmit ? '#93C5FD' : 'linear-gradient(135deg, #1D4ED8, #1E40AF)',
+                cursor: !canSubmit ? 'not-allowed' : 'pointer',
+              }}>
+              {loading ? 'Updating…' : 'Update password'}
+            </button>
+          </div>
+        </form>
+      )}
+    </ModalShell>
   );
 }
 

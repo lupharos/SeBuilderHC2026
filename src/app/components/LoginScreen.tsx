@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Shield, Mail, Lock, Eye, EyeOff, UserPlus, AlertTriangle, Clock, CheckCircle2, ShieldCheck, KeyRound } from 'lucide-react';
-import { useAuth } from '../auth/AuthContext';
+import { useAuth, LOGOUT_REASON_KEY } from '../auth/AuthContext';
 
 type Mode = 'login' | 'register';
 
@@ -18,6 +18,18 @@ type Mode = 'login' | 'register';
 export function LoginScreen() {
   const { login, verifyMfa, register, info } = useAuth();
   const [mode, setMode] = useState<Mode>('login');
+  /* Surface a one-time "signed out for inactivity" notice when the
+     idle timer in AuthContext was what brought us back here. Read +
+     clear the flag on mount so it shows once, not on every reload. */
+  const [idleNotice, setIdleNotice] = useState(false);
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(LOGOUT_REASON_KEY) === 'idle') {
+        setIdleNotice(true);
+        localStorage.removeItem(LOGOUT_REASON_KEY);
+      }
+    } catch { /* storage blocked */ }
+  }, []);
 
   return (
     <div className="fixed inset-0 flex overflow-hidden">
@@ -115,6 +127,21 @@ export function LoginScreen() {
               Forcepoint <span className="text-blue-600">HC Studio</span>
             </span>
           </div>
+
+          {idleNotice && mode === 'login' && (
+            <div className="mb-4 px-3.5 py-3 rounded-xl flex items-start gap-2.5"
+              style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
+              <Clock size={15} style={{ color: '#B58800', flexShrink: 0, marginTop: 1 }} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#92400E' }}>Signed out for inactivity</div>
+                <div style={{ fontSize: '11.5px', color: '#A16207', lineHeight: 1.5, marginTop: 2 }}>
+                  Your session ended after 15 minutes idle. Please sign in again to continue.
+                </div>
+              </div>
+              <button onClick={() => setIdleNotice(false)}
+                style={{ fontSize: '11px', fontWeight: 600, color: '#92400E' }}>Dismiss</button>
+            </div>
+          )}
 
           {mode === 'login'
             ? <LoginForm onLogin={login} onVerifyMfa={verifyMfa} onSwitchToRegister={() => setMode('register')} info={info} />

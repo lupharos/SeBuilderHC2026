@@ -32,6 +32,7 @@ import {
   requireAuth, requireAdmin,
   verifyMfaChallenge, beginMfaEnrollment, confirmMfaEnrollment, cancelMfaEnrollment,
   disableMfa, regenerateBackupCodes, adminResetMfa,
+  adminSetPassword, changeOwnPassword,
 } from './auth.mjs';
 
 const app = express();
@@ -1876,7 +1877,9 @@ app.get('/health', (_req, res) => {
      POST   /api/auth/users/:id/reject    — admin
      POST   /api/auth/users/:id/suspend   — admin
      POST   /api/auth/users/:id/role      — admin (toggle admin/user)
-     DELETE /api/auth/users/:id           — admin */
+     POST   /api/auth/users/:id/password  — admin (set a user's password)
+     DELETE /api/auth/users/:id           — admin
+     POST   /api/auth/password            — self-service password change */
 
 app.get('/api/auth/info', (_req, res) => {
   res.json({ ok: true, ...getAuthInfo() });
@@ -2039,6 +2042,26 @@ app.post('/api/auth/users/:id/mfa/reset', requireAdmin, (req, res) => {
   const result = adminResetMfa(req.params.id);
   if (!result.ok) return res.status(result.code).json({ ok: false, error: result.error });
   res.json(result);
+});
+
+/* Admin override — set another user's password directly. No email on
+   this companion, so the admin types a new password and relays it
+   out of band. All of the target's sessions are revoked server-side. */
+app.post('/api/auth/users/:id/password', requireAdmin, (req, res) => {
+  const { password } = req.body ?? {};
+  const result = adminSetPassword(req.params.id, password);
+  if (!result.ok) return res.status(result.code).json({ ok: false, error: result.error });
+  res.json(result);
+});
+
+/* Self-service password change — re-auth gated on the current
+   password. The caller's own session is preserved (keepToken); every
+   other session for the account is booted. */
+app.post('/api/auth/password', requireAuth, (req, res) => {
+  const { currentPassword, newPassword } = req.body ?? {};
+  const result = changeOwnPassword(req.user.id, currentPassword, newPassword, req.session.token);
+  if (!result.ok) return res.status(result.code).json({ ok: false, error: result.error });
+  res.json({ ok: true, user: result.user });
 });
 
 /* ─── /api/admin/versioncheck ───────────────────────────────────────

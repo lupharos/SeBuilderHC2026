@@ -578,6 +578,62 @@ export function adminResetMfa(userId) {
   return { ok: true, user: publicUser(user) };
 }
 
+/* ─── Password management ────────────────────────────────────────── */
+
+/* Revoke every session for a user, optionally sparing one token (the
+   caller's own, so a self-service change doesn't log them out mid-flow).
+   Returns true if anything was removed. */
+function revokeUserSessions(userId, keepToken = null) {
+  const before = sessionsStore.sessions.length;
+  sessionsStore.sessions = sessionsStore.sessions.filter(
+    s => s.userId !== userId || s.token === keepToken,
+  );
+  const changed = sessionsStore.sessions.length !== before;
+  if (changed) persistSessions();
+  return changed;
+}
+
+/* Admin-side reset — sets another user's password directly to a value
+   the admin chose. There is no email infrastructure on this companion,
+   so an admin types a new password and relays it to the user out of
+   band (Teams, in person). All of the target's open sessions are
+   revoked so a previously-compromised session can't survive the reset.
+   No re-auth gate here: the requireAdmin middleware already proved the
+   caller is an admin. */
+export function adminSetPassword(userId, newPassword) {
+  const user = findUserById(userId);
+  if (!user) return { ok: false, code: 404, error: 'User not found.' };
+  if (!isValidPassword(newPassword)) {
+    return { ok: false, code: 400, error: 'Password must be 8–200 characters.' };
+  }
+  user.passwordHash = hashPassword(newPassword);
+  persistUsers();
+  revokeUserSessions(userId);
+  return { ok: true, user: publicUser(user) };
+}
+
+/* Self-service change — re-auth gated on the current password (same
+   pattern as disableMfa). The caller's own session is preserved; every
+   OTHER session for the account is revoked so a stale/other device is
+   booted after a password change. */
+export function changeOwnPassword(userId, currentPassword, newPassword, keepToken = null) {
+  const user = findUserById(userId);
+  if (!user) return { ok: false, code: 404, error: 'User not found.' };
+  if (!verifyPassword(currentPassword || '', user.passwordHash)) {
+    return { ok: false, code: 401, error: 'Current password is incorrect.' };
+  }
+  if (!isValidPassword(newPassword)) {
+    return { ok: false, code: 400, error: 'New password must be 8–200 characters.' };
+  }
+  if (verifyPassword(newPassword, user.passwordHash)) {
+    return { ok: false, code: 400, error: 'New password must be different from the current one.' };
+  }
+  user.passwordHash = hashPassword(newPassword);
+  persistUsers();
+  revokeUserSessions(userId, keepToken);
+  return { ok: true, user: publicUser(user) };
+}
+
 export const AUTH_CONSTANTS = {
   ALLOWED_DOMAIN,
   STORE_DIR,

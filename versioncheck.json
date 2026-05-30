@@ -1,6 +1,6 @@
 {
   "productName": "HC Studio",
-  "version": "2025.05.29.1",
+  "version": "2026.05.29.1",
   "releasedAt": "2026-05-29T12:00:00Z",
-  "notes": "Release notes for HC Studio version 2025.05.29.1:\n\n- Added new features and improvements.\n- Fixed various bugs and issues.\n- Updated dependencies to the latest versions.\n\nFor more details, please refer to the official documentation or contact support."
+  "notes": "Release notes for HC Studio version 2026.05.29.1:\n\n- Added admin-initiated password reset in User Management (admin sets a new password; the user's open sessions are revoked).\n- Added self-service \"Change password\" in the account security panel.\n- Added 15-minute inactivity auto-logout with a sign-in notice.\n- Removed the build-version chip from the navigation rail.\n\nFor more details, please refer to the official documentation or contact support."
 }

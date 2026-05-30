@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Users, RefreshCw, Check, X, Pause, Play, ShieldCheck, Shield, Trash2, AlertTriangle, Clock,
+  KeyRound, Lock,
 } from 'lucide-react';
 import type { AuthUser } from '../auth/AuthContext';
 import { useAuth } from '../auth/AuthContext';
@@ -25,6 +26,8 @@ export function UserManagementPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [filter, setFilter] = useState<StatusFilter>('all');
   const [search, setSearch] = useState('');
+  /* User whose password the admin is resetting — drives the modal. */
+  const [resetUser, setResetUser] = useState<AuthUser | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -274,6 +277,9 @@ export function UserManagementPage() {
                           {u.status === 'suspended' && (
                             <ActionButton tone="success" disabled={busy} onClick={() => approve(u.id)}><Play size={11} /> Re-instate</ActionButton>
                           )}
+                          {!isSelf && (
+                            <ActionButton tone="neutral" disabled={busy} title="Reset password" onClick={() => setResetUser(u)}><KeyRound size={11} /></ActionButton>
+                          )}
                           {!isSelf && !isOnlyAdmin && (
                             <ActionButton tone="ghostDanger" disabled={busy} onClick={() => deleteUser(u)}><Trash2 size={11} /></ActionButton>
                           )}
@@ -287,6 +293,184 @@ export function UserManagementPage() {
           </div>
         )}
       </div>
+
+      {resetUser && (
+        <ResetPasswordModal
+          target={resetUser}
+          onClose={() => setResetUser(null)}
+          onDone={() => { setResetUser(null); refresh(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ─── Admin password-reset modal ─────────────────────────────────────
+   No email infrastructure on the companion, so the admin types a new
+   password here and relays it to the user out of band. Submits to
+   POST /api/auth/users/:id/password — the server revokes all of the
+   target's open sessions on success. */
+function ResetPasswordModal({ target, onClose, onDone }: { target: AuthUser; onClose: () => void; onDone: () => void }) {
+  const [pwd, setPwd] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [show, setShow] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [done, setDone] = useState(false);
+
+  const mismatch = confirm.length > 0 && pwd !== confirm;
+  const tooShort = pwd.length > 0 && pwd.length < 8;
+  const canSubmit = pwd.length >= 8 && pwd === confirm && !loading;
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canSubmit) return;
+    setError(null);
+    setLoading(true);
+    try {
+      const r = await fetch(`/api/auth/users/${target.id}/password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pwd }),
+      });
+      const json = await r.json();
+      if (!r.ok || !json.ok) {
+        setError(json.error || `Server returned ${r.status}.`);
+        return;
+      }
+      setDone(true);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center"
+      style={{ background: 'rgba(10,18,35,0.6)', backdropFilter: 'blur(4px)' }}
+      onClick={onClose}>
+      <div className="rounded-2xl overflow-hidden"
+        style={{ width: 460, maxWidth: 'calc(100vw - 32px)', background: '#fff', boxShadow: '0 24px 60px rgba(10,18,35,0.25)', border: '1px solid #E2E8F0' }}
+        onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-3 px-5 py-4"
+          style={{ background: 'linear-gradient(135deg, #0F172A 0%, #1E293B 100%)' }}>
+          <div className="w-8 h-8 rounded-lg flex items-center justify-center"
+            style={{ background: 'rgba(29,78,216,0.2)', border: '1px solid rgba(29,78,216,0.35)' }}>
+            <KeyRound size={14} className="text-blue-300" />
+          </div>
+          <div className="flex-1">
+            <div style={{ fontSize: '13px', fontWeight: 700, color: '#fff' }}>Reset password</div>
+            <div style={{ fontSize: '10.5px', color: '#94A3B8' }}>{target.email}</div>
+          </div>
+          <button onClick={onClose}
+            className="w-7 h-7 rounded-md flex items-center justify-center"
+            style={{ background: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.6)' }}>
+            <X size={14} />
+          </button>
+        </div>
+
+        <div className="px-5 py-4">
+          {done ? (
+            <>
+              <div className="px-3 py-2.5 rounded-lg mb-3 flex items-start gap-2"
+                style={{ background: '#F0FDF4', border: '1px solid #BBF7D0' }}>
+                <Check size={14} style={{ color: '#16A34A', flexShrink: 0, marginTop: 1 }} />
+                <div style={{ fontSize: '12px', color: '#15803D', lineHeight: 1.5 }}>
+                  Password updated. All of <strong>{target.email}</strong>'s open sessions were signed out — share the new password with them out of band (Teams, in person).
+                </div>
+              </div>
+              <button onClick={onDone}
+                className="w-full py-2.5 rounded-xl font-semibold text-white"
+                style={{ fontSize: '13px', background: 'linear-gradient(135deg, #16A34A, #15803D)' }}>
+                Done
+              </button>
+            </>
+          ) : (
+            <form onSubmit={submit} className="space-y-3">
+              <div className="px-3 py-2 rounded-md flex items-start gap-2"
+                style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
+                <AlertTriangle size={13} style={{ color: '#B58800', flexShrink: 0, marginTop: 1 }} />
+                <span style={{ fontSize: '11.5px', color: '#92400E', lineHeight: 1.5 }}>
+                  Sets a new password directly. The user is not emailed — you must relay it to them. Their open sessions will be revoked.
+                </span>
+              </div>
+
+              <div>
+                <FieldLabel>New password</FieldLabel>
+                <PwdInput value={pwd} onChange={setPwd} show={show} setShow={setShow} placeholder="At least 8 characters" autoFocus />
+                {tooShort && <FieldHint tone="error">Password must be at least 8 characters.</FieldHint>}
+              </div>
+              <div>
+                <FieldLabel>Confirm password</FieldLabel>
+                <PwdInput value={confirm} onChange={setConfirm} show={show} setShow={setShow} placeholder="Re-enter the password" />
+                {mismatch && <FieldHint tone="error">Passwords don't match.</FieldHint>}
+              </div>
+
+              {error && (
+                <div className="flex items-start gap-2 px-3 py-2 rounded-lg"
+                  style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}>
+                  <AlertTriangle size={13} style={{ color: '#DC2626', flexShrink: 0, marginTop: 1 }} />
+                  <span style={{ fontSize: '12px', color: '#991B1B', lineHeight: 1.5 }}>{error}</span>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <button type="button" onClick={onClose}
+                  className="py-2 rounded-lg font-semibold"
+                  style={{ fontSize: '12.5px', background: '#F1F5F9', color: '#334155', border: '1px solid #E2E8F0' }}>
+                  Cancel
+                </button>
+                <button type="submit" disabled={!canSubmit}
+                  className="py-2 rounded-lg font-semibold text-white"
+                  style={{
+                    fontSize: '12.5px',
+                    background: !canSubmit ? '#93C5FD' : 'linear-gradient(135deg, #1D4ED8, #1E40AF)',
+                    cursor: !canSubmit ? 'not-allowed' : 'pointer',
+                  }}>
+                  {loading ? 'Setting…' : 'Set password'}
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FieldLabel({ children }: { children: React.ReactNode }) {
+  return <div style={{ fontSize: '11px', fontWeight: 600, color: '#334155', letterSpacing: '0.04em', marginBottom: 6 }}>{children}</div>;
+}
+
+function FieldHint({ children, tone }: { children: React.ReactNode; tone: 'error' }) {
+  return <div style={{ fontSize: '10.5px', color: tone === 'error' ? '#DC2626' : '#94A3B8', marginTop: 5 }}>{children}</div>;
+}
+
+function PwdInput({
+  value, onChange, show, setShow, placeholder, autoFocus,
+}: {
+  value: string; onChange: (v: string) => void; show: boolean; setShow: (v: boolean) => void; placeholder?: string; autoFocus?: boolean;
+}) {
+  return (
+    <div className="relative">
+      <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+      <input
+        type={show ? 'text' : 'password'}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        autoComplete="new-password"
+        autoFocus={autoFocus}
+        className="w-full pl-10 pr-10 py-2.5 rounded-xl outline-none transition-all text-slate-900"
+        style={{ fontSize: '13.5px', background: '#F8FAFC', border: '1.5px solid #E2E8F0' }}
+        onFocus={(e) => { e.target.style.borderColor = '#3B82F6'; e.target.style.background = '#fff'; }}
+        onBlur={(e)  => { e.target.style.borderColor = '#E2E8F0'; e.target.style.background = '#F8FAFC'; }}
+      />
+      <button type="button" onClick={() => setShow(!show)}
+        className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+        {show ? '🙈' : '👁'}
+      </button>
     </div>
   );
 }
