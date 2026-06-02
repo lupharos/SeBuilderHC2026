@@ -90,6 +90,55 @@ def get_install_dir() -> str:
 REQUIRED_FIELDS = ("hcEndpoint", "token", "encryptionKeyHex")
 
 
+# Characters that sneak into hand-edited / copy-pasted bundles and break
+# strict JSON parsing in the field. Email clients, Word, Teams and PDF
+# viewers silently rewrite straight quotes as "smart quotes" and normal
+# spaces as non-breaking spaces; Notepad / PowerShell `>` redirection add
+# a UTF-8 or UTF-16 BOM. None of these are valid JSON, so we normalise
+# them away before json.loads() instead of dying with a cryptic
+# "Expecting property name ... (char 2)" that the customer admin can't
+# act on. This is what makes the .exe parse the bundle identically on
+# every host regardless of how the file got there.
+_JSON_CHAR_FIXES = {
+    "“": '"', "”": '"',   # “ ”  curly double quotes
+    "‘": "'", "’": "'",   # ‘ ’  curly single quotes
+    "«": '"', "»": '"',   # « »  guillemets (some locales)
+    "–": "-", "—": "-",   # – —  en/em dash (rare, but harmless)
+    " ": " ",                  # non-breaking space
+    "﻿": "",                   # stray BOM / zero-width no-break space
+    "​": "", "‌": "", "‍": "",  # zero-width space/joiners
+}
+
+
+def _read_json_tolerant(path: str) -> dict:
+    """Read + parse a JSON bundle, tolerating the mangling that happens
+    when a file is copied through a rich-text channel or re-saved by a
+    Windows editor.
+
+    Decodes UTF-8 (with or without BOM) and UTF-16 LE/BE (what Windows
+    PowerShell 5.1 `>` / `Out-File` produce), then rewrites smart quotes,
+    non-breaking spaces and zero-width characters back to their plain
+    ASCII equivalents. Raises UnicodeDecodeError / json.JSONDecodeError /
+    OSError on genuine problems so callers keep their existing handling.
+    """
+    with open(path, "rb") as fh:
+        raw = fh.read()
+
+    # BOM-based encoding detection. utf-8-sig transparently strips a
+    # leading EF BB BF (and is a no-op for plain UTF-8); the UTF-16
+    # branch covers PowerShell redirection output on Win PS 5.1.
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        text = raw.decode("utf-16")
+    else:
+        text = raw.decode("utf-8-sig")
+
+    for bad, good in _JSON_CHAR_FIXES.items():
+        if bad in text:
+            text = text.replace(bad, good)
+
+    return json.loads(text)
+
+
 def load_config(install_dir: str) -> tuple[dict, str]:
     """Locate and parse connector.json next to the executable.
 
@@ -110,10 +159,19 @@ def load_config(install_dir: str) -> tuple[dict, str]:
         )
 
     try:
-        with open(config_path, "r", encoding="utf-8") as fh:
-            cfg = json.load(fh)
-    except (OSError, json.JSONDecodeError) as e:
-        die(f"connector.json could not be read: {e}", code=2)
+        cfg = _read_json_tolerant(config_path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+        die(
+            f"connector.json could not be read: {e}",
+            "",
+            "The file must be plain UTF-8 JSON using straight quotes (\").",
+            "If you copied it from an email, Teams or a PDF, the quotes were",
+            "probably turned into “smart quotes”, which are not valid JSON.",
+            "Re-download connector.json from the HC wizard's Step 3 Customer",
+            "Connector card and transfer it as a file (do not copy-paste the",
+            "text into Notepad).",
+            code=2,
+        )
 
     if cfg.get("_format") != "forcepoint-hc-customer-connector":
         die(
@@ -170,10 +228,17 @@ def load_secrets(install_dir: str) -> tuple[dict | None, str | None]:
         return None, None
 
     try:
-        with open(secrets_path, "r", encoding="utf-8") as fh:
-            sec = json.load(fh)
-    except (OSError, json.JSONDecodeError) as e:
-        die(f"connector-secrets.json could not be read: {e}", code=2)
+        sec = _read_json_tolerant(secrets_path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+        die(
+            f"connector-secrets.json could not be read: {e}",
+            "",
+            "The file must be plain UTF-8 JSON using straight quotes (\").",
+            "If you edited it in Notepad and it was saved as UTF-16, or you",
+            "pasted “smart quotes”, parsing fails. Save it as UTF-8 with a",
+            "plain-text editor (VS Code / Notepad++) and re-run.",
+            code=2,
+        )
 
     if sec.get("_format") != SECRETS_FORMAT:
         die(

@@ -1,6 +1,6 @@
 {
   "productName": "HC Studio",
-  "version": "2026.05.29.1",
-  "releasedAt": "2026-05-29T12:00:00Z",
-  "notes": "Release notes for HC Studio version 2026.05.29.1:\n\n- Added admin-initiated password reset in User Management (admin sets a new password; the user's open sessions are revoked).\n- Added self-service \"Change password\" in the account security panel.\n- Added 15-minute inactivity auto-logout with a sign-in notice.\n- Removed the build-version chip from the navigation rail.\n\nFor more details, please refer to the official documentation or contact support."
+  "version": "2026.06.02.1",
+  "releasedAt": "2026-06-02T12:00:00Z",
+  "notes": "Release notes for HC Studio version 2026.06.02.1:\n\n- Customer Connector now parses connector.json / connector-secrets.json reliably on every host: the .exe tolerates UTF-8 BOM and UTF-16 encodings and silently normalises “smart quotes”, non-breaking spaces and zero-width characters that get introduced when the bundle is copied through email, Teams or a PDF.\n- Replaced the cryptic \"Expecting property name ... (char 2)\" failure with a clear message telling the customer admin to re-download the bundle as a file instead of copy-pasting it.\n\nFor more details, please refer to the official documentation or contact support."
 }
