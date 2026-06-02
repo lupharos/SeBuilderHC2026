@@ -1,6 +1,6 @@
 {
   "productName": "HC Studio",
-  "version": "2026.06.02.1",
-  "releasedAt": "2026-06-02T12:00:00Z",
-  "notes": "Release notes for HC Studio version 2026.06.02.1:\n\n- Customer Connector now parses connector.json / connector-secrets.json reliably on every host: the .exe tolerates UTF-8 BOM and UTF-16 encodings and silently normalises “smart quotes”, non-breaking spaces and zero-width characters that get introduced when the bundle is copied through email, Teams or a PDF.\n- Replaced the cryptic \"Expecting property name ... (char 2)\" failure with a clear message telling the customer admin to re-download the bundle as a file instead of copy-pasting it.\n\nFor more details, please refer to the official documentation or contact support."
+  "version": "2026.06.02.2",
+  "releasedAt": "2026-06-02T15:00:00Z",
+  "notes": "Release notes for HC Studio version 2026.06.02.2:\n\n- Step 1 Customer Info: the \"Claude prompt — Salesforce Connector required\" template now emits the exact JSON structure and field naming the importer expects (customer_name, forcepoint_id_wbsn, salesforce_account_id, account_team, partner.reseller/distributor, plus snake_case licenses / hardware / cases). Previously the prompt produced stale camelCase fields that no longer mapped on import.\n- Prompt now instructs Claude to use only real Salesforce data and null for empty fields, and references the WBSN ID placeholder consistently across Step 1 and the Help guide.\n- Customer Connector now parses connector.json / connector-secrets.json reliably on every host: the .exe tolerates UTF-8 BOM and UTF-16 encodings and silently normalises “smart quotes”, non-breaking spaces and zero-width characters introduced when the bundle is copied through email, Teams or a PDF, with a clearer error when parsing still fails.\n\nFor more details, please refer to the official documentation or contact support."
 }

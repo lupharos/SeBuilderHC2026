@@ -427,51 +427,81 @@ export function Step1CustomerInfo({ sessionData, updateSessionData, versionData,
             Connector, gated on having the WBSN customer ID handy.
             Copy-to-clipboard button so they don't have to hand-select. */}
         {showSfPromptHelp && (() => {
-          const promptTemplate = `Using the Salesforce Connector, look up the customer account by WBSN ID = <PASTE_WBSN_ID_HERE> and produce a single JSON file matching the structure below. Save it as customerx_hc.json. Use the customer's real Salesforce data — do not invent values; leave fields blank when the source record is empty.
+          const promptTemplate = `Using the Salesforce Connector, look up the customer account by WBSN ID = XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX and produce a single JSON file saved as customerx_hc.json. Use only real Salesforce data — do not invent values; use null for empty fields.
+Follow this exact structure and field naming:
 
 {
   "customer": {
-    "customerName":   "<Account.Name>",
-    "forcepointId":   "<WBSN customer ID>",
-    "industry":       "<Account.Industry>",
-    "country":        "<Account.BillingCountry>",
-    "city":           "<Account.BillingCity>",
-    "theatre":        "<EMEA | NA | LATAM | APAC>",
-    "region":         "<sub-region>",
-    "supportLevel":   "<Essential | Enhanced | Enterprise>",
-    "recommendedSupportLevel": "<Forcepoint recommendation, optional>",
-    "csm":              "<CSM full name>",
-    "accountOwner":     "<Account Owner full name>",
-    "salesEngineer":    "<Assigned SE full name>",
-    "partner":          "<Channel partner, optional>",
-    "channelAccountManager": "<CAM full name, optional>",
-    "distributor":      "<Distributor, optional>"
+    "customer_name": "<Account.Name>",
+    "forcepoint_id_wbsn": "<WebsenseID__c>",
+    "salesforce_account_id": "<Account.Id>",
+    "country_region": "<Account.BillingCountry>",
+    "city": "<Account.BillingCity>",
+    "theatre": "<Account.Theatre__c>",
+    "region": "<Account.Region__c>",
+    "sub_region": "<Account.Sub_Region__c>",
+    "industry": "<Account.Industry>",
+    "arr": "<Account.ARR__c>",
+    "support_level": "<from entitlement or line items>",
+    "recommended_support_level": null,
+    "account_team": {
+      "account_owner_sales_manager": "<Account Owner — User.Name>",
+      "customer_success_manager": "<AccountTeamMember role=Customer_Success_Account_Manager>",
+      "primary_sales_engineer": "<AccountTeamMember role=Primary Sales Engineer>",
+      "channel_account_manager": "<AccountTeamMember role=Channel Account Manager>",
+      "sales_engineer": "<AccountTeamMember role=Sales Engineer>"
+    },
+    "partner": {
+      "reseller": "<Opportunity.Reseller_Account__c — Account.Name>",
+      "distributor": "<Opportunity.Distributor_Account__c — Account.Name>"
+    }
   },
-  "licenses": [
-    { "product": "...", "productCode": "...", "quantity": "...",
-      "status": "ACTIVE | EXPIRED | PENDING",
-      "expiry": "YYYY-MM-DD", "startDate": "YYYY-MM-DD",
-      "deploymentType": "On-Premise | Hybrid | Cloud | N/A",
-      "supportLevel":   "Essential | Enhanced | Enterprise" }
-  ],
   "entitlements": [
-    { "name": "...", "type": "...", "status": "ACTIVE | EXPIRED",
-      "startDate": "YYYY-MM-DD", "endDate": "YYYY-MM-DD" }
+    {
+      "name": "<Entitlement.Name>",
+      "type": "<Entitlement.Type>",
+      "status": "<Active | Expired>",
+      "start_date": "YYYY-MM-DD",
+      "end_date": "YYYY-MM-DD"
+    }
+  ],
+  "licenses": [
+    {
+      "product": "<OpportunityLineItem.Name — product only>",
+      "product_code": "<OpportunityLineItem.ProductCode>",
+      "quantity": 0,
+      "status": "<Active | Expired | Pending>",
+      "start_date": "YYYY-MM-DD",
+      "expiry_date": "YYYY-MM-DD",
+      "deployment_type": "<On-Premise | Hybrid | Cloud | N/A>",
+      "support_level": "<Essential | Enhanced | Enterprise>"
+    }
   ],
   "hardware": [
-    { "model": "...", "productCode": "...", "units": 0,
-      "warranty": "...", "warrantyStatus": "ACTIVE | EXPIRED",
-      "status": "ACTIVE | RMA | DECOMMISSIONED" }
+    {
+      "device_name": "<Asset.Name>",
+      "product_code": "<Asset.ProductCode>",
+      "quantity": 0,
+      "status": "<Active | Decommissioned>",
+      "serial_number": null,
+      "warranty_status": "<Active | Expired>",
+      "warranty_expiry": "YYYY-MM-DD",
+      "hardware_eol": null
+    }
   ],
   "active_cases_last5": [
-    { "caseNumber": "...", "severity": "1 | 2 | 3 | 4",
-      "subject": "...", "openedBy": "...",
-      "createdDate": "YYYY-MM-DD", "status": "NEW | IN_PROCESS | CLOSED" }
+    {
+      "case_number": "<Case.CaseNumber>",
+      "subject": "<Case.Subject>",
+      "status": "<Case.Status>",
+      "open_date": "YYYY-MM-DD",
+      "case_owner": "<Case owner name>",
+      "opened_by": "<Case.Customer_Contact_Name__c>",
+      "origin": "<Case.Origin>",
+      "severity": "<Case.Priority>"
+    }
   ],
-  "feature_requests": [
-    { "title": "...", "product": "...", "status": "...",
-      "disposition": "...", "createdDate": "YYYY-MM-DD" }
-  ]
+  "feature_requests": []
 }
 
 Return only the JSON file content — no commentary, no markdown fences.`;
@@ -524,7 +554,7 @@ Return only the JSON file content — no commentary, no markdown fences.`;
               <div className="px-3 py-2.5" style={{ background: '#F0F9FF', borderBottom: '1px solid rgba(1,118,211,0.18)' }}>
                 <div style={{ fontSize: '10.5px', color: '#0C4A6E', lineHeight: 1.55 }}>
                   <strong>Prereqs:</strong> Salesforce Connector is enabled on your Claude account, and you have the customer's <strong>WBSN ID</strong>.
-                  Paste the prompt below into Claude, replace <span style={{ fontFamily: 'monospace', background: '#fff', padding: '0 4px', borderRadius: 3 }}>&lt;PASTE_WBSN_ID_HERE&gt;</span> with the real ID,
+                  Paste the prompt below into Claude, replace the <span style={{ fontFamily: 'monospace', background: '#fff', padding: '0 4px', borderRadius: 3 }}>XXXX…</span> placeholder with the real WBSN ID,
                   send. Claude returns the JSON file content; save it as <span style={{ fontFamily: 'monospace', background: '#fff', padding: '0 4px', borderRadius: 3 }}>customerx_hc.json</span> and drop it into the dropzone below.
                 </div>
               </div>

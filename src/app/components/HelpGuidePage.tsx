@@ -399,7 +399,7 @@ export function HelpGuidePage() {
               <H2>Flow</H2>
               <ol style={listStyle}>
                 <li>Open Claude in another tab</li>
-                <li>Paste the prompt template (Copy button on the help panel) and replace <Code>&lt;PASTE_WBSN_ID_HERE&gt;</Code> with the real ID</li>
+                <li>Paste the prompt template (Copy button on the help panel) and replace the <Code>XXXX…</Code> placeholder with the real WBSN ID</li>
                 <li>Claude returns a JSON document</li>
                 <li>Save as <Code>customerx_hc.json</Code> (the filename is free; the wizard doesn't care)</li>
                 <li>Drop into the wizard's dropzone</li>
