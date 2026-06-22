@@ -37,9 +37,47 @@ connector.json**. Contains:
 - `encryptionKeyHex` — AES-256-GCM key (used by iteration 2 for job payloads)
 - `allowedSourceIp` — optional IP/CIDR the HC companion validates against
 - `heartbeatIntervalSeconds` — usually 30
+- `proxy` — **optional** outbound proxy block (see below). Most customer
+  networks require egress through a corporate proxy; this is where it's
+  configured.
 
 **No customer credentials in this file.** Safe for the SE to email,
 upload to a shared drive, or paste into a ticket.
+
+#### Outbound proxy (optional)
+
+If the FSM host can only reach the internet through a corporate proxy,
+add a `proxy` block to `connector.json`. The proxy applies **only** to
+the outbound HTTPS traffic that reaches the HC companion (heartbeat +
+job poll). Internal SQL and DLP REST API calls stay on the LAN and are
+**never** routed through the proxy.
+
+```jsonc
+{
+  "_format": "forcepoint-hc-customer-connector",
+  "hcEndpoint": "https://hc.forcepoint-se.com",
+  "token": "…",
+  "encryptionKeyHex": "…",
+  "proxy": {
+    "enabled": true,
+    "url": "http://proxy.corp.local:8080",  // scheme optional → defaults to http://
+    "username": "svc_hc",                    // optional — Basic proxy auth
+    "password": "••••••",                    // optional
+    "useSystemProxy": false                  // true → defer to OS HTTP_PROXY/HTTPS_PROXY env vars
+  }
+}
+```
+
+- Leave the block out (or `"enabled": false`) for a direct connection;
+  the connector still honours `HTTP_PROXY` / `HTTPS_PROXY` env vars if
+  they're set on the host (legacy behaviour).
+- `"useSystemProxy": true` makes the connector defer entirely to the OS
+  proxy environment variables instead of an explicit URL.
+- Passwords are URL-encoded automatically — special characters
+  (`@ : / #`) are safe to type as-is. The startup banner masks the
+  password and shows only the proxy host + username.
+- CLI overrides win over the config block: `--proxy <url>` forces a
+  proxy, `--no-proxy` forces a direct connection (and ignores env vars).
 
 ### `connector-secrets.json` — filled in by customer admin
 
@@ -112,7 +150,8 @@ Output: `dist\forcepoint-hc-connector.exe` (single file, ~15 MB).
 | `connector.json not found next to the executable` | The bundle file isn't in the same folder as the `.exe` | Move both files into the same folder |
 | `connector.json _format mismatch` | Wrong JSON file — not from the HC wizard | Re-download the bundle from the wizard |
 | `connector.json missing required field(s): token` | Bundle was edited or partial | Re-download a fresh bundle |
-| `FAIL cannot reach HC endpoint` | Outbound HTTPS blocked or wrong URL | Confirm the URL; ask network team to allowlist outbound to `<hcEndpoint>` |
+| `FAIL cannot reach HC endpoint` | Outbound HTTPS blocked or wrong URL | Confirm the URL; ask network team to allowlist outbound to `<hcEndpoint>`. If egress requires a proxy, add a `proxy` block to `connector.json` (see above) |
+| `FAIL HTTP 407` | Proxy requires authentication | Add `username` / `password` to the `proxy` block in `connector.json` |
 | `FAIL TLS error` | Self-signed cert on HC endpoint | Run with `--insecure` for dev only: `forcepoint-hc-connector.exe --insecure` |
 | `WARNING: allowedSourceIp doesn't match local IP` | The IP recorded in the HC wizard doesn't match this FSM's outbound IP | Update the IP in the HC wizard or use a CIDR (`10.10.0.0/16`) |
 
@@ -121,11 +160,19 @@ Output: `dist\forcepoint-hc-connector.exe` (single file, ~15 MB).
 ## CLI flags
 
 ```
-forcepoint-hc-connector.exe [--insecure] [--no-pause]
+forcepoint-hc-connector.exe [--insecure] [--no-pause] [--proxy <url>] [--no-proxy]
+                            [--skip-selftest] [--no-job-poller]
 ```
 
 - `--insecure` — skip TLS certificate validation (dev / self-signed servers only).
 - `--no-pause` — don't pause on exit. Useful when scripted from a batch file.
+- `--proxy <url>` — force outbound traffic through this proxy, overriding
+  `connector.json`. Accepts `http://user:pass@host:port` or a bare
+  `host:port` (defaults to `http://`).
+- `--no-proxy` — force a direct connection; ignores both the config
+  `proxy` block and any `HTTP_PROXY` / `HTTPS_PROXY` env vars.
+- `--skip-selftest` — skip the startup SQL / DLP credential probes.
+- `--no-job-poller` — disable the Via-Connector job poller (heartbeat only).
 
 ---
 

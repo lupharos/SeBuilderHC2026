@@ -428,6 +428,14 @@ export function Step1CustomerInfo({ sessionData, updateSessionData, versionData,
             Copy-to-clipboard button so they don't have to hand-select. */}
         {showSfPromptHelp && (() => {
           const promptTemplate = `Using the Salesforce Connector, look up the customer account by WBSN ID = XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX and produce a single JSON file saved as customerx_hc.json. Use only real Salesforce data — do not invent values; use null for empty fields.
+License sourcing logic — follow this order strictly:
+
+First, retrieve all active Entitlement records for the account (Status = Active). Note their StartDate and EndDate.
+Find the Opportunity whose Contract_Start_Date__c and Contract_End_Date__c overlap with the active Entitlement's date window — regardless of StageName or IsWon. Do NOT filter by IsWon = 1 only.
+
+Pull OpportunityLineItems from that matched Opportunity. These are the active licenses.
+If no Opportunity date match is found, fall back to the most recently closed won Opportunity.
+
 Follow this exact structure and field naming:
 
 {

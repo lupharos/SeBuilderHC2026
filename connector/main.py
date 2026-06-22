@@ -32,6 +32,7 @@ import sys
 import threading
 import time
 from datetime import datetime
+from urllib.parse import quote as _url_quote, urlsplit
 
 try:
     import requests
@@ -189,6 +190,8 @@ def load_config(install_dir: str) -> tuple[dict, str]:
     cfg.setdefault("heartbeatIntervalSeconds", 30)
     cfg.setdefault("allowedSourceIp", "")
     cfg.setdefault("encryptionAlgorithm", "AES-256-GCM")
+    # Outbound proxy is optional — absent / empty block means "direct".
+    cfg.setdefault("proxy", {})
 
     return cfg, config_path
 
@@ -611,6 +614,130 @@ def describe_secrets(secrets: dict | None) -> list[str]:
     else:
         lines.append("  DLP REST API:      — not configured —")
     return lines
+
+
+# ─────────────────────────────────────────────────────────────────────
+#   Outbound proxy resolution
+# ─────────────────────────────────────────────────────────────────────
+#
+# Customer networks almost never allow direct outbound HTTPS — the
+# connector has to egress through a corporate proxy, frequently one that
+# demands Basic authentication. The proxy applies ONLY to the outbound
+# traffic that reaches the HC companion (heartbeat + Via-Connector job
+# poll). Internal SQL (pyodbc TCP) and DLP REST API calls live on the
+# customer LAN and must NEVER be tunnelled through the proxy, so we attach
+# the proxy to the two HC-facing requests.Session objects only — the SQL
+# / DLP code paths are left untouched and stay direct.
+#
+# connector.json "proxy" block (every field optional):
+#   "proxy": {
+#     "enabled":        true,                       // master switch
+#     "url":            "http://proxy.corp:8080",   // scheme optional → http
+#     "username":       "svc_hc",                   // Basic proxy auth (opt)
+#     "password":       "••••••",                   //                  (opt)
+#     "useSystemProxy": false                       // defer to OS env vars
+#   }
+#
+# CLI overrides (highest precedence): --no-proxy, --proxy <url>.
+
+
+def _read_cli_value(flag: str) -> str | None:
+    """Return the value for a `--flag value` or `--flag=value` CLI arg,
+    or None when the flag isn't present / has no value."""
+    argv = sys.argv
+    for i, a in enumerate(argv):
+        if a == flag and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith(flag + "="):
+            return a.split("=", 1)[1]
+    return None
+
+
+def build_proxy_settings(cfg: dict) -> tuple[dict | None, bool, str]:
+    """Resolve the outbound proxy used to reach the HC companion.
+
+    Precedence (highest first):
+      1. CLI  --no-proxy        → force a direct connection, ignore env
+      2. CLI  --proxy <url>     → explicit proxy, overrides connector.json
+      3. connector.json "proxy" block (enabled + url)
+      4. connector.json proxy.useSystemProxy → defer to OS env vars
+      5. nothing                → legacy behaviour: direct, but still
+                                  inherit HTTP_PROXY / HTTPS_PROXY if set
+
+    Returns (proxies, trust_env, human_desc):
+      proxies    — dict for requests' Session.proxies, or None
+      trust_env  — whether requests may read *_PROXY / NO_PROXY env vars
+      human_desc — one-line banner summary (password is never shown)
+    """
+    # 1. Hard override — direct connection, ignore env + config entirely.
+    if "--no-proxy" in sys.argv:
+        return {"http": None, "https": None}, False, "disabled (--no-proxy)"
+
+    proxy_cfg = cfg.get("proxy") or {}
+
+    # 2/3. Explicit proxy URL — CLI wins over connector.json.
+    cli_url = _read_cli_value("--proxy")
+    url = (cli_url or proxy_cfg.get("url") or "").strip()
+    enabled = bool(cli_url) or bool(proxy_cfg.get("enabled"))
+
+    if enabled and url:
+        # Corporate proxies are almost always plain HTTP even for HTTPS
+        # targets — the CONNECT method tunnels TLS through them — so we
+        # default a scheme-less host to http://.
+        if "://" not in url:
+            url = "http://" + url
+        parts = urlsplit(url)
+        scheme = parts.scheme or "http"
+        host = parts.hostname or ""
+        netloc_host = f"{host}:{parts.port}" if parts.port else host
+        if not host:
+            # Malformed URL — fail open to direct rather than crashing the
+            # connector over a proxy typo; the banner makes it visible.
+            return None, True, f"IGNORED (could not parse proxy url {url!r}); going direct"
+
+        # Proxy auth — explicit fields win, else fall back to credentials
+        # embedded in the URL (user:pass@host).
+        username = (proxy_cfg.get("username") or parts.username or "").strip()
+        password = proxy_cfg.get("password")
+        if password is None:
+            password = parts.password or ""
+
+        if username:
+            cred = _url_quote(username, safe="") + ":" + _url_quote(password or "", safe="")
+            full = f"{scheme}://{cred}@{netloc_host}"
+            auth_note = f" (Basic auth as {username})"
+        else:
+            full = f"{scheme}://{netloc_host}"
+            auth_note = ""
+
+        proxies = {"http": full, "https": full}
+        src = "CLI --proxy" if cli_url else "connector.json"
+        desc = f"{scheme}://{netloc_host}{auth_note} [{src}]"
+        # Keep trust_env True so a NO_PROXY env list for internal hosts is
+        # still honoured alongside our explicit proxy.
+        return proxies, True, desc
+
+    # 4. useSystemProxy — defer entirely to the OS environment variables.
+    if proxy_cfg.get("useSystemProxy"):
+        return None, True, "system environment (HTTP_PROXY / HTTPS_PROXY)"
+
+    # 5. Default — unchanged legacy behaviour.
+    return None, True, "none (direct; inherits OS environment if set)"
+
+
+def apply_proxy_to_session(session: "requests.Session", cfg: dict) -> str:
+    """Attach the resolved proxy (if any) to an HC-facing session and
+    return the human-readable description for logging. Call this only on
+    sessions that talk to the HC companion — never on SQL / DLP paths."""
+    proxies, trust_env, desc = build_proxy_settings(cfg)
+    session.trust_env = trust_env
+    if proxies:
+        # Drop None values (the --no-proxy sentinel) — trust_env=False has
+        # already disabled env-based proxies in that case.
+        explicit = {k: v for k, v in proxies.items() if v}
+        if explicit:
+            session.proxies.update(explicit)
+    return desc
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -1122,9 +1249,11 @@ def job_poll_loop(cfg: dict, secrets: dict | None, insecure: bool, stop: threadi
     result_url = f"{endpoint}/api/connector/job/result"
 
     session = requests.Session()
+    # Same proxy as the heartbeat — the job poller is HC-facing too.
+    job_proxy_desc = apply_proxy_to_session(session, cfg)
     consecutive_fail = 0
 
-    print(f"[job-poll] active. Long-polling {next_url[:60]}…")
+    print(f"[job-poll] active. Long-polling {next_url[:60]}…  (proxy: {job_proxy_desc})")
 
     while not stop.is_set():
         try:
@@ -1239,6 +1368,10 @@ def heartbeat_loop(cfg: dict, hostname: str, local_ip: str, stop: threading.Even
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     session = requests.Session()
+    # Route the outbound heartbeat through the customer's proxy when one
+    # is configured. Internal SQL / DLP calls do NOT share this session,
+    # so they stay direct on the LAN.
+    proxy_desc = apply_proxy_to_session(session, cfg)
     # Embed hostname into the version string so the HC wizard's status
     # card can show "from host X" without us extending the server JSON
     # contract.
@@ -1250,6 +1383,7 @@ def heartbeat_loop(cfg: dict, hostname: str, local_ip: str, stop: threading.Even
 
     print(f"[start] Phoning home to {heartbeat_url}")
     print(f"        Heartbeat every {interval}s. Press Ctrl+C to stop.")
+    print(f"        Outbound proxy: {proxy_desc}")
     print()
 
     while not stop.is_set():
@@ -1373,6 +1507,7 @@ def main() -> int:
     print(f"  AES key (masked):   {mask(cfg['encryptionKeyHex'])}")
     print(f"  Encryption algo:    {cfg['encryptionAlgorithm']}")
     print(f"  Allowed source IP:  {cfg['allowedSourceIp'] or '-- any --'}")
+    print(f"  Outbound proxy:     {build_proxy_settings(cfg)[2]}")
     print(f"  Heartbeat interval: {cfg['heartbeatIntervalSeconds']}s")
     print(f"  Local host:         {hostname} ({local_ip})")
     if "--insecure" in sys.argv:
