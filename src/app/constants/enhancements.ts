@@ -35,6 +35,20 @@ export const ENHANCEMENTS: Enhancement[] = [
       'Full workforce coverage ensures consistent enforcement of security policies across every user, device, and location. It also optimizes the per-seat cost structure and strengthens the organization\'s overall compliance posture under applicable regional and international data protection regulations and industry frameworks.',
   },
   {
+    id: 'dlp',
+    name: 'Data Loss Prevention (DLP)',
+    shortName: 'DLP',
+    category: 'DLP / On-prem / Cloud',
+    emoji: '🛡️',
+    accent: '#0891B2',
+    tagline:
+      'Continuously monitor, control, and protect sensitive data in motion — across endpoints, networks, email, web, and cloud channels.',
+    whyWeRecommendIt:
+      'Sensitive data does not stay within authorised boundaries. It moves through email, web uploads, USB devices, cloud sync clients, collaboration platforms, and printing — often without the security team knowing what was sent, by whom, or whether it was intentional. Insider threats, accidental oversharing, misconfigured cloud integrations, and policy gaps are among the leading causes of data exfiltration events in both public sector and enterprise environments. Without continuous, policy-driven control over data in motion, data protection programmes can see where sensitive data lives but cannot stop it from leaving.',
+    businessValue:
+      'Forcepoint DLP continuously monitors and controls sensitive data as it moves — across endpoints, email, web, cloud storage, collaboration tools, and removable media — giving security teams real-time visibility into how critical data is being used, transferred, or exfiltrated, and the ability to enforce policy automatically before a breach occurs. This enables proactive prevention rather than reactive investigation after the fact. For organisations running Forcepoint DSPM, DLP directly extends the existing investment by consuming accurate, up-to-date data classification from DSPM and applying it as enforceable policy at every data movement channel — improving detection precision, reducing false positives, and closing the gap between data-at-rest visibility and data-in-motion enforcement. Together, DLP and DSPM provide a complete data security posture that covers sensitive data at every stage of its lifecycle, supporting compliance with internationally recognised frameworks such as GDPR, HIPAA, PCI-DSS, SOX, and ISO 27001 as well as applicable data sovereignty and protection requirements.',
+  },
+  {
     id: 'dspm',
     name: 'Data Security Posture Management (DSPM)',
     shortName: 'DSPM',
