@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { NavigationRail, type ActiveView } from './NavigationRail';
 import { Sidebar } from './Sidebar';
 import { MainContent } from './MainContent';
@@ -393,6 +393,12 @@ export function Dashboard() {
   const sessions: HCSession[] = deserializeSessions(rawSessions);
 
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>();
+  /* Mirror of activeSessionId readable synchronously inside handleSave —
+     lets autosave lock the session id the instant the first save fires so
+     rapid back-to-back step changes all target one session instead of
+     spawning duplicates during the async save window. */
+  const activeSessionIdRef = useRef<string | undefined>(activeSessionId);
+  useEffect(() => { activeSessionIdRef.current = activeSessionId; }, [activeSessionId]);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
 
   /* ── Right side-panel (profile) ── */
@@ -419,10 +425,16 @@ export function Dashboard() {
 
   const handleSave = (opts?: { complete?: boolean }) => {
     setSaveState('saving');
+    /* Resolve + lock the session id synchronously (before the async save
+       window) so concurrent autosaves reuse the same id rather than each
+       minting a fresh `session-<ts>`. */
+    const lockedId = activeSessionIdRef.current && sessions.find((s) => s.id === activeSessionIdRef.current)
+      ? activeSessionIdRef.current
+      : `session-${Date.now()}`;
+    activeSessionIdRef.current = lockedId;
+    setActiveSessionId(lockedId);
     setTimeout(() => {
-      const id = activeSessionId && sessions.find((s) => s.id === activeSessionId)
-        ? activeSessionId
-        : `session-${Date.now()}`;
+      const id = lockedId;
 
       /* Preserve an existing completedAt if the user is just re-saving a
          session that was already marked complete. Setting `complete: true`
@@ -488,6 +500,29 @@ export function Dashboard() {
       setTimeout(() => setSaveState('idle'), 2200);
     }, 650);
   };
+
+  /* ── Autosave on every step transition ──
+     Persist the whole wizard to the session store each time the operator
+     moves to a different step (Next / Back, sidebar jump, or an auto-skip),
+     so progress is never lost between tabs. A ref holds the freshest
+     handleSave so this effect fires only on a real step change, not on
+     every render. Skipped on the initial mount and while the session is
+     still empty (no customer, no products, not yet saved) to avoid
+     spawning blank "Unnamed Session" rows. */
+  const handleSaveRef = useRef(handleSave);
+  handleSaveRef.current = handleSave;
+  const lastSavedStepRef = useRef(currentStep);
+  useEffect(() => {
+    if (lastSavedStepRef.current === currentStep) return;
+    lastSavedStepRef.current = currentStep;
+    const hasContent =
+      !!activeSessionId ||
+      sessionData.customerName.trim() !== '' ||
+      Object.values(selectedProducts).some(Boolean);
+    if (!hasContent) return;
+    handleSaveRef.current();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentStep]);
 
   const handleComplete = () => {
     /* Save with the complete flag, then nudge the operator to the Sessions
