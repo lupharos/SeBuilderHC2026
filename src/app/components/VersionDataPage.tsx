@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Plus, Trash2, Pencil, Check, X, Download, Upload, AlertCircle, Save, FileJson, Layers, FileCode, ExternalLink } from 'lucide-react';
+import { Plus, Trash2, Pencil, Check, X, Download, Upload, AlertCircle, Save, FileJson, Layers, FileCode, ExternalLink, ChevronUp, ChevronDown } from 'lucide-react';
 import {
   ALL_CATEGORIES,
   SOFTWARE_CATEGORIES,
@@ -185,9 +185,32 @@ export function VersionDataPage({ data, onChange }: VersionDataPageProps) {
     const empty = isSoftware
       ? ({ Version: '', 'General Availability': null, 'End of Sale': null, 'End Of Maintenance': null, 'End Of Support': null } as SoftwareEntry)
       : ({ 'Model/Version': '', 'General Availability': null, 'End of Sale': null, 'Last Supported Release': null, 'End Of Maintenance': null, 'Last Date for Warranty Extension': null, 'End of Life': null, 'Migration Path': null } as HardwareEntry);
-    const updated = [...rows, empty] as never[];
+    // Prepend, not append: the HC app treats the FIRST row in the list as
+    // the latest version, so a freshly added product must land at the top.
+    // Operators can re-order afterwards with the up/down controls if the
+    // newest entry isn't actually the latest.
+    const updated = [empty, ...rows] as never[];
     onChange({ ...data, [activeCategory]: updated });
-    setTimeout(() => startEdit(rows.length), 0);
+    // Open the new top row for editing immediately. Set the buffer straight
+    // from `empty` rather than via startEdit(0): startEdit reads the stale
+    // pre-prepend `rows`, so its rows[0] would be the PREVIOUS top product
+    // and pre-fill the new row with the wrong values.
+    setEditingIndex(0);
+    setEditBuffer({ ...empty } as never);
+  }
+
+  /* Re-order a row by one position. The list order is meaningful — the HC
+     app picks index 0 as the latest version — so operators need to fix the
+     order when an import or manual add lands an entry in the wrong slot.
+     Cancels any in-progress edit to avoid the edit buffer pointing at a
+     now-moved index. */
+  function moveRow(index: number, dir: -1 | 1) {
+    const target = index + dir;
+    if (target < 0 || target >= rows.length) return;
+    const updated = [...rows];
+    [updated[index], updated[target]] = [updated[target], updated[index]];
+    onChange({ ...data, [activeCategory]: updated as never[] });
+    if (editingIndex != null) cancelEdit();
   }
 
   function handleCellChange(col: string, value: string) {
@@ -686,6 +709,28 @@ export function VersionDataPage({ data, onChange }: VersionDataPageProps) {
                            hid them entirely on touch devices and was easy to miss
                            on desktop too. */
                         <div className="flex items-center gap-1">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); moveRow(ri, -1); }}
+                            disabled={ri === 0}
+                            className="w-6 h-6 rounded-md flex items-center justify-center transition-all"
+                            style={{ background: '#F8FAFC', color: ri === 0 ? '#CBD5E1' : '#475569', border: '1px solid #E2E8F0', cursor: ri === 0 ? 'not-allowed' : 'pointer' }}
+                            onMouseEnter={(e) => { if (ri !== 0) e.currentTarget.style.background = '#EEF2F7'; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.background = '#F8FAFC'; }}
+                            title={ri === 0 ? 'Already the latest (top)' : `Move ${keyVal} up`}
+                          >
+                            <ChevronUp size={12} />
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); moveRow(ri, 1); }}
+                            disabled={ri === rows.length - 1}
+                            className="w-6 h-6 rounded-md flex items-center justify-center transition-all"
+                            style={{ background: '#F8FAFC', color: ri === rows.length - 1 ? '#CBD5E1' : '#475569', border: '1px solid #E2E8F0', cursor: ri === rows.length - 1 ? 'not-allowed' : 'pointer' }}
+                            onMouseEnter={(e) => { if (ri !== rows.length - 1) e.currentTarget.style.background = '#EEF2F7'; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.background = '#F8FAFC'; }}
+                            title={ri === rows.length - 1 ? 'Already the oldest (bottom)' : `Move ${keyVal} down`}
+                          >
+                            <ChevronDown size={12} />
+                          </button>
                           <button
                             onClick={(e) => { e.stopPropagation(); startEdit(ri); }}
                             className="w-6 h-6 rounded-md flex items-center justify-center transition-all"
