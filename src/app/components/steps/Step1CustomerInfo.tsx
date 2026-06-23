@@ -171,17 +171,44 @@ function MonthCell({ value, onChange, accent = '#D97706' }: { value: string; onC
   // Native <input type="month"> displays months in the OS locale (e.g. "Ocak 2025"
   // on a Turkish Windows install) and ignores the `lang` attribute on most browsers,
   // so we render two plain selects with hard-coded English month names instead.
-  const hasValue = /^\d{4}-\d{2}/.test(value);
-  const yearPart  = hasValue ? value.slice(0, 4) : '';
-  const monthPart = hasValue ? value.slice(5, 7) : '';
+  //
+  // Month + year are independent selects but the parent stores a single
+  // "YYYY-MM" string. We can't derive each select's value straight from
+  // that string: picking one half while the other is still empty would
+  // force the parent value to '' and instantly wipe the half just chosen,
+  // making it impossible to ever build up a date. So we hold the two
+  // halves in local state, push a value to the parent only once BOTH are
+  // set, and re-sync from the prop only when it genuinely diverges (e.g.
+  // an external import / reset).
+  const parse = (v: string) =>
+    /^\d{4}-\d{2}/.test(v) ? { y: v.slice(0, 4), m: v.slice(5, 7) } : { y: '', m: '' };
+
+  const [yearPart, setYearPart]   = useState(() => parse(value).y);
+  const [monthPart, setMonthPart] = useState(() => parse(value).m);
+
+  // Keep local halves in sync when the external value changes for a reason
+  // other than our own commits. `derived` is what we'd have produced from
+  // the current local state; only resync when the incoming prop differs
+  // from that — otherwise our own onChange('') for a partial selection
+  // would bounce back and clobber the half the user just picked.
+  const derived = yearPart && monthPart ? `${yearPart}-${monthPart}` : '';
+  useEffect(() => {
+    if (value !== derived) {
+      const p = parse(value);
+      setYearPart(p.y);
+      setMonthPart(p.m);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
 
   const currentYear = new Date().getFullYear();
   const years: number[] = [];
   for (let y = currentYear + 10; y >= currentYear - 15; y--) years.push(y);
 
   const commit = (y: string, m: string) => {
-    if (!y || !m) { onChange(''); return; }
-    onChange(`${y}-${m}`);
+    setYearPart(y);
+    setMonthPart(m);
+    onChange(y && m ? `${y}-${m}` : '');
   };
 
   const selectStyle: React.CSSProperties = {
