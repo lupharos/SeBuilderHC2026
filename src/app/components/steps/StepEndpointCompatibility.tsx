@@ -585,7 +585,7 @@ function FdcAgentSection({
                       Findings ({findings.length})
                     </div>
                     {findings.map((f, i) => {
-                      const c = SEVC[f.sev];
+                      const c = SEVC[f.sev] ?? SEVC.MEDIUM;
                       return (
                         <div key={i} className="flex items-start gap-2" style={{ background: c.bg, border: `1px solid ${c.border}`, borderLeft: `3px solid ${c.color}`, borderRadius: 6, padding: '8px 11px' }}>
                           <span style={{ fontSize: '8.5px', fontWeight: 800, color: c.color, background: '#fff', border: `1px solid ${c.border}`, padding: '1px 6px', borderRadius: 4, letterSpacing: '0.05em', flexShrink: 0, marginTop: 1 }}>{f.sev}</span>
@@ -823,7 +823,7 @@ function SolutionsStrip({ solutions }: { solutions: EndpointCoverage[] }) {
 }
 
 function StatusBanner({ assessment, editMode, onPatch }: { assessment: EndpointCompatibilityAssessment; editMode: boolean; onPatch: (p: Partial<EndpointCompatibilityAssessment>) => void }) {
-  const cfg = STATUS_CFG[assessment.compatibilityStatus];
+  const cfg = STATUS_CFG[assessment.compatibilityStatus] ?? STATUS_CFG.SUPPORTED;
   return (
     <div className="rounded-xl p-5 flex items-start gap-4"
       style={{ background: cfg.bg, border: `1px solid ${cfg.border}`, borderLeft: `4px solid ${cfg.color}` }}>
@@ -918,7 +918,7 @@ function FindingsList({ assessment, editMode, onPatch, onDelete, onAdd }: {
       )}
       <div className="flex flex-col gap-2.5">
         {assessment.findings.map((f) => {
-          const sc = SEV_CFG[f.severity];
+          const sc = SEV_CFG[f.severity] ?? SEV_CFG.MEDIUM;
           if (!editMode) {
             return (
               <div key={f.id}

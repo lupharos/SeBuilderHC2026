@@ -840,7 +840,7 @@ function NotesTab({
   return (
     <div className="flex flex-col gap-3">
       {notes.map((n) => {
-        const cfg = SEV_CFG[n.severity];
+        const cfg = SEV_CFG[n.severity] ?? SEV_CFG.medium;
         return (
           <div key={n.id}
             style={{ background: cfg.bg, border: `1px solid ${cfg.border}`, borderLeft: `3px solid ${cfg.color}`, borderRadius: '8px', padding: '12px 14px' }}>
@@ -1039,7 +1039,7 @@ function FdcNotesTab({ fdc, onChange }: { fdc: FdcMatrix; onChange: (m: FdcMatri
   return (
     <div className="flex flex-col gap-3">
       {notes.map((n) => {
-        const cfg = SEV_CFG[n.severity];
+        const cfg = SEV_CFG[n.severity] ?? SEV_CFG.medium;
         return (
           <div key={n.id} style={{ background: cfg.bg, border: `1px solid ${cfg.border}`, borderLeft: `3px solid ${cfg.color}`, borderRadius: '8px', padding: '12px 14px' }}>
             <div className="flex items-center gap-2 mb-2">
