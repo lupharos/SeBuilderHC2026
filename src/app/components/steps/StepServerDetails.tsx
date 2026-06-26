@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { Server, Database, Shield, HardDrive, Globe, Mail, Network, Plus, Trash2, ChevronDown, ChevronRight, Zap } from 'lucide-react';
+import { Server, Database, Shield, HardDrive, Globe, Mail, Network, Plus, Trash2, ChevronDown, ChevronRight, Zap, Cloud, Tag } from 'lucide-react';
 import type { DlpServerBundle } from './dlpServerInfoParser';
 
-export type ServerType = 'fsm' | 'sql' | 'protector' | 'supplemental' | 'content_gateway' | 'email_gateway' | 'ngfw';
+export type ServerType = 'fsm' | 'sql' | 'protector' | 'supplemental' | 'content_gateway' | 'email_gateway' | 'ngfw' | 'dspm' | 'classification';
 
 export interface DriveInfo {
   id: string;
@@ -35,6 +35,22 @@ const SERVER_CFG: Record<ServerType, { label: string; icon: React.ReactNode; col
   content_gateway: { label: 'Content Gateway',         icon: <Globe size={14} />,    color: '#0EA5E9', hint: 'Web proxy for URL filtering & SSL inspection' },
   email_gateway:   { label: 'Email Gateway',           icon: <Mail size={14} />,     color: '#059669', hint: 'Email security gateway' },
   ngfw:            { label: 'NGFW Management Server',  icon: <Network size={14} />,  color: '#6366F1', hint: 'NGFW / SMC management console' },
+  dspm:            { label: 'DSPM Server',             icon: <Cloud size={14} />,    color: '#0891B2', hint: 'Data Security Posture Management server' },
+  classification:  { label: 'Classification Server (FDC)', icon: <Tag size={14} />,  color: '#16A34A', hint: 'Forcepoint Data Classification (FDC) server' },
+};
+
+/* Which server types belong to each Step-2 product. The Server Infrastructure
+   step shows the default card for a server type only when at least one product
+   that uses it is selected; everything stays addable via "Add Additional
+   Server Instance". Shared infra (FSM + SQL) is listed under every product
+   that relies on it. */
+const PRODUCT_SERVERS: Record<string, ServerType[]> = {
+  web:   ['content_gateway', 'fsm', 'sql'],
+  email: ['email_gateway', 'fsm', 'sql'],
+  data:  ['fsm', 'sql', 'protector', 'supplemental'],
+  ngfw:  ['ngfw'],
+  dspm:  ['dspm', 'fsm', 'sql'],
+  cls:   ['classification', 'fsm', 'sql'],
 };
 
 export const DEFAULT_SERVERS: ServerEntry[] = (Object.keys(SERVER_CFG) as ServerType[]).map(type => ({
@@ -94,14 +110,47 @@ export function StepServerDetails({
   servers,
   setServers,
   dlpBundles = [],
+  selectedProducts = {},
 }: {
   servers: ServerEntry[];
   setServers: React.Dispatch<React.SetStateAction<ServerEntry[]>>;
   dlpBundles?: DlpServerBundle[];
+  selectedProducts?: Record<string, boolean>;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [addType, setAddType] = useState('');
   const [autoFillNotice, setAutoFillNotice] = useState<string | null>(null);
+
+  /* Backfill default cards for any server type missing from a session saved
+     before that type existed (e.g. the DSPM / Classification servers added
+     later). Runs once; appends N/A defaults so they can be toggled on. */
+  useEffect(() => {
+    const haveDefaults = new Set(servers.filter(s => s.id === `${s.type}-default`).map(s => s.type));
+    const missing = (Object.keys(SERVER_CFG) as ServerType[]).filter(t => !haveDefaults.has(t));
+    if (missing.length === 0) return;
+    setServers(prev => [
+      ...prev,
+      ...missing.map(t => ({
+        id: `${t}-default`, type: t, hostname: '', applicable: false,
+        drives: [], ramTotalGB: 0, ramUsedGB: 0, cpuCores: 0, cpuUsagePercent: 0, notes: '',
+      })),
+    ]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* Server types relevant to the selected products. When nothing is selected
+     yet, fall back to showing every default card so the page is never blank. */
+  const anyProduct = Object.values(selectedProducts).some(Boolean);
+  const inScopeTypes = new Set<ServerType>(
+    anyProduct
+      ? Object.entries(selectedProducts).flatMap(([pid, on]) => (on ? (PRODUCT_SERVERS[pid] ?? []) : []))
+      : (Object.keys(SERVER_CFG) as ServerType[]),
+  );
+
+  /* Default cards show only for in-scope types; user-added instances always show. */
+  const visibleServers = servers.filter(s =>
+    s.id === `${s.type}-default` ? inScopeTypes.has(s.type) : true,
+  );
 
   /* Auto-fill FSM Server card from latest DLPServerInfo bundle when the card is empty.
      Only touches empty fields — never overwrites manually-entered data. */
@@ -208,7 +257,7 @@ export function StepServerDetails({
     },
   });
 
-  const applicableCount = servers.filter(s => s.applicable).length;
+  const applicableCount = visibleServers.filter(s => s.applicable).length;
 
   return (
     <div className="space-y-[13px]">
@@ -265,7 +314,7 @@ export function StepServerDetails({
 
       {/* Server Cards */}
       <div className="space-y-2">
-        {servers.map(server => {
+        {visibleServers.map(server => {
           const cfg = SERVER_CFG[server.type];
           const isExp = expanded.has(server.id);
           const isDef = server.id === `${server.type}-default`;

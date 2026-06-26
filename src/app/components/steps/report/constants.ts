@@ -12,6 +12,7 @@ export const SRV_LABELS: Record<string, string> = {
   fsm: 'FSM Server', sql: 'SQL Server', protector: 'Protector',
   supplemental: 'Supplemental DLP', content_gateway: 'Content Gateway',
   email_gateway: 'Email Gateway', ngfw: 'NGFW Management',
+  dspm: 'DSPM Server', classification: 'Classification Server (FDC)',
 };
 
 /* Mirrors the wizard order in steps.ts. Final Export (the page that renders
