@@ -1,6 +1,6 @@
 {
   "productName": "HC Studio",
-  "version": "2026.06.27.2",
-  "releasedAt": "2026-06-27T11:30:00Z",
-  "notes": "Release notes for HC Studio version 2026.06.27.2:\n\n- Server Infrastructure (Step 5) is now product-scope aware. It shows the server cards relevant to the products picked in Step 2 — including new DSPM Server and Classification Server (FDC) cards when DSPM or Classification is selected. Shared infrastructure (FSM, SQL) appears for every product that uses it.\n- Any server type can still be added manually via 'Add Additional Server Instance'. Sessions saved before the DSPM/FDC server cards existed are backfilled automatically.\n\nFor more details, please refer to the official documentation or contact support."
+  "version": "2026.06.27.3",
+  "releasedAt": "2026-06-27T12:15:00Z",
+  "notes": "Release notes for HC Studio version 2026.06.27.3:\n\n- Server Infrastructure (Step 5) scope mapping refined: FSM Server and SQL Server are now only shown for Web / Email / DLP (they are no longer asked for DSPM, FDC or NGFW). DLP shows FSM, SQL, Protector, Supplemental and Content Gateway; Email shows FSM, SQL and Email Gateway; Web shows FSM, SQL and Content Gateway; DSPM shows the DSPM Server; Classification shows the Classification Server (FDC).\n- Any server type remains addable via 'Add Additional Server Instance'.\n\nFor more details, please refer to the official documentation or contact support."
 }

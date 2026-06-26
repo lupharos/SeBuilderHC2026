@@ -45,12 +45,14 @@ const SERVER_CFG: Record<ServerType, { label: string; icon: React.ReactNode; col
    Server Instance". Shared infra (FSM + SQL) is listed under every product
    that relies on it. */
 const PRODUCT_SERVERS: Record<string, ServerType[]> = {
-  web:   ['content_gateway', 'fsm', 'sql'],
-  email: ['email_gateway', 'fsm', 'sql'],
-  data:  ['fsm', 'sql', 'protector', 'supplemental'],
+  /* FSM + SQL are only meaningful for Web / Email / DLP — they are NOT asked
+     for DSPM, FDC or NGFW. */
+  web:   ['fsm', 'sql', 'content_gateway'],
+  email: ['fsm', 'sql', 'email_gateway'],
+  data:  ['fsm', 'sql', 'protector', 'supplemental', 'content_gateway'],
   ngfw:  ['ngfw'],
-  dspm:  ['dspm', 'fsm', 'sql'],
-  cls:   ['classification', 'fsm', 'sql'],
+  dspm:  ['dspm'],
+  cls:   ['classification'],
 };
 
 export const DEFAULT_SERVERS: ServerEntry[] = (Object.keys(SERVER_CFG) as ServerType[]).map(type => ({
