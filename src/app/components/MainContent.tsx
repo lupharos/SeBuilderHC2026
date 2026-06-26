@@ -270,6 +270,7 @@ export function MainContent({
               versionUpgrades={versionUpgrades}
               endpointMatrix={endpointMatrix}
               endpointCompatAssessment={endpointCompatAssessment}
+              endpointCompatInput={endpointCompatInput}
               reportRuns={reportRuns}
               onComplete={onComplete}
               isComplete={isComplete}

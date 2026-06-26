@@ -26,6 +26,7 @@ import {
   type BrowserCompatibilityRow,
   type CriticalNoteRow,
   runCompatibilityAssessment,
+  computeFdcAnalysis,
   EMPTY_COMPAT_INPUT,
 } from '../../utils/endpointCompatibilityEngine';
 import type { EndpointAgentSummary } from './endpointAgentParser';
@@ -492,24 +493,9 @@ function FdcAgentSection({
     });
   }
 
-  /* Build per-selected-OS analysis rows against the FDC matrix. */
-  const rows = selectedOS.map((os) => {
-    const match = fdcRows.find((r) => r.platform === os);
-    return { os, match };
-  });
-
-  /* Derive simple findings: uncertified OS, EoS OS, and Office flavours the
-     customer uses that the FDC agent doesn't support on a supported OS. */
-  const findings: { sev: 'CRITICAL' | 'HIGH' | 'MEDIUM'; text: string }[] = [];
-  for (const { os, match } of rows) {
-    if (!match) { findings.push({ sev: 'HIGH', text: `${os} is not in the FDC support matrix — not certified for the Classification agent.` }); continue; }
-    if (match.status === 'eos') findings.push({ sev: 'CRITICAL', text: `${os} is End-of-Support for the FDC agent — plan migration.` });
-    for (const app of selectedApps) {
-      if (!match.office?.[app]) {
-        findings.push({ sev: 'MEDIUM', text: `${FDC_OFFICE_LABELS[app]} is not supported by the FDC agent on ${os}.` });
-      }
-    }
-  }
+  /* Per-OS analysis + findings via the shared engine helper (same logic the
+     report uses, so Step 7 and the PDF always agree). */
+  const { rows, findings } = computeFdcAnalysis(matrix, selectedOS, selectedApps);
 
   const SEVC: Record<'CRITICAL' | 'HIGH' | 'MEDIUM', { color: string; bg: string; border: string }> = {
     CRITICAL: { color: '#A30080', bg: '#FDF2F8', border: '#FBCFE8' },

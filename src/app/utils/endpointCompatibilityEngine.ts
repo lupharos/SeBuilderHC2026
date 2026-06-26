@@ -4,7 +4,9 @@ import type {
   EndpointMatrixBrowserRow,
   EndpointCoverage,
   FdcOfficeApp,
+  FdcOSRow,
 } from '../constants/endpointSupportMatrix';
+import { FDC_OFFICE_LABELS } from '../constants/endpointSupportMatrix';
 
 /* ═══════════════════════════════════════════════════════════════════
    DOMAIN TYPES
@@ -66,6 +68,53 @@ export const EMPTY_COMPAT_INPUT: EndpointCompatibilityInput = {
   fdcOSEnvironment: [],
   fdcOfficeApps: [],
 };
+
+/* ═══════════════════════════════════════════════════════════════════
+   FDC (DATA CLASSIFICATION) AGENT ANALYSIS
+   Pure helper shared by Step 7 (wizard panel) and the report HTML so both
+   show identical results. Matches the customer's selected OS + Office
+   flavours against matrix.fdc and surfaces findings.
+═══════════════════════════════════════════════════════════════════ */
+export interface FdcAnalysisRow {
+  os: string;
+  match: FdcOSRow | undefined;
+}
+export interface FdcFinding {
+  sev: 'CRITICAL' | 'HIGH' | 'MEDIUM';
+  text: string;
+}
+export interface FdcAnalysis {
+  rows: FdcAnalysisRow[];
+  findings: FdcFinding[];
+}
+
+export function computeFdcAnalysis(
+  matrix: EndpointSupportMatrix,
+  osEnvironment: string[],
+  officeApps: FdcOfficeApp[],
+): FdcAnalysis {
+  const fdcRows = matrix.fdc?.os ?? [];
+  const rows: FdcAnalysisRow[] = osEnvironment.map((os) => ({
+    os,
+    match: fdcRows.find((r) => r.platform === os),
+  }));
+  const findings: FdcFinding[] = [];
+  for (const { os, match } of rows) {
+    if (!match) {
+      findings.push({ sev: 'HIGH', text: `${os} is not in the FDC support matrix — not certified for the Classification agent.` });
+      continue;
+    }
+    if (match.status === 'eos') {
+      findings.push({ sev: 'CRITICAL', text: `${os} is End-of-Support for the FDC agent — plan migration.` });
+    }
+    for (const app of officeApps) {
+      if (!match.office?.[app]) {
+        findings.push({ sev: 'MEDIUM', text: `${FDC_OFFICE_LABELS[app]} is not supported by the FDC agent on ${os}.` });
+      }
+    }
+  }
+  return { rows, findings };
+}
 
 export interface CompatibilityFinding {
   id: string;
