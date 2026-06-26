@@ -1,6 +1,6 @@
 {
   "productName": "HC Studio",
-  "version": "2026.06.27.6",
-  "releasedAt": "2026-06-27T15:40:00Z",
-  "notes": "Release notes for HC Studio version 2026.06.27.6:\n\n- Agent Compatibility (Step 7): the F1E side now has a clear section header — 'F1E Agent (DLP + Web) — Endpoint Compatibility' — matching the 'DSPM + FDC Agent — Endpoint Compatibility' header, so when both agents are in scope the two sections are easy to tell apart.\n\nFor more details, please refer to the official documentation or contact support."
+  "version": "2026.06.27.7",
+  "releasedAt": "2026-06-27T16:10:00Z",
+  "notes": "Release notes for HC Studio version 2026.06.27.7:\n\n- Agent Compatibility (Step 7): the F1E (DLP + Web) section is now wrapped in a titled card with a top header bar — the same layout as the DSPM + FDC card — instead of a floating header band, so both endpoint agents look like matching, clearly-separated sections.\n\nFor more details, please refer to the official documentation or contact support."
 }
