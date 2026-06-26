@@ -364,6 +364,10 @@ export function Dashboard() {
     vdi:           Array.isArray(rawEndpointMatrix?.vdi)           ? rawEndpointMatrix.vdi           : [],
     browsers:      Array.isArray(rawEndpointMatrix?.browsers)      ? rawEndpointMatrix.browsers      : [],
     criticalNotes: Array.isArray(rawEndpointMatrix?.criticalNotes) ? rawEndpointMatrix.criticalNotes : [],
+    /* Pass the DSPM + FDC agent matrix through untouched — the matrix page
+       and the engine normalise its shape via normalizeFdcMatrix. Without
+       this the field was stripped here and FDC edits never persisted. */
+    fdc:           rawEndpointMatrix?.fdc,
   };
 
   /* ── Version data catalog (persisted) ── */
