@@ -55,10 +55,11 @@ echo "🚀 FULL DEPLOY STARTING..."
 # --------------------------------------------------
 echo "📦 Installing system dependencies..."
 
-sudo apt update -y
+# apt update and git are handled by the operator before cloning the repo
+# (see HowToSetup.md step 1) — no need to repeat them here.
 
 if ! command -v nginx &> /dev/null; then
-  sudo apt install -y nginx git curl
+  sudo apt install -y nginx curl
 fi
 
 if ! command -v node &> /dev/null; then
@@ -76,8 +77,9 @@ if [ ! -d "$APP_DIR/.git" ]; then
   sudo rm -rf $APP_DIR
   sudo git clone $REPO_URL $APP_DIR
 else
-  cd $APP_DIR
-  git pull origin main
+  # HowToSetup.md clones with `sudo git clone`, so the repo is owned by root.
+  # Use sudo here too so ownership is consistent across redeploys.
+  sudo git -C $APP_DIR pull origin main
 fi
 
 cd $APP_DIR
@@ -113,9 +115,7 @@ if [ ! -d "$SERVER_DIR" ]; then
   exit 1
 fi
 
-cd $SERVER_DIR
-npm install --omit=dev
-cd $APP_DIR
+(cd $SERVER_DIR && npm install --omit=dev)
 
 # --------------------------------------------------
 # 5. Deploy frontend to nginx folder
@@ -236,8 +236,9 @@ sleep 2
 if curl -fsS --max-time 3 http://127.0.0.1:${COMPANION_PORT}/health > /dev/null; then
   echo "✅ Companion is up on 127.0.0.1:${COMPANION_PORT} (loopback-only)"
 else
-  echo "⚠️  Companion did not respond on /health within 3s."
+  echo "❌ Companion did not respond on /health within 3s — deploy aborted."
   echo "   Investigate with:  sudo journalctl -u ${COMPANION_SERVICE} -n 40 --no-pager"
+  exit 1
 fi
 
 # --------------------------------------------------
