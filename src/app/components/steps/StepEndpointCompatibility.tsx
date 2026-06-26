@@ -342,6 +342,14 @@ export function StepEndpointCompatibility({
       {/* F1E agent assessment — only when DLP or Web is in scope. */}
       {f1eInScope && (
       <>
+      {/* Section header — mirrors the DSPM + FDC band so both endpoint agents
+          read as clearly-labelled, parallel sections. */}
+      <div className="flex items-center gap-2.5 rounded-xl px-5 py-3.5" style={{ background: '#F0F9FF', border: '1.5px solid #BAE6FD' }}>
+        <span style={{ fontSize: '15px' }}>🌐</span>
+        <span style={{ fontSize: '13px', fontWeight: 700, color: '#0284C7' }}>F1E Agent (DLP + Web) — Endpoint Compatibility</span>
+        <span style={{ fontSize: '10.5px', color: '#0369A1', marginLeft: 'auto' }}>DLP / Web endpoint agent</span>
+      </div>
+
       {matrixEmpty && <MatrixMissingBanner />}
       {agentSource === null && <AgentMissingBanner />}
 
