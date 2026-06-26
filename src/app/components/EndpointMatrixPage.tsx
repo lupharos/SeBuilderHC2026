@@ -9,14 +9,10 @@ import {
   type EndpointMatrixBrowserRow,
   type EndpointMatrixCriticalNote,
   type EndpointCoverage,
-  type FdcOSRow,
   type FdcMatrix,
-  type FdcOfficeApp,
+  type FdcOfficeVersionRow,
   EMPTY_ENDPOINT_MATRIX,
-  EMPTY_FDC_MATRIX,
-  FDC_OFFICE_APPS,
-  FDC_OFFICE_LABELS,
-  FDC_OFFICE_DESCRIPTIONS,
+  normalizeFdcMatrix,
   COVERAGE_LABELS,
   COVERAGE_FULL_NAMES,
   COVERAGE_COLORS,
@@ -42,10 +38,20 @@ const TABS: { key: TabKey; label: string; }[] = [
 ];
 
 type AgentKey = 'f1e' | 'fdc';
+type FdcTabKey = 'windows' | 'macos' | 'vdi' | 'office' | 'notes';
+
+const FDC_TABS: { key: FdcTabKey; label: string }[] = [
+  { key: 'windows', label: 'Windows' },
+  { key: 'macos',   label: 'macOS' },
+  { key: 'vdi',     label: 'VDI' },
+  { key: 'office',  label: 'Office Versions' },
+  { key: 'notes',   label: 'Critical Notes' },
+];
 
 export function EndpointMatrixPage({ matrix, onChange }: Props) {
   const [agent, setAgent] = useState<AgentKey>('f1e');
   const [activeTab, setActiveTab] = useState<TabKey>('windows');
+  const [fdcTab, setFdcTab] = useState<FdcTabKey>('windows');
   const [confirmClear, setConfirmClear] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const jsonInputRef = useRef<HTMLInputElement>(null);
@@ -75,7 +81,7 @@ export function EndpointMatrixPage({ matrix, onChange }: Props) {
   /* The page-level empty CTA only shows when BOTH agents are empty — once
      either has data the agent switch + tables take over. */
   const empty = f1eEmpty && fdcEmpty;
-  const fdc: FdcMatrix = matrix.fdc ?? EMPTY_FDC_MATRIX;
+  const fdc: FdcMatrix = normalizeFdcMatrix(matrix.fdc);
 
   function triggerImport() {
     setImportError(null);
@@ -126,7 +132,12 @@ export function EndpointMatrixPage({ matrix, onChange }: Props) {
 
   function addRowForActiveTab() {
     if (agent === 'fdc') {
-      setFdc({ ...fdc, os: [...fdc.os, { id: newMatrixId('fdc'), platform: '', supportedFrom: '', status: 'current', office: {} }] });
+      const osRow = (pfx: string) => ({ id: newMatrixId(pfx), platform: '', supportedFrom: '', status: 'current' as const });
+      if (fdcTab === 'windows')     setFdc({ ...fdc, windows: [...fdc.windows, osRow('fwin')] });
+      else if (fdcTab === 'macos')  setFdc({ ...fdc, macos: [...fdc.macos, osRow('fmac')] });
+      else if (fdcTab === 'vdi')    setFdc({ ...fdc, vdi: [...fdc.vdi, osRow('fvdi')] });
+      else if (fdcTab === 'office') setFdc({ ...fdc, officeVersions: [...fdc.officeVersions, { id: newMatrixId('fofc'), product: '', versions: '', minAgent: '', status: 'current' }] });
+      else if (fdcTab === 'notes')  setFdc({ ...fdc, criticalNotes: [...fdc.criticalNotes, { id: newMatrixId('fcn'), severity: 'medium', title: '', body: '' }] });
       return;
     }
     if (activeTab === 'windows') {
@@ -218,14 +229,7 @@ export function EndpointMatrixPage({ matrix, onChange }: Props) {
         vdi:           Array.isArray(c.vdi)           ? (c.vdi as EndpointMatrixOSRow[])           : [],
         browsers:      Array.isArray(c.browsers)      ? (c.browsers as EndpointMatrixBrowserRow[]) : [],
         criticalNotes: Array.isArray(c.criticalNotes) ? (c.criticalNotes as EndpointMatrixCriticalNote[]) : [],
-        fdc: c.fdc && typeof c.fdc === 'object'
-          ? {
-              os: Array.isArray((c.fdc as FdcMatrix).os)
-                ? (c.fdc as FdcMatrix).os.map((r) => ({ ...r, id: r.id || newMatrixId('fdc') }))
-                : [],
-              notes: Array.isArray((c.fdc as FdcMatrix).notes) ? (c.fdc as FdcMatrix).notes : [],
-            }
-          : { os: [], notes: [] },
+        fdc: normalizeFdcMatrix(c.fdc),
       };
       /* Re-stamp ids on any rows missing them so downstream React keys stay
          stable after import. */
@@ -235,6 +239,13 @@ export function EndpointMatrixPage({ matrix, onChange }: Props) {
       normalized.vdi           = normalized.vdi.map(ensureId('vdi')) as EndpointMatrixOSRow[];
       normalized.browsers      = normalized.browsers.map(ensureId('br')) as EndpointMatrixBrowserRow[];
       normalized.criticalNotes = normalized.criticalNotes.map(ensureId('cn')) as EndpointMatrixCriticalNote[];
+      if (normalized.fdc) {
+        normalized.fdc.windows        = normalized.fdc.windows.map(ensureId('fwin')) as EndpointMatrixOSRow[];
+        normalized.fdc.macos          = normalized.fdc.macos.map(ensureId('fmac')) as EndpointMatrixOSRow[];
+        normalized.fdc.vdi            = normalized.fdc.vdi.map(ensureId('fvdi')) as EndpointMatrixOSRow[];
+        normalized.fdc.officeVersions = normalized.fdc.officeVersions.map(ensureId('fofc')) as FdcOfficeVersionRow[];
+        normalized.fdc.criticalNotes  = normalized.fdc.criticalNotes.map(ensureId('fcn')) as EndpointMatrixCriticalNote[];
+      }
 
       onChange(normalized);
       const total = normalized.windows.length + normalized.macos.length + normalized.vdi.length + normalized.browsers.length + normalized.criticalNotes.length;
@@ -259,7 +270,7 @@ export function EndpointMatrixPage({ matrix, onChange }: Props) {
               OS / Browser Support Matrix
             </div>
             <div style={{ fontSize: '11.5px', color: '#64748B', marginTop: '2px' }}>
-              F1E (DLP / Web) and FDC (Data Classification) agent compatibility catalogues used by the HC wizard &amp; report.
+              F1E (DLP / Web) and DSPM + FDC (Data Classification) agent compatibility catalogues used by the HC wizard &amp; report.
             </div>
           </div>
         </div>
@@ -281,7 +292,7 @@ export function EndpointMatrixPage({ matrix, onChange }: Props) {
           <button onClick={addRowForActiveTab}
             className="flex items-center gap-1.5 rounded-lg font-semibold transition-all"
             style={{ fontSize: '12px', padding: '7px 13px', background: '#0EA5E9', color: '#fff', border: '1px solid #0284C7', cursor: 'pointer' }}
-            title={agent === 'fdc' ? 'Add FDC OS row' : ADD_LABEL[activeTab]}
+            title={agent === 'fdc' ? `Add ${FDC_TABS.find((t) => t.key === fdcTab)?.label ?? 'FDC'} row` : ADD_LABEL[activeTab]}
           >
             <Plus size={13} /> Add Row
           </button>
@@ -379,21 +390,21 @@ export function EndpointMatrixPage({ matrix, onChange }: Props) {
           </div>
         )}
 
-        {empty && !importResult && <EmptyState onImport={triggerImport} />}
-
-        {!empty && !importResult && (
+        {!importResult && (
           <>
             {/* Agent selector — two distinct Forcepoint endpoint agents:
-                F1E (DLP / Web) and FDC (Data Classification). */}
+                F1E (DLP / Web) and DSPM + FDC (Data Classification).
+                Always shown so a fresh, empty catalogue can still reach the
+                FDC agent to add rows. */}
             <div className="flex items-center gap-2 mb-4">
               {([
-                { key: 'f1e' as AgentKey, label: 'F1E Agent',                sub: 'DLP / Web endpoint' },
-                { key: 'fdc' as AgentKey, label: 'FDC Classification Agent', sub: 'Data Classification endpoint' },
+                { key: 'f1e' as AgentKey, label: 'F1E Agent',        sub: 'DLP / Web endpoint' },
+                { key: 'fdc' as AgentKey, label: 'DSPM + FDC Agent', sub: 'Data Classification endpoint' },
               ]).map((a) => {
                 const active = agent === a.key;
                 const count = a.key === 'f1e'
                   ? matrix.windows.length + matrix.macos.length + matrix.vdi.length + matrix.browsers.length
-                  : fdc.os.length;
+                  : fdc.windows.length + fdc.macos.length + fdc.vdi.length + fdc.officeVersions.length;
                 return (
                   <button key={a.key} onClick={() => setAgent(a.key)}
                     style={{
@@ -418,9 +429,11 @@ export function EndpointMatrixPage({ matrix, onChange }: Props) {
               })}
             </div>
 
-            <div className="rounded-xl overflow-hidden" style={{ background: '#FFFFFF', border: '1px solid #EEF0F5' }}>
-              {agent === 'f1e' ? (
-                <>
+            {agent === 'f1e' ? (
+              f1eEmpty ? (
+                <EmptyState onImport={triggerImport} />
+              ) : (
+                <div className="rounded-xl overflow-hidden" style={{ background: '#FFFFFF', border: '1px solid #EEF0F5' }}>
                   <div className="flex items-center gap-1 px-2 pt-2 pb-0 border-b" style={{ borderColor: '#EEF0F5' }}>
                     {TABS.map((t) => {
                       const count = tabCount(matrix, t.key);
@@ -457,13 +470,42 @@ export function EndpointMatrixPage({ matrix, onChange }: Props) {
                     {activeTab === 'browsers' && <BrowsersTab rows={matrix.browsers} matrix={matrix} onChange={onChange} />}
                     {activeTab === 'notes'    && <NotesTab notes={matrix.criticalNotes} matrix={matrix} onChange={onChange} />}
                   </div>
-                </>
-              ) : (
-                <div className="p-5">
-                  <FdcTab fdc={fdc} onChange={setFdc} />
                 </div>
-              )}
-            </div>
+              )
+            ) : (
+              <div className="rounded-xl overflow-hidden" style={{ background: '#FFFFFF', border: '1px solid #EEF0F5' }}>
+                <div className="flex items-center gap-1 px-2 pt-2 pb-0 border-b" style={{ borderColor: '#EEF0F5' }}>
+                  {FDC_TABS.map((t) => {
+                    const count = fdcTabCount(fdc, t.key);
+                    const active = fdcTab === t.key;
+                    return (
+                      <button key={t.key} onClick={() => setFdcTab(t.key)}
+                        style={{
+                          fontSize: '12px', padding: '8px 14px', borderRadius: '8px 8px 0 0',
+                          background: active ? '#F0F9FF' : 'transparent',
+                          color: active ? '#0284C7' : '#64748B',
+                          borderBottom: active ? '2px solid #0EA5E9' : '2px solid transparent',
+                          fontWeight: 600, cursor: 'pointer', transition: 'all 0.15s',
+                        }}>
+                        {t.label}
+                        {count > 0 && (
+                          <span style={{ marginLeft: 6, fontFamily: 'monospace', fontSize: '10.5px', background: active ? '#0EA5E9' : '#E2E8F0', color: active ? '#fff' : '#475569', padding: '1px 6px', borderRadius: '8px' }}>
+                            {count}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="p-5">
+                  {fdcTab === 'windows' && <FdcOSTab kind="windows" fdc={fdc} onChange={setFdc} />}
+                  {fdcTab === 'macos'   && <FdcOSTab kind="macos"   fdc={fdc} onChange={setFdc} />}
+                  {fdcTab === 'vdi'     && <FdcOSTab kind="vdi"      fdc={fdc} onChange={setFdc} />}
+                  {fdcTab === 'office'  && <OfficeVersionsTab fdc={fdc} onChange={setFdc} />}
+                  {fdcTab === 'notes'   && <FdcNotesTab fdc={fdc} onChange={setFdc} />}
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -839,129 +881,191 @@ function NotesTab({
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   FDC (DATA CLASSIFICATION) TAB — OS support + per-OS Office-app flags
+   DSPM + FDC AGENT TABS — structured like F1E (OS tabs) plus an Office
+   Versions tab (the FDC analog of the F1E Browsers tab) and Critical Notes.
 ═══════════════════════════════════════════════════════════════════ */
-function FdcTab({ fdc, onChange }: { fdc: FdcMatrix; onChange: (m: FdcMatrix) => void }) {
-  function setRows(next: FdcOSRow[]) { onChange({ ...fdc, os: next }); }
-  function setNotes(next: string[]) { onChange({ ...fdc, notes: next }); }
-  function patch(id: string, p: Partial<FdcOSRow>) {
-    setRows(fdc.os.map((r) => (r.id === id ? { ...r, ...p } : r)));
+function fdcTabCount(f: FdcMatrix, key: FdcTabKey): number {
+  if (key === 'windows') return f.windows.length;
+  if (key === 'macos')   return f.macos.length;
+  if (key === 'vdi')     return f.vdi.length;
+  if (key === 'office')  return f.officeVersions.length;
+  return f.criticalNotes.length;
+}
+
+/* OS tab for the FDC agent — same row shape as F1E OS rows but no coverage
+   chips (those are an F1E DLP/Direct/Proxy concept). */
+function FdcOSTab({ kind, fdc, onChange }: { kind: 'windows' | 'macos' | 'vdi'; fdc: FdcMatrix; onChange: (m: FdcMatrix) => void }) {
+  const rows = kind === 'windows' ? fdc.windows : kind === 'macos' ? fdc.macos : fdc.vdi;
+  const notes = kind === 'windows' ? fdc.windowsNotes : kind === 'macos' ? fdc.macosNotes : [];
+  function setRows(next: EndpointMatrixOSRow[]) {
+    if (kind === 'windows') onChange({ ...fdc, windows: next });
+    else if (kind === 'macos') onChange({ ...fdc, macos: next });
+    else onChange({ ...fdc, vdi: next });
   }
-  function toggleOffice(id: string, app: FdcOfficeApp) {
-    setRows(fdc.os.map((r) => {
-      if (r.id !== id) return r;
-      const office = { ...(r.office ?? {}) };
-      office[app] = !office[app];
-      return { ...r, office };
-    }));
+  function setNotes(next: string[]) {
+    if (kind === 'windows') onChange({ ...fdc, windowsNotes: next });
+    else if (kind === 'macos') onChange({ ...fdc, macosNotes: next });
   }
-  function del(id: string) { setRows(fdc.os.filter((r) => r.id !== id)); }
+  function patch(id: string, p: Partial<EndpointMatrixOSRow>) { setRows(rows.map((r) => (r.id === id ? { ...r, ...p } : r))); }
+  function del(id: string) { setRows(rows.filter((r) => r.id !== id)); }
 
   return (
     <>
-      <div className="flex items-start gap-2.5 rounded-lg mb-4 px-4 py-2.5"
-        style={{ background: '#ECFDF5', border: '1px solid #A7F3D0' }}>
-        <Info size={14} style={{ color: '#059669', flexShrink: 0, marginTop: 2 }} />
-        <div style={{ fontSize: '11.5px', color: '#065F46', lineHeight: 1.55 }}>
-          The <strong>FDC (Data Classification) agent</strong> is a separate agent from F1E. What matters here is which
-          operating system is supported and which Microsoft Office flavour the classification add-in supports on it —
-          tick the Office columns the agent supports per OS.
-        </div>
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="w-full" style={{ borderCollapse: 'separate', borderSpacing: 0 }}>
-          <thead>
-            <tr style={{ background: '#F8FAFC' }}>
-              <Th>Operating System</Th>
-              <Th>Supported From</Th>
-              {FDC_OFFICE_APPS.map((app) => (
-                <th key={app} title={FDC_OFFICE_DESCRIPTIONS[app]}
-                  style={{ textAlign: 'center', padding: '8px 6px', fontSize: '9px', fontWeight: 700, color: '#94A3B8', letterSpacing: '0.04em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>
-                  {FDC_OFFICE_LABELS[app]}
-                </th>
-              ))}
-              <Th>Note</Th>
-              <Th>Status</Th>
-              <Th>{''}</Th>
+      <table className="w-full" style={{ borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'fixed' }}>
+        <colgroup>
+          <col style={{ width: '34%' }} />
+          <col style={{ width: '30%' }} />
+          <col style={{ width: '26%' }} />
+          <col style={{ width: '90px' }} />
+          <col style={{ width: '36px' }} />
+        </colgroup>
+        <thead>
+          <tr style={{ background: '#F8FAFC' }}>
+            <Th>Platform</Th>
+            <Th>Min Agent / Supported From</Th>
+            <Th>Note</Th>
+            <Th>Status</Th>
+            <Th>{''}</Th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, ri) => (
+            <tr key={r.id} style={{ borderTop: '1px solid #EEF0F5', background: ri % 2 === 0 ? '#FFFFFF' : '#FBFCFE' }}>
+              <Td valign="top"><CellInput value={r.platform} onChange={(v) => patch(r.id, { platform: v })} mono={false} /></Td>
+              <Td valign="top"><CellInput value={r.supportedFrom} onChange={(v) => patch(r.id, { supportedFrom: v })} mono /></Td>
+              <Td valign="top"><CellInput value={r.note ?? ''} onChange={(v) => patch(r.id, { note: v || undefined })} mono={false} placeholder="—" /></Td>
+              <Td valign="top">
+                <select value={r.status} onChange={(e) => patch(r.id, { status: e.target.value as 'current' | 'eos' })}
+                  style={{ width: '100%', fontSize: '11px', padding: '5px 6px', borderRadius: '5px', border: '1px solid #CBD5E1', background: r.status === 'eos' ? '#FEF2F2' : '#F0FDF4', color: r.status === 'eos' ? '#A30080' : '#16A34A', fontWeight: 700 }}>
+                  <option value="current">CURRENT</option>
+                  <option value="eos">EOS</option>
+                </select>
+              </Td>
+              <Td valign="top">
+                <button onClick={() => del(r.id)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#94A3B8', padding: '6px 2px' }} title="Remove"><Trash2 size={13} /></button>
+              </Td>
             </tr>
-          </thead>
-          <tbody>
-            {fdc.os.map((r, ri) => (
-              <tr key={r.id} style={{ borderTop: '1px solid #EEF0F5', background: ri % 2 === 0 ? '#FFFFFF' : '#FBFCFE' }}>
-                <Td valign="top"><CellInput value={r.platform} onChange={(v) => patch(r.id, { platform: v })} mono={false} placeholder="e.g. Windows 11 24H2" /></Td>
-                <Td valign="top"><CellInput value={r.supportedFrom} onChange={(v) => patch(r.id, { supportedFrom: v })} mono placeholder="agent / version" /></Td>
-                {FDC_OFFICE_APPS.map((app) => {
-                  const on = !!r.office?.[app];
-                  return (
-                    <td key={app} style={{ textAlign: 'center', padding: '7px 4px', verticalAlign: 'top' }}>
-                      <button onClick={() => toggleOffice(r.id, app)}
-                        title={`${FDC_OFFICE_LABELS[app]}: ${on ? 'supported' : 'not supported'}`}
-                        style={{
-                          width: 26, height: 26, borderRadius: 6, cursor: 'pointer',
-                          background: on ? '#16A34A' : '#F1F5F9',
-                          border: `1.5px solid ${on ? '#15803D' : '#E2E8F0'}`,
-                          color: on ? '#fff' : '#CBD5E1',
-                          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                          transition: 'all 0.12s',
-                        }}>
-                        {on ? <Check size={13} strokeWidth={3} /> : <X size={12} />}
-                      </button>
-                    </td>
-                  );
-                })}
-                <Td valign="top"><CellInput value={r.note ?? ''} onChange={(v) => patch(r.id, { note: v || undefined })} mono={false} placeholder="—" /></Td>
-                <Td valign="top">
-                  <select value={r.status} onChange={(e) => patch(r.id, { status: e.target.value as 'current' | 'eos' })}
-                    style={{ width: '100%', fontSize: '11px', padding: '5px 6px', borderRadius: '5px', border: '1px solid #CBD5E1', background: r.status === 'eos' ? '#FEF2F2' : '#F0FDF4', color: r.status === 'eos' ? '#A30080' : '#16A34A', fontWeight: 700, letterSpacing: '0.02em' }}>
-                    <option value="current">CURRENT</option>
-                    <option value="eos">EOS</option>
-                  </select>
-                </Td>
-                <Td valign="top">
-                  <button onClick={() => del(r.id)}
-                    style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#94A3B8', padding: '6px 2px' }}
-                    onMouseEnter={(e) => { e.currentTarget.style.color = '#A30080'; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.color = '#94A3B8'; }}
-                    title="Remove">
-                    <Trash2 size={13} />
-                  </button>
-                </Td>
-              </tr>
-            ))}
-            {fdc.os.length === 0 && (
-              <tr><Td colSpan={FDC_OFFICE_APPS.length + 5} center>
-                <div style={{ color: '#94A3B8', fontSize: '12px', padding: '24px 0' }}>No FDC OS rows. Add one from the toolbar.</div>
-              </Td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="mt-6">
-        <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '8px' }}>
-          FDC notes
-        </div>
-        <div className="flex flex-col gap-2">
-          {fdc.notes.map((n, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <input value={n}
-                onChange={(e) => { const c = [...fdc.notes]; c[i] = e.target.value; setNotes(c); }}
-                style={{ flex: 1, fontSize: '12px', padding: '6px 10px', borderRadius: '6px', border: '1px solid #E2E8F0', background: '#fff', color: '#1D252C' }} />
-              <button onClick={() => setNotes(fdc.notes.filter((_, j) => j !== i))}
-                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#94A3B8', padding: '4px' }}>
-                <Trash2 size={13} />
-              </button>
-            </div>
           ))}
-          <button onClick={() => setNotes([...fdc.notes, ''])}
-            className="flex items-center gap-1.5 rounded-lg self-start"
-            style={{ fontSize: '11.5px', padding: '5px 11px', background: 'transparent', color: '#64748B', border: '1px dashed #CBD5E1', cursor: 'pointer' }}>
-            <Plus size={11} /> Add note
-          </button>
+          {rows.length === 0 && (
+            <tr><Td colSpan={5} center><div style={{ color: '#94A3B8', fontSize: '12px', padding: '24px 0' }}>No rows. Add one from the toolbar.</div></Td></tr>
+          )}
+        </tbody>
+      </table>
+
+      {(kind === 'windows' || kind === 'macos') && (
+        <div className="mt-6">
+          <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '8px' }}>Platform notes</div>
+          <div className="flex flex-col gap-2">
+            {notes.map((n, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <input value={n} onChange={(e) => { const c = [...notes]; c[i] = e.target.value; setNotes(c); }}
+                  style={{ flex: 1, fontSize: '12px', padding: '6px 10px', borderRadius: '6px', border: '1px solid #E2E8F0', background: '#fff', color: '#1D252C' }} />
+                <button onClick={() => setNotes(notes.filter((_, j) => j !== i))} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#94A3B8', padding: '4px' }}><Trash2 size={13} /></button>
+              </div>
+            ))}
+            <button onClick={() => setNotes([...notes, ''])} className="flex items-center gap-1.5 rounded-lg self-start"
+              style={{ fontSize: '11.5px', padding: '5px 11px', background: 'transparent', color: '#64748B', border: '1px dashed #CBD5E1', cursor: 'pointer' }}>
+              <Plus size={11} /> Add note
+            </button>
+          </div>
         </div>
-      </div>
+      )}
     </>
+  );
+}
+
+/* Office Versions tab — the FDC analog of the F1E Browsers tab. Lists the
+   Microsoft Office flavours the classification add-in supports. */
+function OfficeVersionsTab({ fdc, onChange }: { fdc: FdcMatrix; onChange: (m: FdcMatrix) => void }) {
+  const rows = fdc.officeVersions;
+  function setRows(next: FdcOfficeVersionRow[]) { onChange({ ...fdc, officeVersions: next }); }
+  function patch(id: string, p: Partial<FdcOfficeVersionRow>) { setRows(rows.map((r) => (r.id === id ? { ...r, ...p } : r))); }
+  function del(id: string) { setRows(rows.filter((r) => r.id !== id)); }
+
+  return (
+    <table className="w-full" style={{ borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'fixed' }}>
+      <colgroup>
+        <col style={{ width: '26%' }} />
+        <col style={{ width: '20%' }} />
+        <col style={{ width: '22%' }} />
+        <col style={{ width: '22%' }} />
+        <col style={{ width: '90px' }} />
+        <col style={{ width: '36px' }} />
+      </colgroup>
+      <thead>
+        <tr style={{ background: '#F8FAFC' }}>
+          <Th>Office Product</Th>
+          <Th>Versions</Th>
+          <Th>Min Agent / Supported From</Th>
+          <Th>Note</Th>
+          <Th>Status</Th>
+          <Th>{''}</Th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r, ri) => (
+          <tr key={r.id} style={{ borderTop: '1px solid #EEF0F5', background: ri % 2 === 0 ? '#FFFFFF' : '#FBFCFE' }}>
+            <Td valign="top"><CellInput value={r.product} onChange={(v) => patch(r.id, { product: v })} mono={false} placeholder="e.g. Microsoft 365" /></Td>
+            <Td valign="top"><CellInput value={r.versions} onChange={(v) => patch(r.id, { versions: v })} mono placeholder="version range" /></Td>
+            <Td valign="top"><CellInput value={r.minAgent} onChange={(v) => patch(r.id, { minAgent: v })} mono placeholder="agent / version" /></Td>
+            <Td valign="top"><CellInput value={r.note ?? ''} onChange={(v) => patch(r.id, { note: v || undefined })} mono={false} placeholder="—" /></Td>
+            <Td valign="top">
+              <select value={r.status} onChange={(e) => patch(r.id, { status: e.target.value as 'current' | 'eos' })}
+                style={{ width: '100%', fontSize: '11px', padding: '5px 6px', borderRadius: '5px', border: '1px solid #CBD5E1', background: r.status === 'eos' ? '#FEF2F2' : '#F0FDF4', color: r.status === 'eos' ? '#A30080' : '#16A34A', fontWeight: 700 }}>
+                <option value="current">CURRENT</option>
+                <option value="eos">EOS</option>
+              </select>
+            </Td>
+            <Td valign="top">
+              <button onClick={() => del(r.id)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#94A3B8', padding: '6px 2px' }} title="Remove"><Trash2 size={13} /></button>
+            </Td>
+          </tr>
+        ))}
+        {rows.length === 0 && (
+          <tr><Td colSpan={6} center><div style={{ color: '#94A3B8', fontSize: '12px', padding: '24px 0' }}>No Office versions. Add one from the toolbar.</div></Td></tr>
+        )}
+      </tbody>
+    </table>
+  );
+}
+
+/* FDC critical notes — same editor as the F1E NotesTab, writing to fdc.criticalNotes. */
+function FdcNotesTab({ fdc, onChange }: { fdc: FdcMatrix; onChange: (m: FdcMatrix) => void }) {
+  const notes = fdc.criticalNotes;
+  function setNotes(next: EndpointMatrixCriticalNote[]) { onChange({ ...fdc, criticalNotes: next }); }
+  function patch(id: string, p: Partial<EndpointMatrixCriticalNote>) { setNotes(notes.map((n) => (n.id === id ? { ...n, ...p } : n))); }
+  function del(id: string) { setNotes(notes.filter((n) => n.id !== id)); }
+
+  return (
+    <div className="flex flex-col gap-3">
+      {notes.map((n) => {
+        const cfg = SEV_CFG[n.severity];
+        return (
+          <div key={n.id} style={{ background: cfg.bg, border: `1px solid ${cfg.border}`, borderLeft: `3px solid ${cfg.color}`, borderRadius: '8px', padding: '12px 14px' }}>
+            <div className="flex items-center gap-2 mb-2">
+              <select value={n.severity} onChange={(e) => patch(n.id, { severity: e.target.value as EndpointMatrixCriticalNote['severity'] })}
+                style={{ fontSize: '10.5px', padding: '3px 6px', borderRadius: '4px', border: `1px solid ${cfg.border}`, background: '#fff', color: cfg.color, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                <option value="critical">Critical</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+              </select>
+              <input value={n.title} onChange={(e) => patch(n.id, { title: e.target.value })} placeholder="Note title"
+                style={{ flex: 1, fontSize: '12.5px', fontWeight: 700, padding: '4px 8px', borderRadius: '5px', border: '1px solid transparent', background: 'transparent', color: '#1D252C' }}
+                onFocus={(e) => { e.currentTarget.style.borderColor = cfg.border; e.currentTarget.style.background = '#fff'; }}
+                onBlur={(e) => { e.currentTarget.style.borderColor = 'transparent'; e.currentTarget.style.background = 'transparent'; }} />
+              <button onClick={() => del(n.id)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#94A3B8', padding: '4px' }} title="Remove"><Trash2 size={13} /></button>
+            </div>
+            <textarea value={n.body} onChange={(e) => patch(n.id, { body: e.target.value })} placeholder="Note body" rows={2}
+              style={{ width: '100%', fontSize: '12px', padding: '6px 8px', borderRadius: '5px', border: '1px solid transparent', background: 'transparent', color: '#475569', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.55 }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = cfg.border; e.currentTarget.style.background = '#fff'; }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = 'transparent'; e.currentTarget.style.background = 'transparent'; }} />
+          </div>
+        );
+      })}
+      {notes.length === 0 && (
+        <div style={{ color: '#94A3B8', fontSize: '12px', padding: '24px 0', textAlign: 'center' }}>No critical notes. Use "Add Row" in the toolbar.</div>
+      )}
+    </div>
   );
 }
 

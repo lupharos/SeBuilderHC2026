@@ -22,7 +22,7 @@ import type { ComplianceFrameworkItem, EnhancementOverride } from '../Dashboard'
 import type { VersionUpgradeProposal } from './StepVersionUpgrades';
 import { mergeEnhancement } from './StepRecommendedEnhancements';
 import { suggestComplianceFrameworks } from '../../utils/complianceSuggest';
-import { type EndpointSupportMatrix, isMatrixEmpty, isFdcMatrixEmpty, FDC_OFFICE_LABELS } from '../../constants/endpointSupportMatrix';
+import { type EndpointSupportMatrix, isMatrixEmpty, isFdcMatrixEmpty } from '../../constants/endpointSupportMatrix';
 import type { EndpointCompatibilityAssessment, EndpointCompatibilityInput } from '../../utils/endpointCompatibilityEngine';
 import { computeFdcAnalysis } from '../../utils/endpointCompatibilityEngine';
 import { ENHANCEMENTS } from '../../constants/enhancements';
@@ -4913,49 +4913,44 @@ ${(p.selectedProducts.data || p.selectedProducts.web) && p.endpointCompatAssessm
      and the analyst picked at least one OS on Step 7. Mirrors the inline
      wizard analysis via the shared computeFdcAnalysis helper.
 ══════════════════════════════════════ -->
-${(p.selectedProducts.dspm || p.selectedProducts.cls) && !isFdcMatrixEmpty(p.endpointMatrix) && (p.endpointCompatInput.fdcOSEnvironment ?? []).length > 0 ? (() => {
+${(p.selectedProducts.dspm || p.selectedProducts.cls) && !isFdcMatrixEmpty(p.endpointMatrix) && ((p.endpointCompatInput.fdcOSEnvironment ?? []).length > 0 || (p.endpointCompatInput.fdcOfficeVersions ?? []).length > 0) ? (() => {
   const selOS = p.endpointCompatInput.fdcOSEnvironment ?? [];
-  const selApps = p.endpointCompatInput.fdcOfficeApps ?? [];
-  const { rows, findings } = computeFdcAnalysis(p.endpointMatrix, selOS, selApps);
+  const selOffice = p.endpointCompatInput.fdcOfficeVersions ?? [];
+  const { osRows, officeRows, findings } = computeFdcAnalysis(p.endpointMatrix, selOS, selOffice);
   const SEV_CFG: Record<string, { color: string; bg: string; border: string }> = {
     CRITICAL: { color: '#A30080', bg: '#FDF2F8', border: '#FBCFE8' },
     HIGH:     { color: '#DC2626', bg: '#FEF2F2', border: '#FECACA' },
     MEDIUM:   { color: '#B58800', bg: '#FFFBEB', border: '#FDE68A' },
   };
-  const cell = (ok: boolean) => `<td style="text-align:center;padding:6px 6px;font-size:11px;font-weight:700;color:${ok ? '#16A34A' : '#CBD5E1'};">${ok ? '✓' : '✗'}</td>`;
+  const badge = (match: { status: 'current' | 'eos' } | undefined, sub?: string) =>
+    !match
+      ? `<span style="font-size:8.5px;font-weight:700;color:#A30080;background:#FDF2F8;border:1px solid #FBCFE8;padding:2px 7px;border-radius:4px;letter-spacing:0.05em;">NOT CERTIFIED</span>`
+      : match.status === 'eos'
+        ? `<span style="font-size:8.5px;font-weight:700;color:#A30080;background:#FDF2F8;border:1px solid #FBCFE8;padding:2px 7px;border-radius:4px;letter-spacing:0.05em;">EOS</span>`
+        : `<span style="font-size:8.5px;font-weight:700;color:#16A34A;background:#F0FDF4;border:1px solid #BBF7D0;padding:2px 7px;border-radius:4px;letter-spacing:0.05em;">SUPPORTED${sub ? ' · ' + esc(sub) : ''}</span>`;
+  const supportTable = (title: string, rowsHtml: string) => `
+  <div style="background:#FFFFFF;border:1px solid var(--fp-rule);border-radius:8px;padding:12px 14px;margin-bottom:12px;page-break-inside:avoid;">
+    <div style="font-size:9.5px;font-weight:800;color:#0F2952;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">${esc(title)}</div>
+    <table style="width:100%;border-collapse:collapse;">${rowsHtml}</table>
+  </div>`;
+  const osHtml = osRows.length > 0 ? supportTable('OS Support', osRows.map(({ os, match }) => `<tr>
+    <td style="font-size:10.5px;font-weight:600;color:#1D252C;padding:6px 8px;border-bottom:1px solid #F1F4FA;">${esc(os)}</td>
+    <td style="padding:6px 8px;border-bottom:1px solid #F1F4FA;text-align:right;">${badge(match, match?.supportedFrom)}</td>
+  </tr>`).join('')) : '';
+  const officeHtml = officeRows.length > 0 ? supportTable('Office Versions Support', officeRows.map(({ product, match }) => `<tr>
+    <td style="font-size:10.5px;font-weight:600;color:#1D252C;padding:6px 8px;border-bottom:1px solid #F1F4FA;">${esc(product)}${match && match.versions ? ` <span style="color:#94A3B8;font-weight:400;font-family:monospace;">${esc(match.versions)}</span>` : ''}</td>
+    <td style="padding:6px 8px;border-bottom:1px solid #F1F4FA;text-align:right;">${badge(match, match?.minAgent)}</td>
+  </tr>`).join('')) : '';
   return `
 <div class="section">
-  <div class="section-eyebrow">Section 7.6 · Part II · FDC Agent Compatibility</div>
-  <div class="section-title">FDC Classification Agent — Endpoint Compatibility</div>
+  <div class="section-eyebrow">Section 7.6 · Part II · DSPM + FDC Agent Compatibility</div>
+  <div class="section-title">DSPM + FDC Agent — Endpoint Compatibility</div>
   <p class="section-lead">
-    Customer fleet measured against the Forcepoint Data Classification (FDC) agent support matrix. The FDC agent is separate from F1E; what matters is which operating system is certified and which Microsoft Office flavour the classification add-in supports on it.
+    Customer fleet measured against the Forcepoint Data Classification (DSPM + FDC) agent support matrix. This agent is separate from F1E; what matters is which operating system is certified and which Microsoft Office version the classification add-in supports.
   </p>
 
-  <div style="background:#FFFFFF;border:1px solid var(--fp-rule);border-radius:8px;padding:12px 14px;margin-bottom:14px;page-break-inside:avoid;">
-    <table style="width:100%;border-collapse:collapse;">
-      <thead>
-        <tr>
-          <th style="text-align:left;font-size:9px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:0.06em;padding:6px 8px;border-bottom:1px solid var(--fp-rule);">Operating System</th>
-          <th style="text-align:left;font-size:9px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:0.06em;padding:6px 8px;border-bottom:1px solid var(--fp-rule);">FDC Support</th>
-          ${selApps.map((a) => `<th style="text-align:center;font-size:9px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:0.03em;padding:6px 6px;border-bottom:1px solid var(--fp-rule);white-space:nowrap;">${esc(FDC_OFFICE_LABELS[a])}</th>`).join('')}
-        </tr>
-      </thead>
-      <tbody>
-        ${rows.map(({ os, match }) => {
-          const badge = !match
-            ? `<span style="font-size:8.5px;font-weight:700;color:#A30080;background:#FDF2F8;border:1px solid #FBCFE8;padding:2px 7px;border-radius:4px;letter-spacing:0.05em;">NOT CERTIFIED</span>`
-            : match.status === 'eos'
-              ? `<span style="font-size:8.5px;font-weight:700;color:#A30080;background:#FDF2F8;border:1px solid #FBCFE8;padding:2px 7px;border-radius:4px;letter-spacing:0.05em;">EOS</span>`
-              : `<span style="font-size:8.5px;font-weight:700;color:#16A34A;background:#F0FDF4;border:1px solid #BBF7D0;padding:2px 7px;border-radius:4px;letter-spacing:0.05em;">SUPPORTED${match.supportedFrom ? ' · ' + esc(match.supportedFrom) : ''}</span>`;
-          return `<tr>
-            <td style="font-size:10.5px;font-weight:600;color:#1D252C;padding:6px 8px;border-bottom:1px solid #F1F4FA;">${esc(os)}</td>
-            <td style="padding:6px 8px;border-bottom:1px solid #F1F4FA;">${badge}</td>
-            ${selApps.map((a) => `<td style="border-bottom:1px solid #F1F4FA;">${cell(!!match && !!match.office && !!match.office[a])}</td>`).join('')}
-          </tr>`;
-        }).join('')}
-      </tbody>
-    </table>
-  </div>
+  ${osHtml}
+  ${officeHtml}
 
   ${findings.length > 0 ? `
   <div style="display:flex;flex-direction:column;gap:8px;page-break-inside:avoid;">
@@ -4968,7 +4963,7 @@ ${(p.selectedProducts.dspm || p.selectedProducts.cls) && !isFdcMatrixEmpty(p.end
       </div>`;
     }).join('')}
   </div>` : `
-  <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:6px;padding:9px 12px;font-size:10.5px;color:#15803D;font-weight:600;">✓ All selected OS and Office combinations are supported by the FDC agent.</div>`}
+  <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:6px;padding:9px 12px;font-size:10.5px;color:#15803D;font-weight:600;">✓ All selected OS and Office products are supported by the DSPM + FDC agent.</div>`}
 </div>`;
 })() : ''}
 

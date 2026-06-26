@@ -60,48 +60,61 @@ export interface EndpointMatrixCriticalNote {
 }
 
 /* ─────────────────────────────────────────────────────────────────────
-   FDC (Forcepoint Data Classification) endpoint agent — a SEPARATE agent
-   from F1E. For FDC the things that matter are which OS is supported and
-   which Microsoft Office flavour is supported, so each OS row carries a
-   fixed set of Office-app support flags.
+   DSPM + FDC (Forcepoint Data Classification) endpoint agent — a SEPARATE
+   agent from F1E, but structured like it: OS tabs (Windows / macOS / VDI)
+   plus an "Office Versions" tab that plays the role the Browsers tab plays
+   for F1E (the client app the agent integrates with), plus Critical Notes.
    ───────────────────────────────────────────────────────────────────── */
-export const FDC_OFFICE_APPS = ['m365', 'office2024', 'office2021', 'office2019', 'office2016'] as const;
-export type FdcOfficeApp = (typeof FDC_OFFICE_APPS)[number];
-
-export const FDC_OFFICE_LABELS: Record<FdcOfficeApp, string> = {
-  m365:       'Microsoft 365',
-  office2024: 'Office 2024',
-  office2021: 'Office 2021',
-  office2019: 'Office 2019',
-  office2016: 'Office 2016',
-};
-
-/* One-line description used as a tooltip / help text on the column. */
-export const FDC_OFFICE_DESCRIPTIONS: Record<FdcOfficeApp, string> = {
-  m365:       'Cloud subscription (monthly/yearly) — Word, Excel, PowerPoint, Outlook; always updated; multi-device.',
-  office2024: 'Perpetual one-time-purchase licence; no feature updates.',
-  office2021: 'Perpetual legacy version.',
-  office2019: 'Perpetual legacy version.',
-  office2016: 'Perpetual legacy version.',
-};
-
-export interface FdcOSRow {
+export interface FdcOfficeVersionRow {
   id: string;
-  platform: string;
-  supportedFrom: string;
+  /* Office flavour, e.g. "Microsoft 365", "Office 2024", "Office 2021". */
+  product: string;
+  /* Supported version range / build string. */
+  versions: string;
+  /* Minimum FDC agent / supported-from string. */
+  minAgent: string;
   status: 'current' | 'eos';
   note?: string;
-  /* Which Office flavours the FDC agent supports on this OS. Missing key =
-     not supported / unknown. Pre-existing rows hydrate with undefined. */
-  office?: Partial<Record<FdcOfficeApp, boolean>>;
 }
 
 export interface FdcMatrix {
-  os: FdcOSRow[];
-  notes: string[];
+  windows: EndpointMatrixOSRow[];
+  windowsNotes: string[];
+  macos: EndpointMatrixOSRow[];
+  macosNotes: string[];
+  vdi: EndpointMatrixOSRow[];
+  officeVersions: FdcOfficeVersionRow[];
+  criticalNotes: EndpointMatrixCriticalNote[];
 }
 
-export const EMPTY_FDC_MATRIX: FdcMatrix = { os: [], notes: [] };
+export const EMPTY_FDC_MATRIX: FdcMatrix = {
+  windows: [],
+  windowsNotes: [],
+  macos: [],
+  macosNotes: [],
+  vdi: [],
+  officeVersions: [],
+  criticalNotes: [],
+};
+
+/* Normalise a raw (possibly partial / legacy) fdc payload into a full
+   FdcMatrix. Older builds stored `fdc.os` (single OS list with per-OS Office
+   flags) — those rows are migrated into `windows` so no data is lost; the
+   dropped Office flags are superseded by the Office Versions tab. */
+export function normalizeFdcMatrix(raw: unknown): FdcMatrix {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const arr = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
+  const legacyOS = arr<EndpointMatrixOSRow>((r as { os?: unknown }).os);
+  return {
+    windows: arr<EndpointMatrixOSRow>(r.windows).concat(r.windows ? [] : legacyOS),
+    windowsNotes: arr<string>(r.windowsNotes),
+    macos: arr<EndpointMatrixOSRow>(r.macos),
+    macosNotes: arr<string>(r.macosNotes),
+    vdi: arr<EndpointMatrixOSRow>(r.vdi),
+    officeVersions: arr<FdcOfficeVersionRow>(r.officeVersions),
+    criticalNotes: arr<EndpointMatrixCriticalNote>(r.criticalNotes),
+  };
+}
 
 export interface EndpointSupportMatrix {
   lastUpdated: string;
@@ -147,8 +160,15 @@ export function isMatrixEmpty(m: EndpointSupportMatrix | null | undefined): bool
 }
 
 export function isFdcMatrixEmpty(m: EndpointSupportMatrix | null | undefined): boolean {
-  const os = m?.fdc?.os;
-  return !Array.isArray(os) || os.length === 0;
+  const f = m?.fdc as Partial<FdcMatrix> & { os?: unknown[] } | undefined;
+  if (!f) return true;
+  const len = (arr: unknown): number => (Array.isArray(arr) ? arr.length : 0);
+  return len(f.windows) === 0
+    && len(f.macos) === 0
+    && len(f.vdi) === 0
+    && len(f.officeVersions) === 0
+    && len(f.criticalNotes) === 0
+    && len(f.os) === 0; /* legacy */
 }
 
 export function newMatrixId(prefix: string): string {

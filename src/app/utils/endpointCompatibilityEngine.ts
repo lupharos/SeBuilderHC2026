@@ -3,10 +3,9 @@ import type {
   EndpointMatrixOSRow,
   EndpointMatrixBrowserRow,
   EndpointCoverage,
-  FdcOfficeApp,
-  FdcOSRow,
+  FdcOfficeVersionRow,
 } from '../constants/endpointSupportMatrix';
-import { FDC_OFFICE_LABELS } from '../constants/endpointSupportMatrix';
+import { normalizeFdcMatrix } from '../constants/endpointSupportMatrix';
 
 /* ═══════════════════════════════════════════════════════════════════
    DOMAIN TYPES
@@ -51,10 +50,12 @@ export interface EndpointCompatibilityInput {
   /* ── FDC (Data Classification) agent — separate from F1E. Only used when
        DSPM / Classification is in scope. Selections are matched against
        matrix.fdc on Step 7. Optional so existing sessions hydrate cleanly. ── */
-  /** Customer OS versions the FDC agent runs on (matches matrix.fdc.os platforms). */
+  /** Customer OS versions the FDC agent runs on (matches FDC matrix Windows/macOS/VDI platforms). */
   fdcOSEnvironment?: string[];
-  /** Microsoft Office flavours the customer uses, checked against per-OS FDC support. */
-  fdcOfficeApps?: FdcOfficeApp[];
+  /** Microsoft Office products the customer uses (matches FDC matrix Office Versions products). */
+  fdcOfficeVersions?: string[];
+  /** @deprecated old per-OS Office flag model — kept so old sessions hydrate. */
+  fdcOfficeApps?: string[];
 }
 
 export const EMPTY_COMPAT_INPUT: EndpointCompatibilityInput = {
@@ -66,7 +67,7 @@ export const EMPTY_COMPAT_INPUT: EndpointCompatibilityInput = {
   browsers: [],
   vdiPlatforms: [],
   fdcOSEnvironment: [],
-  fdcOfficeApps: [],
+  fdcOfficeVersions: [],
 };
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -75,45 +76,50 @@ export const EMPTY_COMPAT_INPUT: EndpointCompatibilityInput = {
    show identical results. Matches the customer's selected OS + Office
    flavours against matrix.fdc and surfaces findings.
 ═══════════════════════════════════════════════════════════════════ */
-export interface FdcAnalysisRow {
+export interface FdcOSAnalysisRow {
   os: string;
-  match: FdcOSRow | undefined;
+  match: EndpointMatrixOSRow | undefined;
+}
+export interface FdcOfficeAnalysisRow {
+  product: string;
+  match: FdcOfficeVersionRow | undefined;
 }
 export interface FdcFinding {
   sev: 'CRITICAL' | 'HIGH' | 'MEDIUM';
   text: string;
 }
 export interface FdcAnalysis {
-  rows: FdcAnalysisRow[];
+  osRows: FdcOSAnalysisRow[];
+  officeRows: FdcOfficeAnalysisRow[];
   findings: FdcFinding[];
 }
 
 export function computeFdcAnalysis(
   matrix: EndpointSupportMatrix,
   osEnvironment: string[],
-  officeApps: FdcOfficeApp[],
+  officeProducts: string[],
 ): FdcAnalysis {
-  const fdcRows = matrix.fdc?.os ?? [];
-  const rows: FdcAnalysisRow[] = osEnvironment.map((os) => ({
+  const fdc = normalizeFdcMatrix(matrix.fdc);
+  const allOS = [...fdc.windows, ...fdc.macos, ...fdc.vdi];
+  const osRows: FdcOSAnalysisRow[] = osEnvironment.map((os) => ({
     os,
-    match: fdcRows.find((r) => r.platform === os),
+    match: allOS.find((r) => r.platform === os),
   }));
+  const officeRows: FdcOfficeAnalysisRow[] = officeProducts.map((product) => ({
+    product,
+    match: fdc.officeVersions.find((r) => r.product === product),
+  }));
+
   const findings: FdcFinding[] = [];
-  for (const { os, match } of rows) {
-    if (!match) {
-      findings.push({ sev: 'HIGH', text: `${os} is not in the FDC support matrix — not certified for the Classification agent.` });
-      continue;
-    }
-    if (match.status === 'eos') {
-      findings.push({ sev: 'CRITICAL', text: `${os} is End-of-Support for the FDC agent — plan migration.` });
-    }
-    for (const app of officeApps) {
-      if (!match.office?.[app]) {
-        findings.push({ sev: 'MEDIUM', text: `${FDC_OFFICE_LABELS[app]} is not supported by the FDC agent on ${os}.` });
-      }
-    }
+  for (const { os, match } of osRows) {
+    if (!match) { findings.push({ sev: 'HIGH', text: `${os} is not in the DSPM + FDC agent support matrix — not certified.` }); continue; }
+    if (match.status === 'eos') findings.push({ sev: 'CRITICAL', text: `${os} is End-of-Support for the DSPM + FDC agent — plan migration.` });
   }
-  return { rows, findings };
+  for (const { product, match } of officeRows) {
+    if (!match) { findings.push({ sev: 'MEDIUM', text: `${product} is not listed as supported by the DSPM + FDC agent.` }); continue; }
+    if (match.status === 'eos') findings.push({ sev: 'MEDIUM', text: `${product} is End-of-Support for the DSPM + FDC agent.` });
+  }
+  return { osRows, officeRows, findings };
 }
 
 export interface CompatibilityFinding {
