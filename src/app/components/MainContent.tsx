@@ -3,7 +3,8 @@ import { Step2ProductScope } from './steps/Step2ProductScope';
 import { Step3DataCollectors } from './steps/Step3DataCollectors';
 import { Step4VersionCheck } from './steps/Step4VersionCheck';
 import { StepServerDetails } from './steps/StepServerDetails';
-import { StepEndpointAgentAnalysis } from './steps/StepEndpointAgentAnalysis';
+import { StepEndpointAgents } from './steps/StepEndpointAgents';
+import type { FdcAgentSummary } from './steps/fdcAgentParser';
 import { Step6ProductChecklist } from './steps/Step6ProductChecklist';
 import { Step7CertificateAnalysis } from './steps/Step7CertificateAnalysis';
 import { Step7ParsingAnalysis } from './steps/Step7ParsingAnalysis';
@@ -79,6 +80,8 @@ interface MainContentProps {
   setLicenseGaps: React.Dispatch<React.SetStateAction<LicenseGapItem[]>>;
   endpointAgentSummary: EndpointAgentSummary | null;
   setEndpointAgentSummary: React.Dispatch<React.SetStateAction<EndpointAgentSummary | null>>;
+  fdcAgentSummary: FdcAgentSummary | null;
+  setFdcAgentSummary: React.Dispatch<React.SetStateAction<FdcAgentSummary | null>>;
   dlpDashboardSummary: DlpDashboardSummary | null;
   setDlpDashboardSummary: React.Dispatch<React.SetStateAction<DlpDashboardSummary | null>>;
   dlpAllLogReport: DlpAllLogReport | null;
@@ -139,6 +142,7 @@ export function MainContent({
   selectedEnhancements, setSelectedEnhancements,
   licenseGaps, setLicenseGaps,
   endpointAgentSummary, setEndpointAgentSummary,
+  fdcAgentSummary, setFdcAgentSummary,
   dlpDashboardSummary, setDlpDashboardSummary,
   dlpAllLogReport, setDlpAllLogReport,
   auditLogReport, setAuditLogReport,
@@ -169,7 +173,7 @@ export function MainContent({
           {currentStep === 3  && <Step3DataCollectors sqlConfig={sqlConfig} setSqlConfig={setSqlConfig} apiConnectors={apiConnectors} setApiConnectors={setApiConnectors} selectedReports={selectedReports} setSelectedReports={setSelectedReports} reportWindows={reportWindows} setReportWindows={setReportWindows} reportRuns={reportRuns} setReportRuns={setReportRuns} selectedProducts={selectedProducts} dlpBundles={dlpBundles} setDlpBundles={setDlpBundles} dlpDashboardSummary={dlpDashboardSummary} setDlpDashboardSummary={setDlpDashboardSummary} dlpPostureSummary={dlpPostureSummary} setDlpPostureSummary={setDlpPostureSummary} dlpPostureSections={dlpPostureSections} setDlpPostureSections={setDlpPostureSections} destinationPatterns={destinationPatterns} customerConnector={customerConnector} setCustomerConnector={setCustomerConnector} dlpAllLogReport={dlpAllLogReport} setDlpAllLogReport={setDlpAllLogReport} auditLogReport={auditLogReport} setAuditLogReport={setAuditLogReport} serviceLogsReport={serviceLogsReport} setServiceLogsReport={setServiceLogsReport} starredLogIssues={starredLogIssues} setStarredLogIssues={setStarredLogIssues} dismissedLogIssues={dismissedLogIssues} setDismissedLogIssues={setDismissedLogIssues} onStarLogIssue={onStarLogIssue} />}
           {currentStep === 4  && <Step4VersionCheck selectedProducts={selectedProducts} versionData={versionData} versionEntries={versionEntries} onVersionEntriesChange={onVersionEntriesChange} dlpBundles={dlpBundles} />}
           {currentStep === 5  && <StepServerDetails servers={serverDetails} setServers={setServerDetails} dlpBundles={dlpBundles} selectedProducts={selectedProducts} />}
-          {currentStep === 6  && <StepEndpointAgentAnalysis summary={endpointAgentSummary} setSummary={setEndpointAgentSummary} />}
+          {currentStep === 6  && <StepEndpointAgents summary={endpointAgentSummary} setSummary={setEndpointAgentSummary} fdcSummary={fdcAgentSummary} setFdcSummary={setFdcAgentSummary} selectedProducts={selectedProducts} />}
           {currentStep === 7  && (
             <StepEndpointCompatibility
               input={endpointCompatInput}

@@ -45,7 +45,7 @@ export const STEP_TITLES: Record<number, string> = {
        Step 4; the FDC side appears whenever DSPM/Classification is in scope.
    Add new entries here when a future step becomes product-conditional. */
 const STEP_SKIP_RULES: Partial<Record<number, (sp: Record<string, boolean>) => boolean>> = {
-  6: (sp) => !sp.data,
+  6: (sp) => !sp.data && !sp.dspm && !sp.cls,
   7: (sp) => !sp.data && !sp.web && !sp.dspm && !sp.cls,
 };
 

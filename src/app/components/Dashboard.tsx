@@ -28,6 +28,7 @@ import { DEFAULT_SQL_CONFIG, DEFAULT_API_CONNECTORS, type SqlConfig, type ApiCon
 import type { DlpServerBundle } from './steps/dlpServerInfoParser';
 import type { ParsedCertificate } from './steps/certificateParser';
 import type { EndpointAgentSummary } from './steps/endpointAgentParser';
+import type { FdcAgentSummary } from './steps/fdcAgentParser';
 import type { DlpDashboardSummary } from './steps/dlpDashboardParser';
 import type { DlpAllLogReport } from './steps/dlpAllLogParser';
 import type { AuditSystemLogsReport } from './steps/auditSystemLogsParser';
@@ -183,6 +184,7 @@ export interface HCSession {
   selectedEnhancements: string[];
   licenseGaps: LicenseGapItem[];
   endpointAgentSummary: EndpointAgentSummary | null;
+  fdcAgentSummary: FdcAgentSummary | null;
   dlpDashboardSummary: DlpDashboardSummary | null;
   /* Parsed result of `\Data Security\tomcat\logs\dlp\dlp-all.log`
      analyzer (Step 3 → DLP Server Info card). */
@@ -245,6 +247,7 @@ function deserializeSessions(raw: unknown[]): HCSession[] {
       selectedEnhancements: session.selectedEnhancements ?? [],
       licenseGaps: session.licenseGaps ?? [],
       endpointAgentSummary: session.endpointAgentSummary ?? null,
+      fdcAgentSummary: session.fdcAgentSummary ?? null,
       dlpDashboardSummary: session.dlpDashboardSummary ?? null,
       dlpAllLogReport: session.dlpAllLogReport ?? null,
       auditLogReport: session.auditLogReport ?? null,
@@ -314,6 +317,7 @@ export function Dashboard() {
   const [selectedEnhancements, setSelectedEnhancements] = useLocalStorage<string[]>('hc_enhancements', []);
   const [licenseGaps, setLicenseGaps] = useLocalStorage<LicenseGapItem[]>('hc_license_gaps', []);
   const [endpointAgentSummary, setEndpointAgentSummary] = useLocalStorage<EndpointAgentSummary | null>('hc_endpoint_agents', null);
+  const [fdcAgentSummary, setFdcAgentSummary] = useLocalStorage<FdcAgentSummary | null>('hc_fdc_endpoint_agents', null);
   const [dlpDashboardSummary, setDlpDashboardSummary] = useLocalStorage<DlpDashboardSummary | null>('hc_dlp_dashboard', null);
   const [dlpAllLogReport, setDlpAllLogReport] = useLocalStorage<DlpAllLogReport | null>('hc_dlp_log_issues', null);
   const [auditLogReport, setAuditLogReport] = useLocalStorage<AuditSystemLogsReport | null>('hc_audit_log_issues', null);
@@ -472,6 +476,7 @@ export function Dashboard() {
         selectedEnhancements: [...selectedEnhancements],
         licenseGaps: [...licenseGaps],
         endpointAgentSummary: endpointAgentSummary ? { ...endpointAgentSummary } : null,
+        fdcAgentSummary: fdcAgentSummary ? { ...fdcAgentSummary } : null,
         dlpDashboardSummary: dlpDashboardSummary ? { ...dlpDashboardSummary } : null,
         dlpAllLogReport: dlpAllLogReport ? { ...dlpAllLogReport } : null,
         auditLogReport: auditLogReport ? { ...auditLogReport } : null,
@@ -558,6 +563,7 @@ export function Dashboard() {
     setSelectedEnhancements(session.selectedEnhancements ?? []);
     setLicenseGaps(session.licenseGaps ?? []);
     setEndpointAgentSummary(session.endpointAgentSummary ?? null);
+    setFdcAgentSummary(session.fdcAgentSummary ?? null);
     setDlpDashboardSummary(session.dlpDashboardSummary ?? null);
     setDlpAllLogReport(session.dlpAllLogReport ?? null);
     setAuditLogReport(session.auditLogReport ?? null);
@@ -595,6 +601,7 @@ export function Dashboard() {
     setSelectedEnhancements([]);
     setLicenseGaps([]);
     setEndpointAgentSummary(null);
+    setFdcAgentSummary(null);
     setDlpDashboardSummary(null);
     setDlpAllLogReport(null);
     setAuditLogReport(null);
@@ -635,6 +642,7 @@ export function Dashboard() {
     setSelectedEnhancements([]);
     setLicenseGaps([]);
     setEndpointAgentSummary(null);
+    setFdcAgentSummary(null);
     setDlpDashboardSummary(null);
     setDlpAllLogReport(null);
     setAuditLogReport(null);
@@ -784,6 +792,8 @@ export function Dashboard() {
               setLicenseGaps={setLicenseGaps}
               endpointAgentSummary={endpointAgentSummary}
               setEndpointAgentSummary={setEndpointAgentSummary}
+              fdcAgentSummary={fdcAgentSummary}
+              setFdcAgentSummary={setFdcAgentSummary}
               dlpDashboardSummary={dlpDashboardSummary}
               setDlpDashboardSummary={setDlpDashboardSummary}
               dlpAllLogReport={dlpAllLogReport}
