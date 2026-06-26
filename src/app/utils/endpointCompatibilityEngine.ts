@@ -3,6 +3,7 @@ import type {
   EndpointMatrixOSRow,
   EndpointMatrixBrowserRow,
   EndpointCoverage,
+  FdcOfficeApp,
 } from '../constants/endpointSupportMatrix';
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -44,6 +45,14 @@ export interface EndpointCompatibilityInput {
   vdiPlatform?: string;
   /** @deprecated — macOS presence is now derived from osEnvironment[]. */
   hasMac?: boolean;
+
+  /* ── FDC (Data Classification) agent — separate from F1E. Only used when
+       DSPM / Classification is in scope. Selections are matched against
+       matrix.fdc on Step 7. Optional so existing sessions hydrate cleanly. ── */
+  /** Customer OS versions the FDC agent runs on (matches matrix.fdc.os platforms). */
+  fdcOSEnvironment?: string[];
+  /** Microsoft Office flavours the customer uses, checked against per-OS FDC support. */
+  fdcOfficeApps?: FdcOfficeApp[];
 }
 
 export const EMPTY_COMPAT_INPUT: EndpointCompatibilityInput = {
@@ -54,6 +63,8 @@ export const EMPTY_COMPAT_INPUT: EndpointCompatibilityInput = {
   serverOSes: [],
   browsers: [],
   vdiPlatforms: [],
+  fdcOSEnvironment: [],
+  fdcOfficeApps: [],
 };
 
 export interface CompatibilityFinding {

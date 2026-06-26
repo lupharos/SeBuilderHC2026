@@ -7,9 +7,13 @@ import {
 import {
   type EndpointSupportMatrix,
   type EndpointCoverage,
+  type FdcOfficeApp,
   COVERAGE_FULL_NAMES,
   COVERAGE_COLORS,
+  FDC_OFFICE_APPS,
+  FDC_OFFICE_LABELS,
   isMatrixEmpty,
+  isFdcMatrixEmpty,
 } from '../../constants/endpointSupportMatrix';
 import {
   type EndpointCompatibilityInput,
@@ -98,6 +102,10 @@ export function StepEndpointCompatibility({
        is representing — DLP, Hybrid Web, or both combined. ── */
   const dlpInScope = !!selectedProducts?.data;
   const webInScope = !!selectedProducts?.web;
+  /* F1E agent applies to DLP / Web; FDC agent applies to DSPM / Classification.
+     Each half of this step renders only when its agent is in scope. */
+  const f1eInScope = dlpInScope || webInScope;
+  const fdcInScope = !!selectedProducts?.dspm || !!selectedProducts?.cls;
   const dlpEntryVersion = (() => {
     const e = versionEntries?.dlp_endpoint;
     if (!e || e.removed) return '';
@@ -324,6 +332,13 @@ export function StepEndpointCompatibility({
     <div className="flex flex-col gap-5 w-full">
       <Header editMode={editMode} onToggleEdit={() => setEditMode((v) => !v)} onReset={clearAll} onRerun={rerunFromEnvironment} hasAssessment={!!assessment} />
 
+      {/* FDC (Data Classification) agent analysis — shown when DSPM or
+          Classification is in scope. Independent of the F1E assessment below. */}
+      {fdcInScope && <FdcAgentSection matrix={matrix} input={input} setInput={setInput} />}
+
+      {/* F1E agent assessment — only when DLP or Web is in scope. */}
+      {f1eInScope && (
+      <>
       {matrixEmpty && <MatrixMissingBanner />}
       {agentSource === null && <AgentMissingBanner />}
 
@@ -435,6 +450,199 @@ export function StepEndpointCompatibility({
           )}
         </div>
       </div>
+      </>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   FDC (DATA CLASSIFICATION) AGENT SECTION
+═══════════════════════════════════════════════════════════════════ */
+function FdcAgentSection({
+  matrix, input, setInput,
+}: {
+  matrix: EndpointSupportMatrix;
+  input: EndpointCompatibilityInput;
+  setInput: React.Dispatch<React.SetStateAction<EndpointCompatibilityInput>>;
+}) {
+  const fdcEmpty = isFdcMatrixEmpty(matrix);
+  const fdcRows = matrix.fdc?.os ?? [];
+  const osOptions = useMemo(
+    () => Array.from(new Set(fdcRows.map((r) => r.platform).filter(Boolean))),
+    [fdcRows],
+  );
+  const selectedOS = input.fdcOSEnvironment ?? [];
+  const selectedApps = input.fdcOfficeApps ?? [];
+
+  function toggleOS(v: string) {
+    setInput((prev) => {
+      const cur = (prev.fdcOSEnvironment ?? []).slice();
+      const i = cur.indexOf(v);
+      if (i >= 0) cur.splice(i, 1); else cur.push(v);
+      return { ...prev, fdcOSEnvironment: cur };
+    });
+  }
+  function toggleApp(a: FdcOfficeApp) {
+    setInput((prev) => {
+      const cur = (prev.fdcOfficeApps ?? []).slice();
+      const i = cur.indexOf(a);
+      if (i >= 0) cur.splice(i, 1); else cur.push(a);
+      return { ...prev, fdcOfficeApps: cur };
+    });
+  }
+
+  /* Build per-selected-OS analysis rows against the FDC matrix. */
+  const rows = selectedOS.map((os) => {
+    const match = fdcRows.find((r) => r.platform === os);
+    return { os, match };
+  });
+
+  /* Derive simple findings: uncertified OS, EoS OS, and Office flavours the
+     customer uses that the FDC agent doesn't support on a supported OS. */
+  const findings: { sev: 'CRITICAL' | 'HIGH' | 'MEDIUM'; text: string }[] = [];
+  for (const { os, match } of rows) {
+    if (!match) { findings.push({ sev: 'HIGH', text: `${os} is not in the FDC support matrix — not certified for the Classification agent.` }); continue; }
+    if (match.status === 'eos') findings.push({ sev: 'CRITICAL', text: `${os} is End-of-Support for the FDC agent — plan migration.` });
+    for (const app of selectedApps) {
+      if (!match.office?.[app]) {
+        findings.push({ sev: 'MEDIUM', text: `${FDC_OFFICE_LABELS[app]} is not supported by the FDC agent on ${os}.` });
+      }
+    }
+  }
+
+  const SEVC: Record<'CRITICAL' | 'HIGH' | 'MEDIUM', { color: string; bg: string; border: string }> = {
+    CRITICAL: { color: '#A30080', bg: '#FDF2F8', border: '#FBCFE8' },
+    HIGH:     { color: '#DC2626', bg: '#FEF2F2', border: '#FECACA' },
+    MEDIUM:   { color: '#B58800', bg: '#FFFBEB', border: '#FDE68A' },
+  };
+
+  return (
+    <div className="rounded-xl overflow-hidden" style={{ background: '#FFFFFF', border: '1.5px solid #A7F3D0' }}>
+      <div className="flex items-center gap-2.5 px-5 py-3.5" style={{ background: '#ECFDF5', borderBottom: '1.5px solid #A7F3D0' }}>
+        <span style={{ fontSize: '15px' }}>🏷️</span>
+        <span style={{ fontSize: '13px', fontWeight: 700, color: '#059669' }}>FDC Classification Agent — Endpoint Compatibility</span>
+        <span style={{ fontSize: '10.5px', color: '#047857', marginLeft: 'auto' }}>Data Classification endpoint agent (separate from F1E)</span>
+      </div>
+
+      {fdcEmpty ? (
+        <div className="flex items-start gap-3 px-5 py-4">
+          <AlertTriangle size={16} style={{ color: '#B58800', flexShrink: 0, marginTop: 2 }} />
+          <div style={{ fontSize: '12.5px', color: '#92400E', lineHeight: 1.55 }}>
+            <strong>FDC agent matrix is empty.</strong> Populate the FDC Classification Agent tab on the
+            left-rail "OS / Browser Support Matrix" page (OS support + per-OS Office app support) to enable
+            this analysis.
+          </div>
+        </div>
+      ) : (
+        <div className="grid gap-5 p-5" style={{ gridTemplateColumns: 'minmax(0, 360px) 1fr' }}>
+          {/* Selections */}
+          <div className="flex flex-col gap-4">
+            <FieldCard title="Operating Systems" subtitle="Workstation OS versions the FDC agent is deployed on.">
+              {osOptions.length > 0
+                ? <ChipMultiSelect options={osOptions} value={selectedOS} onToggle={toggleOS} accent="#059669" />
+                : <EmptyChipHint label="No FDC OS rows in matrix" />}
+            </FieldCard>
+            <FieldCard title="Microsoft Office in Use" subtitle="Office flavours the customer runs — checked against per-OS FDC support.">
+              <div className="flex flex-wrap gap-1.5">
+                {FDC_OFFICE_APPS.map((a) => {
+                  const on = selectedApps.includes(a);
+                  return (
+                    <button key={a} onClick={() => toggleApp(a)}
+                      style={{
+                        fontSize: '11px', padding: '4px 10px', borderRadius: 999,
+                        background: on ? '#05966914' : '#F8FAFC',
+                        color: on ? '#059669' : '#475569',
+                        border: `1px solid ${on ? '#059669' : '#E2E8F0'}`,
+                        fontWeight: on ? 700 : 500, cursor: 'pointer',
+                      }}>
+                      {on ? '✓ ' : ''}{FDC_OFFICE_LABELS[a]}
+                    </button>
+                  );
+                })}
+              </div>
+            </FieldCard>
+          </div>
+
+          {/* Analysis */}
+          <div className="flex flex-col gap-4">
+            {selectedOS.length === 0 ? (
+              <div className="rounded-xl flex flex-col items-center justify-center text-center px-6 py-10"
+                style={{ background: '#F8FAFC', border: '1px dashed #CBD5E1' }}>
+                <Info size={24} color="#94A3B8" />
+                <div style={{ fontSize: '12.5px', color: '#64748B', marginTop: 8 }}>
+                  Select the customer's operating systems to analyse FDC agent support.
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="rounded-xl overflow-hidden" style={{ border: '1px solid #EEF0F5' }}>
+                  <table className="w-full" style={{ borderCollapse: 'separate', borderSpacing: 0 }}>
+                    <thead>
+                      <tr style={{ background: '#F8FAFC' }}>
+                        <th style={{ textAlign: 'left', padding: '8px 12px', fontSize: '9.5px', fontWeight: 700, color: '#94A3B8', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Operating System</th>
+                        <th style={{ textAlign: 'left', padding: '8px 12px', fontSize: '9.5px', fontWeight: 700, color: '#94A3B8', letterSpacing: '0.08em', textTransform: 'uppercase' }}>FDC Support</th>
+                        {selectedApps.map((a) => (
+                          <th key={a} style={{ textAlign: 'center', padding: '8px 6px', fontSize: '9px', fontWeight: 700, color: '#94A3B8', letterSpacing: '0.03em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{FDC_OFFICE_LABELS[a]}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map(({ os, match }, ri) => (
+                        <tr key={os} style={{ borderTop: '1px solid #EEF0F5', background: ri % 2 === 0 ? '#FFFFFF' : '#FBFCFE' }}>
+                          <td style={{ padding: '8px 12px', fontSize: '12px', color: '#0F2952', fontWeight: 600 }}>{os}</td>
+                          <td style={{ padding: '8px 12px' }}>
+                            {!match ? (
+                              <span style={{ fontSize: '10.5px', fontWeight: 700, color: '#DC2626', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 5, padding: '2px 8px' }}>NOT CERTIFIED</span>
+                            ) : match.status === 'eos' ? (
+                              <span style={{ fontSize: '10.5px', fontWeight: 700, color: '#A30080', background: '#FDF2F8', border: '1px solid #FBCFE8', borderRadius: 5, padding: '2px 8px' }}>EOS</span>
+                            ) : (
+                              <span style={{ fontSize: '10.5px', fontWeight: 700, color: '#16A34A', background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 5, padding: '2px 8px' }}>SUPPORTED{match.supportedFrom ? ` · ${match.supportedFrom}` : ''}</span>
+                            )}
+                          </td>
+                          {selectedApps.map((a) => {
+                            const ok = !!match?.office?.[a];
+                            return (
+                              <td key={a} style={{ textAlign: 'center', padding: '8px 6px' }}>
+                                {ok
+                                  ? <CheckCircle2 size={15} style={{ color: '#16A34A' }} />
+                                  : <XCircle size={15} style={{ color: '#CBD5E1' }} />}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {findings.length > 0 && (
+                  <div className="flex flex-col gap-2">
+                    <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                      Findings ({findings.length})
+                    </div>
+                    {findings.map((f, i) => {
+                      const c = SEVC[f.sev];
+                      return (
+                        <div key={i} className="flex items-start gap-2" style={{ background: c.bg, border: `1px solid ${c.border}`, borderLeft: `3px solid ${c.color}`, borderRadius: 6, padding: '8px 11px' }}>
+                          <span style={{ fontSize: '8.5px', fontWeight: 800, color: c.color, background: '#fff', border: `1px solid ${c.border}`, padding: '1px 6px', borderRadius: 4, letterSpacing: '0.05em', flexShrink: 0, marginTop: 1 }}>{f.sev}</span>
+                          <span style={{ fontSize: '11.5px', color: '#475569', lineHeight: 1.5 }}>{f.text}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                {findings.length === 0 && (
+                  <div className="flex items-center gap-2.5 rounded-xl px-4 py-3" style={{ background: '#F0FDF4', border: '1px solid #BBF7D0' }}>
+                    <CheckCircle2 size={16} color="#16A34A" />
+                    <span style={{ fontSize: '12px', color: '#15803D', fontWeight: 600 }}>All selected OS and Office combinations are supported by the FDC agent.</span>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

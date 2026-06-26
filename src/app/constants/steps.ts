@@ -39,13 +39,14 @@ export const STEP_TITLES: Record<number, string> = {
    from Step 2.
      • Step 6 (Endpoint Agent Analysis — CSV ingest) is DLP-only — the CSV
        only ships with DLP deployments.
-     • Step 7 (Agent Compatibility) runs for either DLP or Web; in Web-only
-       scope it falls back to the "Endpoint Agent (Hybrid Web)" installed
-       version from Step 4's Version & EoS list (no Step 6 CSV available).
+     • Step 7 (Agent Compatibility) runs for DLP or Web (F1E agent), and also
+       for DSPM or Classification (FDC agent). In Web-only scope the F1E side
+       falls back to the "Endpoint Agent (Hybrid Web)" installed version from
+       Step 4; the FDC side appears whenever DSPM/Classification is in scope.
    Add new entries here when a future step becomes product-conditional. */
 const STEP_SKIP_RULES: Partial<Record<number, (sp: Record<string, boolean>) => boolean>> = {
   6: (sp) => !sp.data,
-  7: (sp) => !sp.data && !sp.web,
+  7: (sp) => !sp.data && !sp.web && !sp.dspm && !sp.cls,
 };
 
 export function isStepSkipped(stepId: number, selectedProducts: Record<string, boolean>): boolean {

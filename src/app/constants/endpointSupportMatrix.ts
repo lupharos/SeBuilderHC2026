@@ -59,6 +59,50 @@ export interface EndpointMatrixCriticalNote {
   body: string;
 }
 
+/* ─────────────────────────────────────────────────────────────────────
+   FDC (Forcepoint Data Classification) endpoint agent — a SEPARATE agent
+   from F1E. For FDC the things that matter are which OS is supported and
+   which Microsoft Office flavour is supported, so each OS row carries a
+   fixed set of Office-app support flags.
+   ───────────────────────────────────────────────────────────────────── */
+export const FDC_OFFICE_APPS = ['m365', 'office2024', 'office2021', 'office2019', 'office2016'] as const;
+export type FdcOfficeApp = (typeof FDC_OFFICE_APPS)[number];
+
+export const FDC_OFFICE_LABELS: Record<FdcOfficeApp, string> = {
+  m365:       'Microsoft 365',
+  office2024: 'Office 2024',
+  office2021: 'Office 2021',
+  office2019: 'Office 2019',
+  office2016: 'Office 2016',
+};
+
+/* One-line description used as a tooltip / help text on the column. */
+export const FDC_OFFICE_DESCRIPTIONS: Record<FdcOfficeApp, string> = {
+  m365:       'Cloud subscription (monthly/yearly) — Word, Excel, PowerPoint, Outlook; always updated; multi-device.',
+  office2024: 'Perpetual one-time-purchase licence; no feature updates.',
+  office2021: 'Perpetual legacy version.',
+  office2019: 'Perpetual legacy version.',
+  office2016: 'Perpetual legacy version.',
+};
+
+export interface FdcOSRow {
+  id: string;
+  platform: string;
+  supportedFrom: string;
+  status: 'current' | 'eos';
+  note?: string;
+  /* Which Office flavours the FDC agent supports on this OS. Missing key =
+     not supported / unknown. Pre-existing rows hydrate with undefined. */
+  office?: Partial<Record<FdcOfficeApp, boolean>>;
+}
+
+export interface FdcMatrix {
+  os: FdcOSRow[];
+  notes: string[];
+}
+
+export const EMPTY_FDC_MATRIX: FdcMatrix = { os: [], notes: [] };
+
 export interface EndpointSupportMatrix {
   lastUpdated: string;
   source?: string;
@@ -69,6 +113,10 @@ export interface EndpointSupportMatrix {
   vdi: EndpointMatrixOSRow[];
   browsers: EndpointMatrixBrowserRow[];
   criticalNotes: EndpointMatrixCriticalNote[];
+  /* Forcepoint Data Classification agent matrix. Optional so payloads
+     saved before the FDC agent was added hydrate cleanly (treated as
+     empty); normalise on read with `m.fdc ?? EMPTY_FDC_MATRIX`. */
+  fdc?: FdcMatrix;
 }
 
 export const EMPTY_ENDPOINT_MATRIX: EndpointSupportMatrix = {
@@ -81,8 +129,11 @@ export const EMPTY_ENDPOINT_MATRIX: EndpointSupportMatrix = {
   vdi: [],
   browsers: [],
   criticalNotes: [],
+  fdc: { os: [], notes: [] },
 };
 
+/* F1E side empty-check — unchanged semantics so the existing F1E wizard
+   assessment keeps working exactly as before. */
 export function isMatrixEmpty(m: EndpointSupportMatrix | null | undefined): boolean {
   if (!m) return true;
   /* Defensive against partially-shaped objects from older localStorage payloads
@@ -93,6 +144,11 @@ export function isMatrixEmpty(m: EndpointSupportMatrix | null | undefined): bool
     && len(m.vdi) === 0
     && len(m.browsers) === 0
     && len(m.criticalNotes) === 0;
+}
+
+export function isFdcMatrixEmpty(m: EndpointSupportMatrix | null | undefined): boolean {
+  const os = m?.fdc?.os;
+  return !Array.isArray(os) || os.length === 0;
 }
 
 export function newMatrixId(prefix: string): string {
