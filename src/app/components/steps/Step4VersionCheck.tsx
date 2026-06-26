@@ -77,11 +77,15 @@ export const CATALOG: Record<string, ComponentDef> = {
   ngfw_smc:       { groupId: 'ngfw',  component: 'SMC Server',                     productLabel: 'Forcepoint NGFW',                  versionDataCategory: null, staticLatest: '6.11.2', staticRelease: 'Oct 2024' },
   ngfw_engine:    { groupId: 'ngfw',  component: 'Firewall Engine',                productLabel: 'Forcepoint NGFW',                  versionDataCategory: null, staticLatest: '6.11.2', staticRelease: 'Oct 2024' },
 
-  dspm_server:    { groupId: 'dspm',  component: 'DSPM Server',                    productLabel: 'Forcepoint DSPM',                  versionDataCategory: null, staticLatest: '2.5.0',   staticRelease: 'Oct 2024' },
-  dspm_agent:     { groupId: 'dspm',  component: 'DSPM Agent',                     productLabel: 'Forcepoint DSPM',                  versionDataCategory: null, staticLatest: '2.5.0',   staticRelease: 'Oct 2024' },
+  /* DSPM + Classification components resolve from their Product Lifecycle
+     category (latest version, GA, EoSale/EoM/EoSupport) just like the other
+     products. When that category is empty (no entries imported yet) the row
+     shows "—" and the analyst can hit Edit to fill every column manually. */
+  dspm_server:    { groupId: 'dspm',  component: 'DSPM Server',                    productLabel: 'Forcepoint DSPM',                  versionDataCategory: 'Forcepoint DSPM' },
+  dspm_agent:     { groupId: 'dspm',  component: 'DSPM Agent',                     productLabel: 'Forcepoint DSPM',                  versionDataCategory: 'Forcepoint DSPM' },
 
-  cls_server:     { groupId: 'cls',   component: 'Classification Server',          productLabel: 'Forcepoint Data Classification',   versionDataCategory: null, staticLatest: '11.1.0',  staticRelease: 'Sep 2024' },
-  cls_agent:      { groupId: 'cls',   component: 'Classification Agent',           productLabel: 'Forcepoint Data Classification',   versionDataCategory: null, staticLatest: '11.1.0',  staticRelease: 'Sep 2024' },
+  cls_server:     { groupId: 'cls',   component: 'Classification Server',          productLabel: 'Forcepoint Data Classification',   versionDataCategory: 'Forcepoint Data Classification (FDC)' },
+  cls_agent:      { groupId: 'cls',   component: 'Classification Agent',           productLabel: 'Forcepoint Data Classification',   versionDataCategory: 'Forcepoint Data Classification (FDC)' },
 };
 
 /* ═══════════════════════════════

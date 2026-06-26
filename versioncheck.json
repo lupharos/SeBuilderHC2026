@@ -1,6 +1,6 @@
 {
   "productName": "HC Studio",
-  "version": "2026.06.26.2",
-  "releasedAt": "2026-06-26T19:30:00Z",
-  "notes": "Release notes for HC Studio version 2026.06.26.2:\n\n- Product Lifecycle now includes two new Software pages: Forcepoint DSPM and Forcepoint Data Classification (FDC). Each supports the same Version / GA / End of Sale / End of Maintenance / End of Support tracking, inline editing, reordering, and JSON/HTML import as the other product lines.\n- The new pages start empty so you can populate them with the relevant version lifecycle data; existing installs render them safely without affecting other catalogue data.\n\nFor more details, please refer to the official documentation or contact support."
+  "version": "2026.06.26.3",
+  "releasedAt": "2026-06-26T20:15:00Z",
+  "notes": "Release notes for HC Studio version 2026.06.26.3:\n\n- Version & EoS Summary now auto-populates DSPM and Data Classification (FDC) components from their Product Lifecycle pages. When you select DSPM or Classification in Product Scope, the DSPM Server/Agent and Classification Server/Agent rows pull their latest version, GA date and EoSale/EoM/EoSupport straight from the matching Product Lifecycle entry.\n- If a solution has no matching lifecycle entry, every column remains fully editable via the row's Edit (override) control, so versions can always be filled in manually.\n\nFor more details, please refer to the official documentation or contact support."
 }
