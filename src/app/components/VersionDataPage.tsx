@@ -145,13 +145,17 @@ export function VersionDataPage({ data, onChange }: VersionDataPageProps) {
 
   const isSoftware = isSoftwareCategory(activeCategory);
   const columns = isSoftware ? SOFTWARE_COLUMNS : HARDWARE_COLUMNS;
-  const rows = data[activeCategory] as AnyEntry[];
+  /* `?? []` guards: a stored hc_version_data (or seed) predating the
+     DSPM / FDC categories won't carry those keys, so a freshly added
+     category reads back undefined until first edit. Default to empty so
+     the tab, count and table render instead of crashing on .length. */
+  const rows = (data[activeCategory] as AnyEntry[]) ?? [];
 
   /* Catalogue-wide empty check: when no category holds any entry, the page
      renders an Import-HTML CTA instead of the tabs+table chrome, mirroring
      the OS / Browser Support Matrix empty state. */
   const totalEntries = ALL_CATEGORIES.reduce(
-    (sum, k) => sum + (data[k] as AnyEntry[]).length,
+    (sum, k) => sum + ((data[k] as AnyEntry[]) ?? []).length,
     0,
   );
   const allEmpty = totalEntries === 0;
@@ -351,7 +355,7 @@ export function VersionDataPage({ data, onChange }: VersionDataPageProps) {
   }
 
   const categoryGroups: { label: string; items: CategoryKey[] }[] = [
-    { label: 'Software', items: ['Forcepoint Email Security', 'Forcepoint Web Security', 'Forcepoint Data Security', 'DLP + Web Endpoint Agent', 'AMDP'] },
+    { label: 'Software', items: ['Forcepoint Email Security', 'Forcepoint Web Security', 'Forcepoint Data Security', 'Forcepoint DSPM', 'Forcepoint Data Classification (FDC)', 'DLP + Web Endpoint Agent', 'AMDP'] },
     { label: 'Hardware', items: ['V Series Appliances', 'NGFW Appliances'] },
   ];
 
@@ -394,7 +398,7 @@ export function VersionDataPage({ data, onChange }: VersionDataPageProps) {
             </div>
             {group.items.map((cat) => {
               const active = cat === activeCategory;
-              const count = (data[cat] as AnyEntry[]).length;
+              const count = ((data[cat] as AnyEntry[]) ?? []).length;
               return (
                 <button
                   key={cat}

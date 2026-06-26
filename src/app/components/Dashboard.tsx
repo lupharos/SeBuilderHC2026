@@ -372,6 +372,8 @@ export function Dashboard() {
     'Forcepoint Email Security': rawVersionData['Forcepoint Email Security'] ?? [],
     'Forcepoint Web Security': rawVersionData['Forcepoint Web Security'] ?? [],
     'Forcepoint Data Security': rawVersionData['Forcepoint Data Security'] ?? [],
+    'Forcepoint DSPM': rawVersionData['Forcepoint DSPM'] ?? [],
+    'Forcepoint Data Classification (FDC)': rawVersionData['Forcepoint Data Classification (FDC)'] ?? [],
     'DLP + Web Endpoint Agent': rawVersionData['DLP + Web Endpoint Agent'] ?? [],
     'AMDP': rawVersionData['AMDP'] ?? [],
     'V Series Appliances': rawVersionData['V Series Appliances'] ?? [],

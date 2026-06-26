@@ -219,6 +219,8 @@ export function mergeIntoStore(
     'Forcepoint Email Security': [...store['Forcepoint Email Security']],
     'Forcepoint Web Security': [...store['Forcepoint Web Security']],
     'Forcepoint Data Security': [...store['Forcepoint Data Security']],
+    'Forcepoint DSPM': [...(store['Forcepoint DSPM'] ?? [])],
+    'Forcepoint Data Classification (FDC)': [...(store['Forcepoint Data Classification (FDC)'] ?? [])],
     'DLP + Web Endpoint Agent': [...store['DLP + Web Endpoint Agent']],
     'AMDP': [...store['AMDP']],
     'V Series Appliances': [...store['V Series Appliances']],
