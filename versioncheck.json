@@ -1,6 +1,6 @@
 {
   "productName": "HC Studio",
-  "version": "2026.06.26.1",
-  "releasedAt": "2026-06-26T18:45:00Z",
-  "notes": "Release notes for HC Studio version 2026.06.26.1:\n\n- Default data now seeds automatically on every fresh install. The curated knowledge base — rule-engine templates, version EoL/EoM data, the endpoint support matrix, destination patterns, report windows and DLP posture sections — loads on first launch with no manual backup restore needed.\n- A fresh install imports the full seed; on later launches, only the reference/catalogue data is refreshed when the shipped seed changes — in-progress sessions, answers, certificates and customer data are never touched.\n- Seeding runs silently before the app renders and falls back to built-in defaults if offline, so it never blocks startup. A small one-off confirmation appears when default data is applied.\n- Admins can refresh the shipped defaults by exporting a System Backup, running `npm run seed`, and redeploying — secrets (auth token, credentials) are stripped automatically from the committed seed.\n\nFor more details, please refer to the official documentation or contact support."
+  "version": "2026.06.26.2",
+  "releasedAt": "2026-06-26T19:30:00Z",
+  "notes": "Release notes for HC Studio version 2026.06.26.2:\n\n- Product Lifecycle now includes two new Software pages: Forcepoint DSPM and Forcepoint Data Classification (FDC). Each supports the same Version / GA / End of Sale / End of Maintenance / End of Support tracking, inline editing, reordering, and JSON/HTML import as the other product lines.\n- The new pages start empty so you can populate them with the relevant version lifecycle data; existing installs render them safely without affecting other catalogue data.\n\nFor more details, please refer to the official documentation or contact support."
 }
