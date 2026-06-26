@@ -182,6 +182,7 @@ export function MainContent({
               setAssessment={setEndpointCompatAssessment}
               matrix={endpointMatrix}
               endpointAgentSummary={endpointAgentSummary}
+              fdcAgentSummary={fdcAgentSummary}
               versionEntries={versionEntries}
               selectedProducts={selectedProducts}
             />

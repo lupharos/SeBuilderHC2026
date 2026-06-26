@@ -28,6 +28,7 @@ import {
   EMPTY_COMPAT_INPUT,
 } from '../../utils/endpointCompatibilityEngine';
 import type { EndpointAgentSummary } from './endpointAgentParser';
+import type { FdcAgentSummary } from './fdcAgentParser';
 import type { VersionEntry } from './Step4VersionCheck';
 
 /* Where the displayed agent version originated. step4Mode tracks which
@@ -45,6 +46,9 @@ interface Props {
   setAssessment: React.Dispatch<React.SetStateAction<EndpointCompatibilityAssessment | null>>;
   matrix: EndpointSupportMatrix;
   endpointAgentSummary: EndpointAgentSummary | null;
+  /* DSPM + FDC agent telemetry from Step 6 (Agent Management CSV). Used to
+     show the detected FDC agent version in the FDC compatibility section. */
+  fdcAgentSummary?: FdcAgentSummary | null;
   /* Step 6 CSV is preferred; when it's absent, we fall back to Step 4's
      Endpoint Agent installed version. With both DLP + Web in scope the
      DLP entry is dominant — the F1E agent is the same binary on the box
@@ -81,7 +85,7 @@ const SOLUTION_META: Record<EndpointCoverage, { icon: React.ReactNode; subtitle:
 };
 
 export function StepEndpointCompatibility({
-  input, setInput, assessment, setAssessment, matrix, endpointAgentSummary, versionEntries, selectedProducts,
+  input, setInput, assessment, setAssessment, matrix, endpointAgentSummary, fdcAgentSummary, versionEntries, selectedProducts,
 }: Props) {
   const matrixEmpty = isMatrixEmpty(matrix);
   /* When edit mode is on the engine stops overwriting the assessment so the
@@ -333,7 +337,7 @@ export function StepEndpointCompatibility({
 
       {/* FDC (Data Classification) agent analysis — shown when DSPM or
           Classification is in scope. Independent of the F1E assessment below. */}
-      {fdcInScope && <FdcAgentSection matrix={matrix} input={input} setInput={setInput} />}
+      {fdcInScope && <FdcAgentSection matrix={matrix} input={input} setInput={setInput} fdcAgentSummary={fdcAgentSummary ?? null} versionEntries={versionEntries} selectedProducts={selectedProducts} />}
 
       {/* F1E agent assessment — only when DLP or Web is in scope. */}
       {f1eInScope && (
@@ -459,13 +463,37 @@ export function StepEndpointCompatibility({
    FDC (DATA CLASSIFICATION) AGENT SECTION
 ═══════════════════════════════════════════════════════════════════ */
 function FdcAgentSection({
-  matrix, input, setInput,
+  matrix, input, setInput, fdcAgentSummary, versionEntries, selectedProducts,
 }: {
   matrix: EndpointSupportMatrix;
   input: EndpointCompatibilityInput;
   setInput: React.Dispatch<React.SetStateAction<EndpointCompatibilityInput>>;
+  fdcAgentSummary?: FdcAgentSummary | null;
+  versionEntries?: Record<string, VersionEntry>;
+  selectedProducts?: Record<string, boolean>;
 }) {
   const fdcEmpty = isFdcMatrixEmpty(matrix);
+
+  /* Detected DSPM + FDC agent version — same idea as the F1E agent context.
+     Priority: Step 6 Agent Management CSV (latest deployed) → Step 4
+     "FDC + DSPM Agent" installed version (DSPM or Classification entry). */
+  const step4FdcVersion = (() => {
+    const ids = ['dspm_agent', 'cls_agent'];
+    for (const id of ids) {
+      const e = versionEntries?.[id];
+      const v = (e && !e.removed ? e.installedVersion : '')?.trim();
+      if (v) return v;
+    }
+    return '';
+  })();
+  const fdcAgentSource: 'step6' | 'step4' | null =
+    fdcAgentSummary?.latestVersion ? 'step6' : step4FdcVersion ? 'step4' : null;
+  const fdcAgentVersion = fdcAgentSummary?.latestVersion || step4FdcVersion || '';
+  const fdcScopeLabel =
+    selectedProducts?.dspm && selectedProducts?.cls ? 'DSPM + Classification'
+    : selectedProducts?.dspm ? 'DSPM'
+    : selectedProducts?.cls ? 'Classification'
+    : 'DSPM + FDC';
   const fdc = useMemo(() => normalizeFdcMatrix(matrix.fdc), [matrix.fdc]);
   const osOptions = useMemo(
     () => Array.from(new Set([...fdc.windows, ...fdc.macos, ...fdc.vdi].map((r) => r.platform).filter(Boolean))),
@@ -509,6 +537,49 @@ function FdcAgentSection({
         <span style={{ fontSize: '15px' }}>🏷️</span>
         <span style={{ fontSize: '13px', fontWeight: 700, color: '#059669' }}>DSPM + FDC Agent — Endpoint Compatibility</span>
         <span style={{ fontSize: '10.5px', color: '#047857', marginLeft: 'auto' }}>Data Classification endpoint agent (separate from F1E)</span>
+      </div>
+
+      {/* Agent context — detected FDC agent version, mirroring the F1E card. */}
+      <div className="px-5 pt-4">
+        <div className="rounded-xl text-white overflow-hidden" style={{ background: 'linear-gradient(135deg,#047857 0%,#064E3B 75%)', boxShadow: '0 4px 16px rgba(6,78,59,0.18)' }}>
+          <div className="px-5 py-4">
+            <div className="flex items-center justify-between mb-3">
+              <div style={{ fontSize: '9.5px', fontWeight: 700, letterSpacing: '0.14em', opacity: 0.6 }}>
+                {fdcAgentSource === 'step6' ? 'AGENT CONTEXT — STEP 6 · AGENT MANAGEMENT CSV'
+                  : fdcAgentSource === 'step4' ? 'AGENT CONTEXT — STEP 4 · VERSION & EOS'
+                  : 'AGENT CONTEXT'}
+              </div>
+              {fdcAgentVersion && (
+                <span className="flex items-center gap-1.5" style={{ fontSize: '9px', fontWeight: 700, color: '#A7F3D0', background: 'rgba(167,243,208,0.12)', border: '1px solid rgba(167,243,208,0.3)', borderRadius: 4, padding: '2px 7px', letterSpacing: '0.06em' }}>
+                  <Cpu size={9} /> {fdcAgentSource === 'step6' ? 'AUTO-DETECTED' : 'FROM VERSION CHECK'}
+                </span>
+              )}
+            </div>
+            <div className="flex items-baseline gap-3">
+              <div style={{ fontSize: '24px', fontWeight: 800, color: '#fff', letterSpacing: '-0.02em', fontFamily: "'JetBrains Mono', monospace" }}>
+                {fdcAgentVersion || '—'}
+              </div>
+              <div style={{ fontSize: '11px', opacity: 0.6 }}>
+                {fdcAgentVersion
+                  ? (fdcAgentSource === 'step6' ? `latest deployed (${fdcScopeLabel})` : `installed (${fdcScopeLabel})`)
+                  : 'no version detected'}
+              </div>
+            </div>
+            {fdcAgentSource === 'step6' && fdcAgentSummary && (
+              <div className="flex items-center gap-4 mt-3">
+                <Mini label="Hosts" value={fdcAgentSummary.uniqueHosts.toLocaleString()} />
+                {fdcAgentSummary.onlineCount > 0 && <Mini label="Online" value={fdcAgentSummary.onlineCount.toLocaleString()} />}
+                {fdcAgentSummary.offlineCount > 0 && <Mini label="Offline" value={`${fdcAgentSummary.offlinePct}%`} tone="warn" />}
+                {fdcAgentSummary.staleCount > 0 && <Mini label="Stale" value={fdcAgentSummary.staleCount.toLocaleString()} tone="warn" />}
+              </div>
+            )}
+            {!fdcAgentVersion && (
+              <div style={{ fontSize: '10.5px', opacity: 0.55, marginTop: 8, lineHeight: 1.5 }}>
+                Import the Agent Management CSV in Step 6 — Endpoint Agents (DSPM + FDC tab), or record the FDC + DSPM Agent installed version in Step 4 — Version &amp; EoS. It will appear here automatically.
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       {fdcEmpty ? (
