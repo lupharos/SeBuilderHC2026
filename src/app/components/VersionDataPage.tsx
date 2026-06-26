@@ -355,7 +355,7 @@ export function VersionDataPage({ data, onChange }: VersionDataPageProps) {
   }
 
   const categoryGroups: { label: string; items: CategoryKey[] }[] = [
-    { label: 'Software', items: ['Forcepoint Email Security', 'Forcepoint Web Security', 'Forcepoint Data Security', 'Forcepoint DSPM', 'Forcepoint Data Classification (FDC)', 'DLP + Web Endpoint Agent', 'AMDP'] },
+    { label: 'Software', items: ['Forcepoint Email Security', 'Forcepoint Web Security', 'Forcepoint Data Security', 'Forcepoint DSPM', 'Forcepoint Data Classification (FDC)', 'FDC + DSPM Agent', 'DLP + Web Endpoint Agent', 'AMDP'] },
     { label: 'Hardware', items: ['V Series Appliances', 'NGFW Appliances'] },
   ];
 

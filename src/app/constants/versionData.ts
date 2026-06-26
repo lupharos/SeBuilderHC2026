@@ -23,6 +23,7 @@ export type VersionDataStore = {
   'Forcepoint Data Security': SoftwareEntry[];
   'Forcepoint DSPM': SoftwareEntry[];
   'Forcepoint Data Classification (FDC)': SoftwareEntry[];
+  'FDC + DSPM Agent': SoftwareEntry[];
   'DLP + Web Endpoint Agent': SoftwareEntry[];
   'AMDP': SoftwareEntry[];
   'V Series Appliances': HardwareEntry[];
@@ -35,6 +36,7 @@ export const SOFTWARE_CATEGORIES = [
   'Forcepoint Data Security',
   'Forcepoint DSPM',
   'Forcepoint Data Classification (FDC)',
+  'FDC + DSPM Agent',
   'DLP + Web Endpoint Agent',
   'AMDP',
 ] as const;
@@ -110,6 +112,7 @@ export const INITIAL_VERSION_DATA: VersionDataStore = {
   ],
   'Forcepoint DSPM': [],
   'Forcepoint Data Classification (FDC)': [],
+  'FDC + DSPM Agent': [],
   'AMDP': [],
   'V Series Appliances': [
     { 'Model/Version': 'V10000 G4 R2', 'General Availability': '2018-02-28', 'End of Sale': '2024-10-28', 'Last Supported Release': null, 'End Of Maintenance': '2027-10-28', 'Last Date for Warranty Extension': null, 'End of Life': '2029-10-28', 'Migration Path': 'V10000 G5' },

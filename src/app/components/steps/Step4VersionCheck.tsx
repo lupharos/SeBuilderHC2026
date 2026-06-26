@@ -81,11 +81,16 @@ export const CATALOG: Record<string, ComponentDef> = {
      category (latest version, GA, EoSale/EoM/EoSupport) just like the other
      products. When that category is empty (no entries imported yet) the row
      shows "—" and the analyst can hit Edit to fill every column manually. */
+  /* DSPM Server has its own lifecycle (Forcepoint DSPM). The DSPM Agent and
+     the Classification Agent are the SAME binary, so both resolve from the
+     shared 'FDC + DSPM Agent' lifecycle category. The Classification Server
+     resolves from the FDC server lifecycle. Empty category → "—" + manual
+     Edit override on the row. */
   dspm_server:    { groupId: 'dspm',  component: 'DSPM Server',                    productLabel: 'Forcepoint DSPM',                  versionDataCategory: 'Forcepoint DSPM' },
-  dspm_agent:     { groupId: 'dspm',  component: 'DSPM Agent',                     productLabel: 'Forcepoint DSPM',                  versionDataCategory: 'Forcepoint DSPM' },
+  dspm_agent:     { groupId: 'dspm',  component: 'DSPM Agent',                     productLabel: 'Forcepoint DSPM',                  versionDataCategory: 'FDC + DSPM Agent' },
 
   cls_server:     { groupId: 'cls',   component: 'Classification Server',          productLabel: 'Forcepoint Data Classification',   versionDataCategory: 'Forcepoint Data Classification (FDC)' },
-  cls_agent:      { groupId: 'cls',   component: 'Classification Agent',           productLabel: 'Forcepoint Data Classification',   versionDataCategory: 'Forcepoint Data Classification (FDC)' },
+  cls_agent:      { groupId: 'cls',   component: 'Classification Agent',           productLabel: 'Forcepoint Data Classification',   versionDataCategory: 'FDC + DSPM Agent' },
 };
 
 /* ═══════════════════════════════
