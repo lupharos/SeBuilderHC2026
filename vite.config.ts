@@ -24,6 +24,10 @@ import react from '@vitejs/plugin-react'
    Bumping a release is now one edit to versioncheck.json + a deploy.
    The deploy.sh rebuild copies the new JSON into dist/ automatically. */
 const VERSIONCHECK_PATH = path.resolve(__dirname, 'versioncheck.json')
+/* Sanitised default-data seed (built from template.json by
+   `npm run seed` — see scripts/build-seed.mjs). Shipped so every fresh
+   install boots with the curated knowledge base. */
+const SEED_PATH = path.resolve(__dirname, 'seed.json')
 
 type VersionCheck = {
   productName?: string
@@ -124,6 +128,40 @@ function versionCheckPlugin() {
   }
 }
 
+/* Seed plugin — same shape as versionCheckPlugin: emit seed.json into
+   dist/ at build so nginx serves /seed.json, and serve it from the dev
+   middleware so seeding works under `npm run dev` too. If seed.json is
+   absent the build still succeeds — the runtime loader treats a 404 as
+   "no seed" and falls back to built-in defaults. */
+function seedDataPlugin() {
+  return {
+    name: 'seed-data-emitter',
+    generateBundle() {
+      let source: string
+      try {
+        source = readFileSync(SEED_PATH, 'utf8')
+      } catch {
+        return // no seed.json on disk — ship without it
+      }
+      // @ts-expect-error rollup plugin context (added by vite)
+      this.emitFile({ type: 'asset', fileName: 'seed.json', source })
+    },
+    configureServer(server: any) {
+      server.middlewares.use('/seed.json', (_req: any, res: any) => {
+        try {
+          const source = readFileSync(SEED_PATH, 'utf8')
+          res.setHeader('Content-Type', 'application/json')
+          res.setHeader('Cache-Control', 'no-store')
+          res.end(source)
+        } catch {
+          res.statusCode = 404
+          res.end()
+        }
+      })
+    },
+  }
+}
+
 const BUILD_INFO = readBuildInfo()
 
 function figmaAssetResolver() {
@@ -142,6 +180,7 @@ export default defineConfig({
   plugins: [
     figmaAssetResolver(),
     versionCheckPlugin(),
+    seedDataPlugin(),
     // The React and Tailwind plugins are both required for Make, even if
     // Tailwind is not being actively used – do not remove them
     react(),

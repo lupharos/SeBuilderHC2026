@@ -1,6 +1,7 @@
 import { LoginScreen } from './components/LoginScreen';
 import { Dashboard } from './components/Dashboard';
 import { AuthProvider, useAuth } from './auth/AuthContext';
+import { SeedNotice } from './components/SeedNotice';
 
 /* Top-level shell. AuthProvider owns the session token + the current
    user; this gate decides whether to render LoginScreen or Dashboard
@@ -40,6 +41,7 @@ export default function App() {
   return (
     <AuthProvider>
       <AppShell />
+      <SeedNotice />
     </AuthProvider>
   );
 }
