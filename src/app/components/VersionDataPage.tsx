@@ -383,7 +383,7 @@ export function VersionDataPage({ data, onChange }: VersionDataPageProps) {
       <div
         className="flex flex-col flex-shrink-0 overflow-y-auto py-5 px-3 gap-1"
         style={{
-          width: '200px',
+          width: '248px',
           background: '#FFFFFF',
           borderRight: '1px solid #EEF0F5',
         }}
@@ -413,8 +413,8 @@ export function VersionDataPage({ data, onChange }: VersionDataPageProps) {
                     marginBottom: '1px',
                   }}
                 >
-                  <div className="flex items-center justify-between">
-                    <span className="truncate">{cat}</span>
+                  <div className="flex items-start justify-between gap-1.5">
+                    <span style={{ lineHeight: 1.3, wordBreak: 'break-word' }}>{cat}</span>
                     <span
                       style={{
                         fontSize: '9px',
