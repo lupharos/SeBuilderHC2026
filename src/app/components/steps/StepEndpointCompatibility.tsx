@@ -526,7 +526,13 @@ function FdcAgentSection({
   }
 
   /* Shared engine helper — same logic the report uses, so Step 7 and the PDF agree. */
-  const { osRows, officeRows, findings } = computeFdcAnalysis(matrix, selectedOS, selectedOffice);
+  const { osRows, officeRows, findings } = computeFdcAnalysis(matrix, selectedOS, selectedOffice, fdcAgentVersion);
+
+  /* Persist the detected agent version so the report recomputes the same
+     version-support verdicts without needing the Step 6 CSV threaded in. */
+  useEffect(() => {
+    setInput((prev) => (prev.fdcAgentVersion === fdcAgentVersion ? prev : { ...prev, fdcAgentVersion }));
+  }, [fdcAgentVersion, setInput]);
 
   const SEVC: Record<'CRITICAL' | 'HIGH' | 'MEDIUM', { color: string; bg: string; border: string }> = {
     CRITICAL: { color: '#A30080', bg: '#FDF2F8', border: '#FBCFE8' },
@@ -540,6 +546,14 @@ function FdcAgentSection({
       : match.status === 'eos'
         ? <span style={{ fontSize: '10.5px', fontWeight: 700, color: '#A30080', background: '#FDF2F8', border: '1px solid #FBCFE8', borderRadius: 5, padding: '2px 8px' }}>EOS</span>
         : <span style={{ fontSize: '10.5px', fontWeight: 700, color: '#16A34A', background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 5, padding: '2px 8px' }}>SUPPORTED{supportedFrom ? ` · ${supportedFrom}` : ''}</span>;
+
+  /* Verdict for the customer's agent version vs the row's required minimum. */
+  const agentBadge = (compatible: boolean | null, required: string) =>
+    compatible === true
+      ? <span style={{ fontSize: '10px', fontWeight: 700, color: '#16A34A', background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 5, padding: '2px 7px' }}>✓ AGENT OK</span>
+      : compatible === false
+        ? <span style={{ fontSize: '10px', fontWeight: 700, color: '#DC2626', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 5, padding: '2px 7px' }}>UPGRADE → min v{required}</span>
+        : <span style={{ fontSize: '10px', color: '#CBD5E1' }}>—</span>;
 
   return (
     <div className="rounded-xl overflow-hidden" style={{ background: '#FFFFFF', border: '1.5px solid #A7F3D0' }}>
@@ -633,10 +647,11 @@ function FdcAgentSection({
                     <div style={{ fontSize: '10px', fontWeight: 800, color: '#0F2952', textTransform: 'uppercase', letterSpacing: '0.05em', padding: '8px 12px', background: '#F8FAFC' }}>OS Support</div>
                     <table className="w-full" style={{ borderCollapse: 'separate', borderSpacing: 0 }}>
                       <tbody>
-                        {osRows.map(({ os, match }, ri) => (
+                        {osRows.map(({ os, match, agentCompatible, requiredVersion }, ri) => (
                           <tr key={os} style={{ borderTop: '1px solid #EEF0F5', background: ri % 2 === 0 ? '#FFFFFF' : '#FBFCFE' }}>
                             <td style={{ padding: '8px 12px', fontSize: '12px', color: '#0F2952', fontWeight: 600 }}>{os}</td>
-                            <td style={{ padding: '8px 12px', textAlign: 'right' }}>{statusBadge(match, match?.supportedFrom)}</td>
+                            <td style={{ padding: '8px 12px', textAlign: 'center' }}>{statusBadge(match, match?.supportedFrom)}</td>
+                            <td style={{ padding: '8px 12px', textAlign: 'right' }}>{agentBadge(agentCompatible, requiredVersion)}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -649,10 +664,11 @@ function FdcAgentSection({
                     <div style={{ fontSize: '10px', fontWeight: 800, color: '#0F2952', textTransform: 'uppercase', letterSpacing: '0.05em', padding: '8px 12px', background: '#F8FAFC' }}>Office Versions Support</div>
                     <table className="w-full" style={{ borderCollapse: 'separate', borderSpacing: 0 }}>
                       <tbody>
-                        {officeRows.map(({ product, match }, ri) => (
+                        {officeRows.map(({ product, match, agentCompatible, requiredVersion }, ri) => (
                           <tr key={product} style={{ borderTop: '1px solid #EEF0F5', background: ri % 2 === 0 ? '#FFFFFF' : '#FBFCFE' }}>
                             <td style={{ padding: '8px 12px', fontSize: '12px', color: '#0F2952', fontWeight: 600 }}>{product}{match?.versions ? <span style={{ color: '#94A3B8', fontWeight: 400, fontFamily: 'monospace', marginLeft: 6 }}>{match.versions}</span> : null}</td>
-                            <td style={{ padding: '8px 12px', textAlign: 'right' }}>{statusBadge(match, match?.minAgent)}</td>
+                            <td style={{ padding: '8px 12px', textAlign: 'center' }}>{statusBadge(match, match?.minAgent)}</td>
+                            <td style={{ padding: '8px 12px', textAlign: 'right' }}>{agentBadge(agentCompatible, requiredVersion)}</td>
                           </tr>
                         ))}
                       </tbody>

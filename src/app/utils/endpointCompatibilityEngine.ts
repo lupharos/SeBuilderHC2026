@@ -54,6 +54,9 @@ export interface EndpointCompatibilityInput {
   fdcOSEnvironment?: string[];
   /** Microsoft Office products the customer uses (matches FDC matrix Office Versions products). */
   fdcOfficeVersions?: string[];
+  /** Detected DSPM + FDC agent version (Step 6 CSV or Step 4) — persisted so
+      the report can recompute the same version-support verdicts. */
+  fdcAgentVersion?: string;
   /** @deprecated old per-OS Office flag model — kept so old sessions hydrate. */
   fdcOfficeApps?: string[];
 }
@@ -79,47 +82,86 @@ export const EMPTY_COMPAT_INPUT: EndpointCompatibilityInput = {
 export interface FdcOSAnalysisRow {
   os: string;
   match: EndpointMatrixOSRow | undefined;
+  /** Minimum agent version parsed from the matched row's supportedFrom. */
+  requiredVersion: string;
+  /** true = customer agent >= required; false = below required; null = unknown
+      (no agent version, no parseable minimum, or no matrix match). */
+  agentCompatible: boolean | null;
 }
 export interface FdcOfficeAnalysisRow {
   product: string;
   match: FdcOfficeVersionRow | undefined;
+  requiredVersion: string;
+  agentCompatible: boolean | null;
 }
 export interface FdcFinding {
   sev: 'CRITICAL' | 'HIGH' | 'MEDIUM';
   text: string;
 }
 export interface FdcAnalysis {
+  agentVersion: string;
   osRows: FdcOSAnalysisRow[];
   officeRows: FdcOfficeAnalysisRow[];
   findings: FdcFinding[];
+}
+
+/* Pull the first dotted-number token out of a free-text version/min-agent
+   string (e.g. "5.1.0", "5.2.0+", "min S 5.1"). */
+function extractVersion(s: string): string {
+  const m = (s || '').match(/\d+(?:\.\d+)+/);
+  return m ? m[0] : '';
+}
+function cmpVer(a: string, b: string): number {
+  const pa = a.split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = b.split('.').map((n) => parseInt(n, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d > 0 ? 1 : -1;
+  }
+  return 0;
 }
 
 export function computeFdcAnalysis(
   matrix: EndpointSupportMatrix,
   osEnvironment: string[],
   officeProducts: string[],
+  agentVersion = '',
 ): FdcAnalysis {
   const fdc = normalizeFdcMatrix(matrix.fdc);
   const allOS = [...fdc.windows, ...fdc.macos, ...fdc.vdi];
-  const osRows: FdcOSAnalysisRow[] = osEnvironment.map((os) => ({
-    os,
-    match: allOS.find((r) => r.platform === os),
-  }));
-  const officeRows: FdcOfficeAnalysisRow[] = officeProducts.map((product) => ({
-    product,
-    match: fdc.officeVersions.find((r) => r.product === product),
-  }));
+  const agentV = extractVersion(agentVersion);
+
+  /* Compare the customer agent against a row's required min-agent string. */
+  const verdict = (required: string): { requiredVersion: string; agentCompatible: boolean | null } => {
+    const reqV = extractVersion(required);
+    if (!agentV || !reqV) return { requiredVersion: reqV, agentCompatible: null };
+    return { requiredVersion: reqV, agentCompatible: cmpVer(agentV, reqV) >= 0 };
+  };
+
+  const osRows: FdcOSAnalysisRow[] = osEnvironment.map((os) => {
+    const match = allOS.find((r) => r.platform === os);
+    const v = match ? verdict(match.supportedFrom) : { requiredVersion: '', agentCompatible: null };
+    return { os, match, ...v };
+  });
+  const officeRows: FdcOfficeAnalysisRow[] = officeProducts.map((product) => {
+    const match = fdc.officeVersions.find((r) => r.product === product);
+    const v = match ? verdict(match.minAgent) : { requiredVersion: '', agentCompatible: null };
+    return { product, match, ...v };
+  });
 
   const findings: FdcFinding[] = [];
-  for (const { os, match } of osRows) {
+  for (const { os, match, requiredVersion, agentCompatible } of osRows) {
     if (!match) { findings.push({ sev: 'HIGH', text: `${os} is not in the DSPM + FDC agent support matrix — not certified.` }); continue; }
     if (match.status === 'eos') findings.push({ sev: 'CRITICAL', text: `${os} is End-of-Support for the DSPM + FDC agent — plan migration.` });
+    if (agentCompatible === false) findings.push({ sev: 'HIGH', text: `Agent v${agentV} is below the v${requiredVersion} required for ${os} — upgrade the DSPM + FDC agent.` });
   }
-  for (const { product, match } of officeRows) {
+  for (const { product, match, requiredVersion, agentCompatible } of officeRows) {
     if (!match) { findings.push({ sev: 'MEDIUM', text: `${product} is not listed as supported by the DSPM + FDC agent.` }); continue; }
     if (match.status === 'eos') findings.push({ sev: 'MEDIUM', text: `${product} is End-of-Support for the DSPM + FDC agent.` });
+    if (agentCompatible === false) findings.push({ sev: 'HIGH', text: `Agent v${agentV} is below the v${requiredVersion} required for ${product} — upgrade the DSPM + FDC agent.` });
   }
-  return { osRows, officeRows, findings };
+  return { agentVersion: agentV, osRows, officeRows, findings };
 }
 
 export interface CompatibilityFinding {
