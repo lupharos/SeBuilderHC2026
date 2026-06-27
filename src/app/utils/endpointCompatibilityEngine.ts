@@ -54,9 +54,16 @@ export interface EndpointCompatibilityInput {
   fdcOSEnvironment?: string[];
   /** Microsoft Office products the customer uses (matches FDC matrix Office Versions products). */
   fdcOfficeVersions?: string[];
-  /** Detected DSPM + FDC agent version (Step 6 CSV or Step 4) — persisted so
-      the report can recompute the same version-support verdicts. */
+  /** Effective DSPM + FDC agent version (manual override if set, else auto-
+      detected from Step 6 CSV / Step 4) — persisted so the report recomputes
+      the same version-support verdicts. Maintained automatically. */
   fdcAgentVersion?: string;
+  /** Analyst's manual agent-version override from Step 7 edit mode. Empty =
+      use the auto-detected version. */
+  fdcAgentVersionManual?: string;
+  /** Operator-edited DSPM + FDC findings (Step 7 edit mode). When defined it
+      replaces the auto-computed findings (even when empty); undefined = auto. */
+  fdcFindings?: { sev: 'CRITICAL' | 'HIGH' | 'MEDIUM'; text: string }[];
   /** @deprecated old per-OS Office flag model — kept so old sessions hydrate. */
   fdcOfficeApps?: string[];
 }

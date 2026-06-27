@@ -337,7 +337,7 @@ export function StepEndpointCompatibility({
 
       {/* FDC (Data Classification) agent analysis — shown when DSPM or
           Classification is in scope. Independent of the F1E assessment below. */}
-      {fdcInScope && <FdcAgentSection matrix={matrix} input={input} setInput={setInput} fdcAgentSummary={fdcAgentSummary ?? null} versionEntries={versionEntries} selectedProducts={selectedProducts} />}
+      {fdcInScope && <FdcAgentSection matrix={matrix} input={input} setInput={setInput} fdcAgentSummary={fdcAgentSummary ?? null} versionEntries={versionEntries} selectedProducts={selectedProducts} editMode={editMode} />}
 
       {/* F1E agent assessment — only when DLP or Web is in scope. */}
       {f1eInScope && (
@@ -473,7 +473,7 @@ export function StepEndpointCompatibility({
    FDC (DATA CLASSIFICATION) AGENT SECTION
 ═══════════════════════════════════════════════════════════════════ */
 function FdcAgentSection({
-  matrix, input, setInput, fdcAgentSummary, versionEntries, selectedProducts,
+  matrix, input, setInput, fdcAgentSummary, versionEntries, selectedProducts, editMode = false,
 }: {
   matrix: EndpointSupportMatrix;
   input: EndpointCompatibilityInput;
@@ -481,13 +481,15 @@ function FdcAgentSection({
   fdcAgentSummary?: FdcAgentSummary | null;
   versionEntries?: Record<string, VersionEntry>;
   selectedProducts?: Record<string, boolean>;
+  editMode?: boolean;
 }) {
   const fdcEmpty = isFdcMatrixEmpty(matrix);
 
-  /* Detected DSPM + FDC agent version — same idea as the F1E agent context.
+  /* Auto-detected DSPM + FDC agent version — same idea as the F1E agent context.
      Priority: Step 6 Agent Management CSV (latest deployed) → Step 4
      "FDC + DSPM Agent" installed version (DSPM or Classification entry). */
-  const step4FdcVersion = (() => {
+  const autoFdcVersion = (() => {
+    if (fdcAgentSummary?.latestVersion) return fdcAgentSummary.latestVersion;
     const ids = ['dspm_agent', 'cls_agent'];
     for (const id of ids) {
       const e = versionEntries?.[id];
@@ -496,9 +498,15 @@ function FdcAgentSection({
     }
     return '';
   })();
-  const fdcAgentSource: 'step6' | 'step4' | null =
-    fdcAgentSummary?.latestVersion ? 'step6' : step4FdcVersion ? 'step4' : null;
-  const fdcAgentVersion = fdcAgentSummary?.latestVersion || step4FdcVersion || '';
+  const manualFdcVersion = (input.fdcAgentVersionManual ?? '').trim();
+  /* Effective version used for analysis + report: manual override wins, else
+     auto-detected. */
+  const fdcAgentVersion = manualFdcVersion || autoFdcVersion;
+  const fdcAgentSource: 'step6' | 'step4' | 'manual' | null =
+    manualFdcVersion ? 'manual'
+    : fdcAgentSummary?.latestVersion ? 'step6'
+    : autoFdcVersion ? 'step4'
+    : null;
   const fdcScopeLabel =
     selectedProducts?.dspm && selectedProducts?.cls ? 'DSPM + Classification'
     : selectedProducts?.dspm ? 'DSPM'
@@ -526,13 +534,24 @@ function FdcAgentSection({
   }
 
   /* Shared engine helper — same logic the report uses, so Step 7 and the PDF agree. */
-  const { osRows, officeRows, findings } = computeFdcAnalysis(matrix, selectedOS, selectedOffice, fdcAgentVersion);
+  const { osRows, officeRows, findings: computedFindings } = computeFdcAnalysis(matrix, selectedOS, selectedOffice, fdcAgentVersion);
+  /* Operator-edited findings (edit mode) win when present; undefined = auto. */
+  const findings = input.fdcFindings ?? computedFindings;
 
-  /* Persist the detected agent version so the report recomputes the same
-     version-support verdicts without needing the Step 6 CSV threaded in. */
+  /* Mirror the EFFECTIVE version (manual override or auto) into
+     input.fdcAgentVersion so the report recomputes identical verdicts. The
+     manual override lives in its own field, so this never clobbers it. */
   useEffect(() => {
     setInput((prev) => (prev.fdcAgentVersion === fdcAgentVersion ? prev : { ...prev, fdcAgentVersion }));
   }, [fdcAgentVersion, setInput]);
+
+  /* ── Edit-mode mutators for the FDC findings override ── */
+  const setFdcFindings = (next: { sev: 'CRITICAL' | 'HIGH' | 'MEDIUM'; text: string }[] | undefined) =>
+    setInput((prev) => ({ ...prev, fdcFindings: next }));
+  const patchFinding = (i: number, p: Partial<{ sev: 'CRITICAL' | 'HIGH' | 'MEDIUM'; text: string }>) =>
+    setFdcFindings(findings.map((f, idx) => (idx === i ? { ...f, ...p } : f)));
+  const addFinding = () => setFdcFindings([...findings, { sev: 'MEDIUM', text: '' }]);
+  const deleteFinding = (i: number) => setFdcFindings(findings.filter((_, idx) => idx !== i));
 
   const SEVC: Record<'CRITICAL' | 'HIGH' | 'MEDIUM', { color: string; bg: string; border: string }> = {
     CRITICAL: { color: '#A30080', bg: '#FDF2F8', border: '#FBCFE8' },
@@ -569,24 +588,36 @@ function FdcAgentSection({
           <div className="px-5 py-4">
             <div className="flex items-center justify-between mb-3">
               <div style={{ fontSize: '9.5px', fontWeight: 700, letterSpacing: '0.14em', opacity: 0.6 }}>
-                {fdcAgentSource === 'step6' ? 'AGENT CONTEXT — STEP 6 · AGENT MANAGEMENT CSV'
+                {fdcAgentSource === 'manual' ? 'AGENT CONTEXT — MANUAL OVERRIDE'
+                  : fdcAgentSource === 'step6' ? 'AGENT CONTEXT — STEP 6 · AGENT MANAGEMENT CSV'
                   : fdcAgentSource === 'step4' ? 'AGENT CONTEXT — STEP 4 · VERSION & EOS'
                   : 'AGENT CONTEXT'}
               </div>
               {fdcAgentVersion && (
                 <span className="flex items-center gap-1.5" style={{ fontSize: '9px', fontWeight: 700, color: '#A7F3D0', background: 'rgba(167,243,208,0.12)', border: '1px solid rgba(167,243,208,0.3)', borderRadius: 4, padding: '2px 7px', letterSpacing: '0.06em' }}>
-                  <Cpu size={9} /> {fdcAgentSource === 'step6' ? 'AUTO-DETECTED' : 'FROM VERSION CHECK'}
+                  <Cpu size={9} /> {fdcAgentSource === 'manual' ? 'MANUAL' : fdcAgentSource === 'step6' ? 'AUTO-DETECTED' : 'FROM VERSION CHECK'}
                 </span>
               )}
             </div>
             <div className="flex items-baseline gap-3">
-              <div style={{ fontSize: '24px', fontWeight: 800, color: '#fff', letterSpacing: '-0.02em', fontFamily: "'JetBrains Mono', monospace" }}>
-                {fdcAgentVersion || '—'}
-              </div>
+              {editMode ? (
+                <input
+                  value={input.fdcAgentVersionManual ?? ''}
+                  onChange={(e) => setInput((prev) => ({ ...prev, fdcAgentVersionManual: e.target.value }))}
+                  placeholder={autoFdcVersion || 'e.g. 5.2.0'}
+                  title="Manual override — leave blank to use the auto-detected version"
+                  style={{ fontSize: '20px', fontWeight: 800, color: '#fff', letterSpacing: '-0.02em', fontFamily: "'JetBrains Mono', monospace", background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(167,243,208,0.4)', borderRadius: 8, padding: '4px 10px', width: 160, outline: 'none' }}
+                />
+              ) : (
+                <div style={{ fontSize: '24px', fontWeight: 800, color: '#fff', letterSpacing: '-0.02em', fontFamily: "'JetBrains Mono', monospace" }}>
+                  {fdcAgentVersion || '—'}
+                </div>
+              )}
               <div style={{ fontSize: '11px', opacity: 0.6 }}>
-                {fdcAgentVersion
-                  ? (fdcAgentSource === 'step6' ? `latest deployed (${fdcScopeLabel})` : `installed (${fdcScopeLabel})`)
-                  : 'no version detected'}
+                {editMode ? 'editable — drives the agent-version verdicts below'
+                  : fdcAgentVersion
+                    ? (fdcAgentSource === 'step6' ? `latest deployed (${fdcScopeLabel})` : fdcAgentSource === 'manual' ? `manual (${fdcScopeLabel})` : `installed (${fdcScopeLabel})`)
+                    : 'no version detected'}
               </div>
             </div>
             {fdcAgentSource === 'step6' && fdcAgentSummary && (
@@ -676,7 +707,49 @@ function FdcAgentSection({
                   </div>
                 )}
 
-                {findings.length > 0 ? (
+                {editMode ? (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                      <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                        Findings ({findings.length}) <span style={{ color: '#7C3AED', fontWeight: 800 }}>· EDITING</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {input.fdcFindings !== undefined && (
+                          <button onClick={() => setFdcFindings(undefined)}
+                            style={{ fontSize: '10px', padding: '3px 8px', background: '#fff', color: '#475569', border: '1px solid #CBD5E1', borderRadius: 5, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <RotateCcw size={10} /> Reset to auto
+                          </button>
+                        )}
+                        <button onClick={addFinding}
+                          style={{ fontSize: '10px', padding: '3px 8px', background: '#F0FDF4', color: '#15803D', border: '1px solid #BBF7D0', borderRadius: 5, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, fontWeight: 600 }}>
+                          <Plus size={10} /> Add finding
+                        </button>
+                      </div>
+                    </div>
+                    {findings.length === 0 && (
+                      <div style={{ fontSize: '11.5px', color: '#94A3B8', fontStyle: 'italic', padding: '8px 0' }}>No findings. Click "Add finding", or "Reset to auto" to restore the computed list.</div>
+                    )}
+                    {findings.map((f, i) => {
+                      const c = SEVC[f.sev] ?? SEVC.MEDIUM;
+                      return (
+                        <div key={i} className="flex items-center gap-2" style={{ background: c.bg, border: `1px solid ${c.border}`, borderLeft: `3px solid ${c.color}`, borderRadius: 6, padding: '7px 10px' }}>
+                          <select value={f.sev} onChange={(e) => patchFinding(i, { sev: e.target.value as 'CRITICAL' | 'HIGH' | 'MEDIUM' })}
+                            style={{ fontSize: '9px', fontWeight: 800, color: c.color, background: '#fff', border: `1px solid ${c.border}`, padding: '2px 5px', borderRadius: 4, flexShrink: 0 }}>
+                            <option value="CRITICAL">CRITICAL</option>
+                            <option value="HIGH">HIGH</option>
+                            <option value="MEDIUM">MEDIUM</option>
+                          </select>
+                          <input value={f.text} onChange={(e) => patchFinding(i, { text: e.target.value })}
+                            placeholder="Finding text"
+                            style={{ flex: 1, fontSize: '11.5px', color: '#475569', padding: '4px 8px', border: '1px solid #E2E8F0', borderRadius: 5, background: '#fff', outline: 'none' }} />
+                          <button onClick={() => deleteFinding(i)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#94A3B8', padding: 3, flexShrink: 0 }} title="Remove">
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : findings.length > 0 ? (
                   <div className="flex flex-col gap-2">
                     <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                       Findings ({findings.length})

@@ -4917,7 +4917,9 @@ ${(p.selectedProducts.dspm || p.selectedProducts.cls) && !isFdcMatrixEmpty(p.end
   const selOS = p.endpointCompatInput.fdcOSEnvironment ?? [];
   const selOffice = p.endpointCompatInput.fdcOfficeVersions ?? [];
   const fdcAgentV = p.endpointCompatInput.fdcAgentVersion ?? '';
-  const { osRows, officeRows, findings } = computeFdcAnalysis(p.endpointMatrix, selOS, selOffice, fdcAgentV);
+  const { osRows, officeRows, findings: computedFdcFindings } = computeFdcAnalysis(p.endpointMatrix, selOS, selOffice, fdcAgentV);
+  /* Honour operator-edited findings from Step 7 edit mode. */
+  const findings = p.endpointCompatInput.fdcFindings ?? computedFdcFindings;
   const SEV_CFG: Record<string, { color: string; bg: string; border: string }> = {
     CRITICAL: { color: '#A30080', bg: '#FDF2F8', border: '#FBCFE8' },
     HIGH:     { color: '#DC2626', bg: '#FEF2F2', border: '#FECACA' },

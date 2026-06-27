@@ -1,6 +1,6 @@
 {
   "productName": "HC Studio",
-  "version": "2026.06.27.8",
-  "releasedAt": "2026-06-27T17:20:00Z",
-  "notes": "Release notes for HC Studio version 2026.06.27.8:\n\n- Agent Compatibility (Step 7): the DSPM + FDC section now also tells you whether the customer's DETECTED agent version is supported for each selected OS and Office product, not just whether the OS/Office is certified. Each row shows the matrix certification badge plus an 'AGENT OK' or 'UPGRADE → min vX' verdict comparing the deployed agent version against that row's minimum. Version-below cases are added to the findings, and the same verdicts appear in the exported report.\n- (F1E already performed this OS/browser agent-version check.)\n\nFor more details, please refer to the official documentation or contact support."
+  "version": "2026.06.27.9",
+  "releasedAt": "2026-06-27T18:30:00Z",
+  "notes": "Release notes for HC Studio version 2026.06.27.9:\n\n- Agent Compatibility (Step 7): clicking Edit now also makes the DSPM + FDC section editable. The detected agent version becomes an editable field (manual override that sticks after you leave edit mode; clear it to fall back to auto-detect), and the FDC findings can be added, reworded, re-severitied or removed — with a 'Reset to auto' button. OS / Office selections were already editable. All edits drive the version-support verdicts and flow into the exported report.\n\nFor more details, please refer to the official documentation or contact support."
 }
