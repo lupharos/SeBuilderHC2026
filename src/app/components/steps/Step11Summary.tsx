@@ -4957,7 +4957,7 @@ ${(p.selectedProducts.dspm || p.selectedProducts.cls) && !isFdcMatrixEmpty(p.end
   <div class="section-eyebrow">Section 7.6 · Part II · DSPM + FDC Agent Compatibility</div>
   <div class="section-title">DSPM + FDC Agent — Endpoint Compatibility</div>
   <p class="section-lead">
-    Customer fleet measured against the Forcepoint Data Classification (DSPM + FDC) agent support matrix${fdcAgentV ? ` (detected agent v${esc(fdcAgentV)})` : ''}. This agent is separate from F1E; what matters is which operating system is certified, which Microsoft Office version the classification add-in supports, and whether the deployed agent version meets each minimum.
+    Customer fleet measured against the Forcepoint Data Classification (DSPM + FDC) agent support matrix${fdcAgentV ? ` (detected agent v${esc(fdcAgentV)})` : ''}. Highlights which operating system is certified, which Microsoft Office version the classification add-in supports, and whether the deployed agent version meets each minimum.
   </p>
 
   ${osHtml}

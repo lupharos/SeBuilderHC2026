@@ -579,7 +579,6 @@ function FdcAgentSection({
       <div className="flex items-center gap-2.5 px-5 py-3.5" style={{ background: '#ECFDF5', borderBottom: '1.5px solid #A7F3D0' }}>
         <span style={{ fontSize: '15px' }}>🏷️</span>
         <span style={{ fontSize: '13px', fontWeight: 700, color: '#059669' }}>DSPM + FDC Agent — Endpoint Compatibility</span>
-        <span style={{ fontSize: '10.5px', color: '#047857', marginLeft: 'auto' }}>Data Classification endpoint agent (separate from F1E)</span>
       </div>
 
       {/* Agent context — detected FDC agent version, mirroring the F1E card. */}
