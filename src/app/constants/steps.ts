@@ -40,27 +40,35 @@ export const STEP_TITLES: Record<number, string> = {
      • Step 6 (Endpoint Agent Analysis — CSV ingest) is DLP-only — the CSV
        only ships with DLP deployments.
      • Step 7 (Agent Compatibility) runs for DLP or Web (F1E agent), and also
-       for DSPM or Classification (FDC agent). In Web-only scope the F1E side
-       falls back to the "Endpoint Agent (Hybrid Web)" installed version from
-       Step 4; the FDC side appears whenever DSPM/Classification is in scope.
+       for DSPM or Classification (FDC agent). Additionally, it is skipped if
+       none of the agent version entries (web_endpoint, dlp_endpoint, cls_agent)
+       are present in the Version & EoS Summary.
    Add new entries here when a future step becomes product-conditional. */
-const STEP_SKIP_RULES: Partial<Record<number, (sp: Record<string, boolean>) => boolean>> = {
+type VersionEntries = Record<string, any> | undefined;
+
+const STEP_SKIP_RULES: Partial<Record<number, (sp: Record<string, boolean>, ve?: VersionEntries) => boolean>> = {
   6: (sp) => !sp.data && !sp.dspm && !sp.cls,
-  7: (sp) => !sp.data && !sp.web && !sp.dspm && !sp.cls,
+  7: (sp, ve) => {
+    // Skip if no product scope matches
+    if (!sp.data && !sp.web && !sp.dspm && !sp.cls) return true;
+    // Skip if none of the agent entries exist in version data
+    const hasAgentEntries = ve && (ve.web_endpoint || ve.dlp_endpoint || ve.cls_agent);
+    return !hasAgentEntries;
+  },
 };
 
-export function isStepSkipped(stepId: number, selectedProducts: Record<string, boolean>): boolean {
+export function isStepSkipped(stepId: number, selectedProducts: Record<string, boolean>, versionEntries?: VersionEntries): boolean {
   const rule = STEP_SKIP_RULES[stepId];
-  return rule ? rule(selectedProducts) : false;
+  return rule ? rule(selectedProducts, versionEntries) : false;
 }
 
 /* Returns the next visible step in `direction` (+1 forward, -1 back). Clamps
    to the wizard bounds; if no visible step exists in the requested direction
    the caller's current step is returned unchanged. */
-export function nextVisibleStep(from: number, direction: 1 | -1, selectedProducts: Record<string, boolean>): number {
+export function nextVisibleStep(from: number, direction: 1 | -1, selectedProducts: Record<string, boolean>, versionEntries?: VersionEntries): number {
   let s = from + direction;
   while (s >= 1 && s <= TOTAL_STEPS) {
-    if (!isStepSkipped(s, selectedProducts)) return s;
+    if (!isStepSkipped(s, selectedProducts, versionEntries)) return s;
     s += direction;
   }
   return from;

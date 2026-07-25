@@ -394,10 +394,10 @@ export function Dashboard() {
      forward to the next visible step. The forward direction is chosen so
      prior work stays "behind" the cursor rather than being walked back over. */
   useEffect(() => {
-    if (isStepSkipped(currentStep, selectedProducts)) {
-      setCurrentStep((s) => nextVisibleStep(s, 1, selectedProducts));
+    if (isStepSkipped(currentStep, selectedProducts, versionEntries)) {
+      setCurrentStep((s) => nextVisibleStep(s, 1, selectedProducts, versionEntries));
     }
-  }, [selectedProducts, currentStep]);
+  }, [selectedProducts, currentStep, versionEntries]);
 
   /* ── Sessions state (persisted) ── */
   const [rawSessions, setRawSessions] = useLocalStorage<unknown[]>('hc_sessions', []);
@@ -750,6 +750,7 @@ export function Dashboard() {
             sessionData={sessionData}
             onNewSession={handleNewSession}
             selectedProducts={selectedProducts}
+            versionEntries={versionEntries}
           />
           <div className="flex-1 flex flex-col overflow-hidden min-w-0">
             <MainContent
@@ -839,10 +840,11 @@ export function Dashboard() {
               saveState={saveState}
               onSave={handleSave}
               onCancel={handleCancel}
-              onPrev={() => setCurrentStep((s) => nextVisibleStep(s, -1, selectedProducts))}
-              onNext={() => setCurrentStep((s) => nextVisibleStep(s, 1, selectedProducts))}
+              onPrev={() => setCurrentStep((s) => nextVisibleStep(s, -1, selectedProducts, versionEntries))}
+              onNext={() => setCurrentStep((s) => nextVisibleStep(s, 1, selectedProducts, versionEntries))}
               blockReason={blockReason}
               selectedProducts={selectedProducts}
+              versionEntries={versionEntries}
             />
           </div>
         </>

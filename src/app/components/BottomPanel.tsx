@@ -1,5 +1,6 @@
 import { ChevronLeft, ArrowRight, Save, Check, CheckCircle2, AlertCircle, X } from 'lucide-react';
 import { isStepSkipped } from '../constants/steps';
+import type { VersionEntry } from './steps/Step4VersionCheck';
 
 interface BottomPanelProps {
   currentStep: number;
@@ -13,6 +14,7 @@ interface BottomPanelProps {
   onNext: () => void;
   blockReason?: string;
   selectedProducts: Record<string, boolean>;
+  versionEntries?: Record<string, VersionEntry>;
 }
 
 export function BottomPanel({
@@ -27,11 +29,12 @@ export function BottomPanel({
   onNext,
   blockReason,
   selectedProducts,
+  versionEntries,
 }: BottomPanelProps) {
   /* Dots reflect visible-only steps so a deselected product doesn't show as
      an inert grey dot on the progress strip. */
   const visibleSteps = Array.from({ length: totalSteps }, (_, i) => i + 1)
-    .filter((s) => !isStepSkipped(s, selectedProducts));
+    .filter((s) => !isStepSkipped(s, selectedProducts, versionEntries));
   const visibleIdx = visibleSteps.indexOf(currentStep);
   const progress = visibleSteps.length > 1
     ? Math.round((Math.max(0, visibleIdx) / (visibleSteps.length - 1)) * 100)

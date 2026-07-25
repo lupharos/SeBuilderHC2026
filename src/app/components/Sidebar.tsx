@@ -1,6 +1,7 @@
 import { Check, ChevronRight, Plus } from 'lucide-react';
 import type { SessionData } from './Dashboard';
 import { STEP_COLORS, STEP_LABELS, TOTAL_STEPS, isStepSkipped } from '../constants/steps';
+import type { VersionEntry } from './steps/Step4VersionCheck';
 
 interface SidebarProps {
   currentStep: number;
@@ -8,6 +9,7 @@ interface SidebarProps {
   sessionData: SessionData;
   onNewSession: () => void;
   selectedProducts: Record<string, boolean>;
+  versionEntries?: Record<string, VersionEntry>;
 }
 
 const ALL_STEPS = Array.from({ length: TOTAL_STEPS }, (_, i) => ({
@@ -16,11 +18,11 @@ const ALL_STEPS = Array.from({ length: TOTAL_STEPS }, (_, i) => ({
   code: String(i + 1).padStart(2, '0'),
 }));
 
-export function Sidebar({ currentStep, onStepChange, sessionData, onNewSession, selectedProducts }: SidebarProps) {
+export function Sidebar({ currentStep, onStepChange, sessionData, onNewSession, selectedProducts, versionEntries }: SidebarProps) {
   /* Filter out steps the current product scope makes irrelevant. The original
      step IDs are preserved (so STEP_COLORS / state keys still match); the
      sidebar simply doesn't render them. */
-  const steps = ALL_STEPS.filter((s) => !isStepSkipped(s.id, selectedProducts));
+  const steps = ALL_STEPS.filter((s) => !isStepSkipped(s.id, selectedProducts, versionEntries));
   const initials = sessionData.customerName
     ? sessionData.customerName.substring(0, 2).toUpperCase()
     : '—';
