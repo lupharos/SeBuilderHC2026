@@ -36,18 +36,26 @@ export const STEP_TITLES: Record<number, string> = {
 /* ─── Step visibility rules ──────────────────────────────────────────
    Maps step IDs to predicates that return TRUE when the step should be
    SKIPPED for the given product scope. Rules are keyed on `selectedProducts`
-   from Step 2.
-     • Step 6 (Endpoint Agent Analysis — CSV ingest) is DLP-only — the CSV
-       only ships with DLP deployments.
-     • Step 7 (Agent Compatibility) runs for DLP or Web (F1E agent), and also
-       for DSPM or Classification (FDC agent). Additionally, it is skipped if
-       none of the agent version entries (web_endpoint, dlp_endpoint, cls_agent)
-       are present in the Version & EoS Summary.
+   from Step 2. Additional optional parameters:
+     • versionEntries: for checking version summary agent entries
+     • endpointAgentData: for checking if endpoint agent CSV was imported
+
+   Step rules:
+     • Step 6 (Endpoint Agent Analysis) — skipped if no DLP/DSPM/Classification,
+       OR if no endpoint agent CSV data imported.
+     • Step 7 (Agent Compatibility) — skipped if no product scope, OR if
+       no agent version entries (web_endpoint, dlp_endpoint, cls_agent) exist.
    Add new entries here when a future step becomes product-conditional. */
 type VersionEntries = Record<string, any> | undefined;
+type EndpointAgentData = any; // EndpointAgentSummary | null
 
-const STEP_SKIP_RULES: Partial<Record<number, (sp: Record<string, boolean>, ve?: VersionEntries) => boolean>> = {
-  6: (sp) => !sp.data && !sp.dspm && !sp.cls,
+const STEP_SKIP_RULES: Partial<Record<number, (sp: Record<string, boolean>, ve?: VersionEntries, ea?: EndpointAgentData) => boolean>> = {
+  6: (sp, ve, ea) => {
+    // Skip if no product scope for endpoint agents
+    if (!sp.data && !sp.dspm && !sp.cls) return true;
+    // Skip if no endpoint agent CSV was imported
+    return !ea;
+  },
   7: (sp, ve) => {
     // Skip if no product scope matches
     if (!sp.data && !sp.web && !sp.dspm && !sp.cls) return true;
@@ -61,18 +69,18 @@ const STEP_SKIP_RULES: Partial<Record<number, (sp: Record<string, boolean>, ve?:
   },
 };
 
-export function isStepSkipped(stepId: number, selectedProducts: Record<string, boolean>, versionEntries?: VersionEntries): boolean {
+export function isStepSkipped(stepId: number, selectedProducts: Record<string, boolean>, versionEntries?: VersionEntries, endpointAgentData?: EndpointAgentData): boolean {
   const rule = STEP_SKIP_RULES[stepId];
-  return rule ? rule(selectedProducts, versionEntries) : false;
+  return rule ? rule(selectedProducts, versionEntries, endpointAgentData) : false;
 }
 
 /* Returns the next visible step in `direction` (+1 forward, -1 back). Clamps
    to the wizard bounds; if no visible step exists in the requested direction
    the caller's current step is returned unchanged. */
-export function nextVisibleStep(from: number, direction: 1 | -1, selectedProducts: Record<string, boolean>, versionEntries?: VersionEntries): number {
+export function nextVisibleStep(from: number, direction: 1 | -1, selectedProducts: Record<string, boolean>, versionEntries?: VersionEntries, endpointAgentData?: EndpointAgentData): number {
   let s = from + direction;
   while (s >= 1 && s <= TOTAL_STEPS) {
-    if (!isStepSkipped(s, selectedProducts, versionEntries)) return s;
+    if (!isStepSkipped(s, selectedProducts, versionEntries, endpointAgentData)) return s;
     s += direction;
   }
   return from;

@@ -394,10 +394,10 @@ export function Dashboard() {
      forward to the next visible step. The forward direction is chosen so
      prior work stays "behind" the cursor rather than being walked back over. */
   useEffect(() => {
-    if (isStepSkipped(currentStep, selectedProducts, versionEntries)) {
-      setCurrentStep((s) => nextVisibleStep(s, 1, selectedProducts, versionEntries));
+    if (isStepSkipped(currentStep, selectedProducts, versionEntries, endpointAgentSummary)) {
+      setCurrentStep((s) => nextVisibleStep(s, 1, selectedProducts, versionEntries, endpointAgentSummary));
     }
-  }, [selectedProducts, currentStep, versionEntries]);
+  }, [selectedProducts, currentStep, versionEntries, endpointAgentSummary]);
 
   /* ── Sessions state (persisted) ── */
   const [rawSessions, setRawSessions] = useLocalStorage<unknown[]>('hc_sessions', []);
@@ -751,6 +751,7 @@ export function Dashboard() {
             onNewSession={handleNewSession}
             selectedProducts={selectedProducts}
             versionEntries={versionEntries}
+            endpointAgentSummary={endpointAgentSummary}
           />
           <div className="flex-1 flex flex-col overflow-hidden min-w-0">
             <MainContent
@@ -840,11 +841,12 @@ export function Dashboard() {
               saveState={saveState}
               onSave={handleSave}
               onCancel={handleCancel}
-              onPrev={() => setCurrentStep((s) => nextVisibleStep(s, -1, selectedProducts, versionEntries))}
-              onNext={() => setCurrentStep((s) => nextVisibleStep(s, 1, selectedProducts, versionEntries))}
+              onPrev={() => setCurrentStep((s) => nextVisibleStep(s, -1, selectedProducts, versionEntries, endpointAgentSummary))}
+              onNext={() => setCurrentStep((s) => nextVisibleStep(s, 1, selectedProducts, versionEntries, endpointAgentSummary))}
               blockReason={blockReason}
               selectedProducts={selectedProducts}
               versionEntries={versionEntries}
+              endpointAgentSummary={endpointAgentSummary}
             />
           </div>
         </>

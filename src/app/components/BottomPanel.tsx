@@ -1,6 +1,7 @@
 import { ChevronLeft, ArrowRight, Save, Check, CheckCircle2, AlertCircle, X } from 'lucide-react';
 import { isStepSkipped } from '../constants/steps';
 import type { VersionEntry } from './steps/Step4VersionCheck';
+import type { EndpointAgentSummary } from './steps/endpointAgentParser';
 
 interface BottomPanelProps {
   currentStep: number;
@@ -15,6 +16,7 @@ interface BottomPanelProps {
   blockReason?: string;
   selectedProducts: Record<string, boolean>;
   versionEntries?: Record<string, VersionEntry>;
+  endpointAgentSummary?: EndpointAgentSummary | null;
 }
 
 export function BottomPanel({
@@ -30,11 +32,12 @@ export function BottomPanel({
   blockReason,
   selectedProducts,
   versionEntries,
+  endpointAgentSummary,
 }: BottomPanelProps) {
   /* Dots reflect visible-only steps so a deselected product doesn't show as
      an inert grey dot on the progress strip. */
   const visibleSteps = Array.from({ length: totalSteps }, (_, i) => i + 1)
-    .filter((s) => !isStepSkipped(s, selectedProducts, versionEntries));
+    .filter((s) => !isStepSkipped(s, selectedProducts, versionEntries, endpointAgentSummary));
   const visibleIdx = visibleSteps.indexOf(currentStep);
   const progress = visibleSteps.length > 1
     ? Math.round((Math.max(0, visibleIdx) / (visibleSteps.length - 1)) * 100)
