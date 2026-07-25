@@ -39,7 +39,7 @@ const CAT_CFG: Record<RecCategory, { label: string; icon: string; color: string;
   new_server:      { label: 'New Server',      icon: '🖥️', color: '#7C3AED', hint: 'Add new server or appliance' },
   hw_upgrade:      { label: 'HW Upgrade',      icon: '⚡', color: '#6366F1', hint: 'RAM, CPU upgrade' },
   migration:       { label: 'Migration',        icon: '🔄', color: '#0D9488', hint: 'Platform or device migration' },
-  version_upgrade: { label: 'Version Upgrade', icon: '⬆️', color: '#2563EB', hint: 'Firmware or software update' },
+  version_upgrade: { label: 'Hotfix / Patch',  icon: '🔧', color: '#2563EB', hint: 'Hotfix, patch, or critical update' },
   storage:         { label: 'Storage',          icon: '💾', color: '#0891B2', hint: 'Disk expansion, add storage' },
   ssl_security:    { label: 'SSL / Security',   icon: '🔒', color: '#DC2626', hint: 'SSL, TLS, hardening' },
   config_change:   { label: 'Config Change',    icon: '⚙️', color: '#D97706', hint: 'Policy or settings tuning' },
