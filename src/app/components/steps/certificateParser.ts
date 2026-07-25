@@ -27,6 +27,8 @@ export interface ParsedCertificate {
   certificateType: string;     // friendly: "Server / Host Certificate" | "Self-signed Root CA" | …
   status: 'VALID' | 'EXPIRING_SOON' | 'EXPIRED';
   parseError?: string;
+  isManual?: boolean;          // manual entry (not from file)
+  manualExpiryDate?: string;   // ISO YYYY-MM-DD for manual entries
 }
 
 export interface DistinguishedName {
@@ -421,4 +423,43 @@ export function certStatusIcon(status: ParsedCertificate['status']): string {
     case 'EXPIRED': return '❌';
     default: return '•';
   }
+}
+
+// Create a manual certificate entry (when file not available)
+export function createManualCertificate(name: string, expiryDate: string): ParsedCertificate {
+  const iso = expiryDate; // assumed YYYY-MM-DD format from input
+  const [year, month, day] = iso.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  const daysRemaining = Math.floor((date.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+  const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const expiryRaw = `${day} ${monthNames[month - 1]} ${year}`;
+
+  let status: 'VALID' | 'EXPIRING_SOON' | 'EXPIRED' = 'VALID';
+  if (daysRemaining < 0) status = 'EXPIRED';
+  else if (daysRemaining < 90) status = 'EXPIRING_SOON';
+
+  return {
+    fileName: `Manual - ${name}`,
+    fileLabel: 'Manual Entry',
+    index: 0,
+    subject: { raw: name, CN: name },
+    issuer: { raw: name, CN: name },
+    subjectCN: name,
+    issuerCN: name,
+    serialNumber: '',
+    validFrom: iso,
+    validTo: iso,
+    validFromRaw: expiryRaw,
+    validToRaw: expiryRaw,
+    daysRemaining,
+    keyAlgorithm: '',
+    keyBits: 0,
+    signatureAlgorithm: '',
+    isCA: false,
+    isSelfSigned: true,
+    certificateType: 'Manual Entry',
+    status,
+    isManual: true,
+    manualExpiryDate: iso,
+  };
 }

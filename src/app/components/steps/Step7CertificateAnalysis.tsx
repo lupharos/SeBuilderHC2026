@@ -1,10 +1,11 @@
 import { useRef, useState } from 'react';
-import { Upload, ShieldCheck, AlertCircle, XCircle, CheckCircle2, Trash2, Lock, FileKey } from 'lucide-react';
+import { Upload, ShieldCheck, AlertCircle, XCircle, CheckCircle2, Trash2, Lock, FileKey, Plus, X } from 'lucide-react';
 import {
   parseCertificateFile,
   formatRemaining,
   certStatusColor,
   certStatusIcon,
+  createManualCertificate,
   type ParsedCertificate,
 } from './certificateParser';
 
@@ -16,6 +17,10 @@ interface Props {
 export function Step7CertificateAnalysis({ certificates, setCertificates }: Props) {
   const [parseError, setParseError] = useState<string>('');
   const [busy, setBusy] = useState(false);
+  const [showManualForm, setShowManualForm] = useState(false);
+  const [manualName, setManualName] = useState('');
+  const [manualExpiryDate, setManualExpiryDate] = useState('');
+  const [manualError, setManualError] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handleFiles = async (files: FileList | null) => {
@@ -61,6 +66,23 @@ export function Step7CertificateAnalysis({ certificates, setCertificates }: Prop
   };
 
   const clearAll = () => setCertificates([]);
+
+  const handleAddManual = () => {
+    setManualError('');
+    if (!manualName.trim()) {
+      setManualError('Certificate name is required');
+      return;
+    }
+    if (!manualExpiryDate) {
+      setManualError('Expiry date is required');
+      return;
+    }
+    const cert = createManualCertificate(manualName.trim(), manualExpiryDate);
+    setCertificates(prev => [...prev, cert]);
+    setManualName('');
+    setManualExpiryDate('');
+    setShowManualForm(false);
+  };
 
   // Group by file for the comparison table.
   // The original UX requested side-by-side "Alan | allcerts.cer (Host Cert) | ca.cer (CA Cert)".
@@ -163,6 +185,95 @@ export function Step7CertificateAnalysis({ certificates, setCertificates }: Prop
             </div>
           )}
         </div>
+      </div>
+
+      {/* Manual entry section */}
+      <div className="bg-white rounded-xl overflow-hidden"
+        style={{ border: '1.5px solid #E2E8F0', boxShadow: '0 1px 4px rgba(15,41,82,0.06)' }}>
+        <div className="flex items-center gap-3 p-[16px_22px]" style={{ borderBottom: '1px solid #F1F5F9' }}>
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
+            style={{ background: 'rgba(99,102,241,0.1)' }}>
+            <Lock size={14} style={{ color: '#6366F1' }} />
+          </div>
+          <div className="flex-1">
+            <div style={{ fontSize: '13px', fontWeight: 700, color: '#0F172A' }}>Add Certificate Manually</div>
+            <div style={{ fontSize: '11px', color: '#94A3B8' }}>
+              When certificate file is not available, enter the certificate name and expiry date manually
+            </div>
+          </div>
+          {!showManualForm && (
+            <button onClick={() => { setShowManualForm(true); setManualError(''); }}
+              className="px-3 py-1.5 rounded-lg font-semibold flex items-center gap-2"
+              style={{ fontSize: '11px', background: '#EEF2FF', color: '#4F46E5', border: '1.5px solid #A5B4FC', cursor: 'pointer' }}>
+              <Plus size={13} />
+              Add Manual Entry
+            </button>
+          )}
+        </div>
+
+        {showManualForm && (
+          <div className="p-[16px_22px] space-y-[12px]">
+            <div>
+              <label style={{ fontSize: '11px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}>
+                Certificate Name or Description
+              </label>
+              <input
+                type="text"
+                placeholder="e.g., DLP Server Certificate, CA Cert, etc."
+                value={manualName}
+                onChange={e => setManualName(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '8px 11px',
+                  fontSize: '12px',
+                  border: '1.5px solid #CBD5E1',
+                  borderRadius: '7px',
+                  fontFamily: 'inherit',
+                }}
+              />
+            </div>
+
+            <div>
+              <label style={{ fontSize: '11px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}>
+                Expiry Date
+              </label>
+              <input
+                type="date"
+                value={manualExpiryDate}
+                onChange={e => setManualExpiryDate(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '8px 11px',
+                  fontSize: '12px',
+                  border: '1.5px solid #CBD5E1',
+                  borderRadius: '7px',
+                  fontFamily: 'inherit',
+                }}
+              />
+            </div>
+
+            {manualError && (
+              <div className="flex items-center gap-2 px-3 py-2 rounded-lg"
+                style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}>
+                <XCircle size={13} style={{ color: '#DC2626' }} />
+                <span style={{ fontSize: '11px', color: '#991B1B' }}>{manualError}</span>
+              </div>
+            )}
+
+            <div className="flex items-center gap-2 pt-2">
+              <button onClick={handleAddManual}
+                className="px-3 py-1.5 rounded-lg font-semibold"
+                style={{ fontSize: '11px', background: '#4F46E5', color: 'white', border: 'none', cursor: 'pointer' }}>
+                Add Entry
+              </button>
+              <button onClick={() => { setShowManualForm(false); setManualName(''); setManualExpiryDate(''); setManualError(''); }}
+                className="px-3 py-1.5 rounded-lg font-semibold"
+                style={{ fontSize: '11px', background: '#F1F5F9', color: '#64748B', border: 'none', cursor: 'pointer' }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Comparison table — replicates the customer-facing format */}
