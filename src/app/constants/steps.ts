@@ -51,8 +51,12 @@ const STEP_SKIP_RULES: Partial<Record<number, (sp: Record<string, boolean>, ve?:
   7: (sp, ve) => {
     // Skip if no product scope matches
     if (!sp.data && !sp.web && !sp.dspm && !sp.cls) return true;
-    // Skip if none of the agent entries exist in version data
-    const hasAgentEntries = ve && (ve.web_endpoint || ve.dlp_endpoint || ve.cls_agent);
+    // Skip if none of the agent entries exist in version data (and not removed)
+    const hasAgentEntries = ve && (
+      (ve.web_endpoint && !ve.web_endpoint.removed) ||
+      (ve.dlp_endpoint && !ve.dlp_endpoint.removed) ||
+      (ve.cls_agent && !ve.cls_agent.removed)
+    );
     return !hasAgentEntries;
   },
 };
