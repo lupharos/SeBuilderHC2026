@@ -488,7 +488,10 @@ function buildReportHTML(p: {
   const dedQ = p.healthBreakdown.questionPenalty;
   const dedV = p.healthBreakdown.versionPenalty;
   const dedI = p.healthBreakdown.infraPenalty;
-  const dedTotal = Math.max(1, dedQ + dedV + dedI);
+  const dedR = (p.recommendations.filter(r => r.priority === 'critical').length * 5) +
+               (p.recommendations.filter(r => r.priority === 'high').length * 3) +
+               (p.recommendations.filter(r => r.priority === 'medium').length * 1);
+  const dedTotal = Math.max(1, dedQ + dedV + dedI + dedR);
 
   /* Risk × source heatmap data (4 rows × 4 severity columns). */
   const riskMatrixRows = [
@@ -2190,24 +2193,33 @@ tr:last-child td{border-bottom:none;}
 
     <div class="cover-summary">
       <div class="cover-summary-title">ASSESSMENT AT A GLANCE</div>
-      <div class="cover-summary-grid">
-        <div class="cover-summary-cell">
-          <div class="cover-summary-cell-val" style="color:${p.healthScore === null ? '#94a3b8' : p.healthScore >= 80 ? 'var(--fp-ok)' : p.healthScore >= 60 ? 'var(--fp-warn)' : 'var(--fp-critical)'};">
-            ${p.healthScore === null ? '—' : p.healthScore + '%'}
+      <div style="display:flex;flex-direction:column;gap:18px;">
+        <!-- Health Score -->
+        <div style="text-align:center;">
+          <div style="font-size:48px;font-weight:800;color:${p.healthScore === null ? '#94a3b8' : p.healthScore >= 80 ? 'var(--fp-ok)' : p.healthScore >= 60 ? 'var(--fp-warn)' : 'var(--fp-critical)'};">${p.healthScore === null ? '—' : p.healthScore + '%'}</div>
+          <div style="font-size:11px;font-weight:700;color:#475569;letter-spacing:0.08em;margin-top:4px;">HEALTH SCORE</div>
+        </div>
+        <!-- Products Assessed -->
+        <div>
+          <div style="font-size:10px;font-weight:700;color:#94A3B8;letter-spacing:0.08em;margin-bottom:8px;">PRODUCTS ASSESSED</div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;">
+            ${(() => {
+              const productMap: Record<string, { emoji: string; label: string }> = {
+                web: { emoji: '🌐', label: 'Web Security' },
+                email: { emoji: '✉️', label: 'Email Security' },
+                data: { emoji: '🔒', label: 'Data Security (DLP)' },
+                ngfw: { emoji: '🛡️', label: 'Next Gen Firewall' },
+                dspm: { emoji: '☁️', label: 'DSPM' },
+                cls: { emoji: '🏷️', label: 'Data Classification' },
+              };
+              return Object.entries(p.selectedProducts)
+                .filter(([_, selected]) => selected)
+                .map(([key, _]) => productMap[key])
+                .filter(Boolean)
+                .map(prod => `<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 11px;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:6px;font-size:11px;color:#475569;"><span style="font-size:14px;">${prod.emoji}</span> ${prod.label}</span>`)
+                .join('');
+            })()}
           </div>
-          <div class="cover-summary-cell-label">Health Score</div>
-        </div>
-        <div class="cover-summary-cell">
-          <div class="cover-summary-cell-val" style="color:${criticalCount > 0 ? 'var(--fp-critical)' : 'var(--fp-ink-faint)'};">${criticalCount}</div>
-          <div class="cover-summary-cell-label">Critical Findings</div>
-        </div>
-        <div class="cover-summary-cell">
-          <div class="cover-summary-cell-val" style="color:${highCount > 0 ? 'var(--fp-high)' : 'var(--fp-ink-faint)'};">${highCount}</div>
-          <div class="cover-summary-cell-label">High Findings</div>
-        </div>
-        <div class="cover-summary-cell">
-          <div class="cover-summary-cell-val" style="color:${openActions > 0 ? 'var(--fp-warn)' : 'var(--fp-ok)'};">${openActions}</div>
-          <div class="cover-summary-cell-label">Open Actions</div>
         </div>
       </div>
     </div>
@@ -2328,6 +2340,7 @@ tr:last-child td{border-bottom:none;}
           { label: 'Questions',      pct: Math.round(dedQ / dedTotal * 100), value: dedQ, color: '#0EA5E9' },
           { label: 'Version EoS',    pct: Math.round(dedV / dedTotal * 100), value: dedV, color: '#B58800' },
           { label: 'Infrastructure', pct: Math.round(dedI / dedTotal * 100), value: dedI, color: '#A30080' },
+          { label: 'Recommendations', pct: dedR > 0 ? Math.round(dedR / dedTotal * 100) : 0, value: dedR, color: '#DC2626' },
         ].map((b) => `
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;">
           <span style="font-size:10.5px;color:#64748B;width:80px;flex-shrink:0;">${b.label}</span>
@@ -4736,7 +4749,7 @@ ${p.endpointAgentSummary && p.endpointAgentSummary.totalRecords > 0 ? (() => {
      notes, and the upgrade recommendation. Falls back silently when no
      assessment has been generated, so reports never ship with empty cards.
 ══════════════════════════════════════ -->
-${(p.selectedProducts.data || p.selectedProducts.web) && p.endpointCompatAssessment ? (() => {
+${(p.selectedProducts.data || p.selectedProducts.web) && p.endpointAgentSummary && p.endpointCompatAssessment ? (() => {
   const a = p.endpointCompatAssessment!;
   const STATUS_CFG: Record<string, { color: string; bg: string; border: string; label: string }> = {
     SUPPORTED: { color: '#16A34A', bg: '#F0FDF4', border: '#BBF7D0', label: 'Supported' },
