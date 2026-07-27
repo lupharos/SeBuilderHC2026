@@ -51,10 +51,8 @@ type EndpointAgentData = any; // EndpointAgentSummary | null
 
 const STEP_SKIP_RULES: Partial<Record<number, (sp: Record<string, boolean>, ve?: VersionEntries, ea?: EndpointAgentData) => boolean>> = {
   6: (sp, ve, ea) => {
-    // Skip if no product scope for endpoint agents
-    if (!sp.data && !sp.dspm && !sp.cls) return true;
-    // Skip if no endpoint agent CSV was imported
-    return !ea;
+    // Skip if no product scope for endpoint agents — but allow the step to open so CSV can be imported
+    return !sp.data && !sp.dspm && !sp.cls;
   },
   7: (sp, ve) => {
     // Skip if no product scope matches
