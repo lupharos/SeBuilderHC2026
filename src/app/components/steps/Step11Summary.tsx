@@ -5829,9 +5829,77 @@ export function Step11Summary({ sessionData, templates, selectedProducts, checkl
   const highCount     = allFindings.filter(f => f.severity === 'HIGH').length;
   const date = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
 
-  const handleExport = (variant: 'executive' | 'healthcheck' = 'healthcheck') => {
+  const handleExport = (variant: 'executive' | 'healthcheck' | 'powerpoint' = 'healthcheck') => {
     setIsExporting(variant);
     setExportDone(false);
+
+    if (variant === 'powerpoint') {
+      /* PowerPoint export: POST report data to server, download .pptx file */
+      setTimeout(async () => {
+        try {
+          const topRisks = allFindings
+            .filter(f => f.severity === 'critical' || f.severity === 'high')
+            .slice(0, 5)
+            .map(f => ({
+              severity: f.severity,
+              title: f.text,
+              description: f.note || f.description,
+            }));
+
+          const topRecs = recommendations
+            .filter(r => r.priority === 'critical' || r.priority === 'high')
+            .slice(0, 5)
+            .map(r => ({
+              priority: r.priority,
+              title: r.title,
+              description: r.description,
+            }));
+
+          const productList = Object.keys(selectedProducts)
+            .filter(k => selectedProducts[k])
+            .map(k => k.charAt(0).toUpperCase() + k.slice(1));
+
+          const response = await fetch('http://localhost:3001/api/report/export-ppt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              customerName: sessionData.customerName || 'Health Check Assessment',
+              healthScore: healthScore ?? 0,
+              riskSummary: topRisks,
+              recommendations: topRecs,
+              productList,
+              generatedAt: new Date().toISOString(),
+            }),
+          });
+
+          if (!response.ok) {
+            throw new Error(`Server returned ${response.status}: ${await response.text()}`);
+          }
+
+          const buffer = await response.arrayBuffer();
+          const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `HC-Executive-Summary-${Date.now()}.pptx`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+
+          setIsExporting(null);
+          setExportDone(true);
+        } catch (err) {
+          setIsExporting(null);
+          setExportDone(false);
+          console.error('[Step11Summary] PowerPoint export failed:', err);
+          alert(`PowerPoint export failed:\n\n${(err as Error).message}\n\nMake sure the Forcepoint HC companion server (port 3001) is running.\n\nCheck the browser console for the full stack trace.`);
+        }
+      }, 600);
+      return;
+    }
+
+    /* HTML export: build report in-browser and open in new window */
     setTimeout(() => {
       /* Wrap the build + write in try/catch so any synchronous throw doesn't
          leave the button stuck on "Generating" forever — surface the error
@@ -6152,6 +6220,54 @@ export function Step11Summary({ sessionData, templates, selectedProducts, checkl
                 {isExporting === 'healthcheck'
                   ? <><Loader size={14} className="animate-spin" /> Generating…</>
                   : <><Download size={14} /> Generate Health Check &amp; Maturity Assessment</>
+                }
+              </button>
+            </div>
+          </div>
+
+          {/* ── PowerPoint Executive Summary ── */}
+          <div className="rounded-xl overflow-hidden flex flex-col"
+            style={{ border: '1.5px solid rgba(245,158,11,0.22)', boxShadow: '0 2px 12px rgba(15,41,82,0.06)', background: 'linear-gradient(135deg, #FFFBEB 0%, #FEF3C7 100%)' }}>
+            <div className="p-[20px_22px] flex-1 flex flex-col">
+              <div className="flex items-start gap-3 mb-3">
+                <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
+                  style={{ background: 'rgba(245,158,11,0.1)', border: '1.5px solid rgba(245,158,11,0.2)' }}>
+                  <FileText size={20} style={{ color: '#D97706' }} />
+                </div>
+                <div className="flex-1">
+                  <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#1D252C', letterSpacing: '-0.01em', marginBottom: '2px' }}>
+                    PowerPoint Executive Summary
+                  </div>
+                  <div style={{ fontSize: '10.5px', fontWeight: 600, color: '#D97706', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                    Editable · Board Presentations
+                  </div>
+                </div>
+              </div>
+              <div style={{ fontSize: '11.5px', color: '#475569', lineHeight: 1.55, marginBottom: '14px' }}>
+                One-page formatted presentation with health score, top risks, and recommended actions. Perfect for leadership briefings, presentations, and board-level discussions.
+              </div>
+              <ul style={{ fontSize: '10.5px', color: '#64748B', lineHeight: 1.7, margin: '0 0 16px 16px', padding: 0 }}>
+                <li>Overall Health Score</li>
+                <li>Critical Findings · Top Risks</li>
+                <li>Recommended Actions</li>
+                <li>Next Steps &amp; Roadmap</li>
+              </ul>
+              <button
+                onClick={() => handleExport('powerpoint')}
+                disabled={!!isExporting}
+                className="flex items-center justify-center gap-2 px-5 py-3 rounded-xl font-bold text-white transition-all w-full mt-auto"
+                style={{
+                  fontSize: '13px',
+                  background: isExporting === 'powerpoint' ? '#FCD34D' : 'linear-gradient(135deg, #D97706, #B45309)',
+                  cursor: isExporting ? 'not-allowed' : 'pointer',
+                  boxShadow: isExporting ? 'none' : '0 4px 14px rgba(217,119,6,0.3)',
+                  letterSpacing: '-0.01em',
+                  opacity: isExporting && isExporting !== 'powerpoint' ? 0.5 : 1,
+                }}
+              >
+                {isExporting === 'powerpoint'
+                  ? <><Loader size={14} className="animate-spin" /> Generating…</>
+                  : <><Download size={14} /> Generate PowerPoint Summary</>
                 }
               </button>
             </div>

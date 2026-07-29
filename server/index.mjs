@@ -26,6 +26,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
+import PptxGenJs from 'pptxgenjs';
 import {
   registerUser, loginUser, logoutUser, resolveSession, extractToken,
   listUsers, setUserStatus, setUserRole, deleteUser, getAuthInfo,
@@ -2403,6 +2404,157 @@ app.get('/api/admin/upgrade/log', (req, res) => {
   });
 });
 
+/* PowerPoint executive summary report generation.
+   Accepts report data (health score, risks, recommendations) and
+   generates a downloadable .pptx file with formatted slides. */
+app.post('/api/report/export-ppt', (req, res) => {
+  try {
+    const {
+      customerName = 'Assessment',
+      healthScore = 0,
+      riskSummary = [],
+      recommendations = [],
+      productList = [],
+      generatedAt = new Date().toISOString(),
+    } = req.body ?? {};
+
+    const prs = new PptxGenJs();
+    prs.defineLayout({ name: 'BLANK', width: 10, height: 7.5 });
+
+    /* Slide 1: Title & Health Score */
+    const slide1 = prs.addSlide();
+    slide1.background = { color: '1F2937' };
+    slide1.addText(`Forcepoint Health Check`, {
+      x: 0.5, y: 0.5, w: 9, h: 0.6,
+      fontSize: 36, bold: true, color: 'FFFFFF', align: 'left',
+    });
+    slide1.addText(`Executive Summary`, {
+      x: 0.5, y: 1.2, w: 9, h: 0.4,
+      fontSize: 20, color: 'E5E7EB', align: 'left',
+    });
+    slide1.addText(`${customerName}`, {
+      x: 0.5, y: 1.8, w: 9, h: 0.4,
+      fontSize: 16, color: 'D1D5DB', align: 'left',
+    });
+    slide1.addText(`Assessment Date: ${new Date(generatedAt).toLocaleDateString()}`, {
+      x: 0.5, y: 2.3, w: 9, h: 0.3,
+      fontSize: 12, color: 'B4B5B6', align: 'left',
+    });
+
+    slide1.addText(`${healthScore}`, {
+      x: 0.5, y: 3.2, w: 4, h: 1.5,
+      fontSize: 72, bold: true, color: healthScore >= 75 ? '10B981' : healthScore >= 50 ? 'F59E0B' : 'EF4444',
+      align: 'center', valign: 'middle',
+    });
+    slide1.addText('Health Score', {
+      x: 0.5, y: 4.8, w: 4, h: 0.3,
+      fontSize: 14, color: 'D1D5DB', align: 'center',
+    });
+
+    if (productList && productList.length > 0) {
+      slide1.addText('Products Assessed', {
+        x: 5.2, y: 3.2, w: 4.3, h: 0.4,
+        fontSize: 14, bold: true, color: 'E5E7EB',
+      });
+      const products = productList.slice(0, 6).map(p => `• ${p}`).join('\n');
+      slide1.addText(products, {
+        x: 5.2, y: 3.7, w: 4.3, h: 1.8,
+        fontSize: 12, color: 'D1D5DB', valign: 'top',
+      });
+    }
+
+    /* Slide 2: Top Risks */
+    if (riskSummary && riskSummary.length > 0) {
+      const slide2 = prs.addSlide();
+      slide2.background = { color: 'F9FAFB' };
+      slide2.addText('Critical Findings', {
+        x: 0.5, y: 0.5, w: 9, h: 0.5,
+        fontSize: 28, bold: true, color: '1F2937',
+      });
+
+      let yPos = 1.2;
+      riskSummary.slice(0, 5).forEach((risk, idx) => {
+        const icon = risk.severity === 'critical' ? '🔴' : risk.severity === 'high' ? '🟠' : '🟡';
+        slide2.addText(icon, {
+          x: 0.5, y: yPos, w: 0.4, h: 0.4,
+          fontSize: 16, align: 'center',
+        });
+        slide2.addText(risk.title || `Finding ${idx + 1}`, {
+          x: 1.1, y: yPos, w: 8.4, h: 0.4,
+          fontSize: 12, bold: true, color: '1F2937',
+        });
+        if (risk.description) {
+          yPos += 0.4;
+          slide2.addText(risk.description, {
+            x: 1.1, y: yPos, w: 8.4, h: 0.5,
+            fontSize: 10, color: '4B5563',
+          });
+        }
+        yPos += 0.8;
+      });
+    }
+
+    /* Slide 3: Top Recommendations */
+    if (recommendations && recommendations.length > 0) {
+      const slide3 = prs.addSlide();
+      slide3.background = { color: 'F9FAFB' };
+      slide3.addText('Recommended Actions', {
+        x: 0.5, y: 0.5, w: 9, h: 0.5,
+        fontSize: 28, bold: true, color: '1F2937',
+      });
+
+      let yPos = 1.2;
+      recommendations.slice(0, 5).forEach((rec, idx) => {
+        const priorityColor = rec.priority === 'critical' ? 'DC2626' : rec.priority === 'high' ? 'F59E0B' : '6366F1';
+        slide3.addShape('rect', {
+          x: 0.5, y: yPos, w: 0.05, h: 0.35,
+          fill: { color: priorityColor },
+          line: { type: 'none' },
+        });
+        slide3.addText(rec.title || `Action ${idx + 1}`, {
+          x: 0.7, y: yPos, w: 8.8, h: 0.35,
+          fontSize: 12, bold: true, color: '1F2937', valign: 'middle',
+        });
+        yPos += 0.5;
+      });
+    }
+
+    /* Slide 4: Next Steps */
+    const slide4 = prs.addSlide();
+    slide4.background = { color: '1F2937' };
+    slide4.addText('Next Steps', {
+      x: 0.5, y: 1.5, w: 9, h: 0.6,
+      fontSize: 32, bold: true, color: 'FFFFFF', align: 'center',
+    });
+
+    const actionItems = [
+      '1. Review critical findings with your team',
+      '2. Prioritize recommended actions by impact',
+      '3. Schedule remediation timeline',
+      '4. Monitor compliance and progress',
+    ];
+
+    slide4.addText(actionItems.join('\n'), {
+      x: 1, y: 2.4, w: 8, h: 2.5,
+      fontSize: 14, color: 'E5E7EB', valign: 'middle', align: 'left',
+    });
+
+    slide4.addText('For detailed findings, refer to the full Health Check Report', {
+      x: 0.5, y: 6.8, w: 9, h: 0.4,
+      fontSize: 12, color: 'D1D5DB', align: 'center', italic: true,
+    });
+
+    const buffer = prs.write({ outputType: 'arraybuffer' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+    res.setHeader('Content-Disposition', `attachment; filename="HC-Executive-Summary-${Date.now()}.pptx"`);
+    res.send(Buffer.from(buffer));
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('PPT generation error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 /* ─────────────────────────────────────────────────────────────────
    Boot
    ───────────────────────────────────────────────────────────────────
@@ -2451,6 +2603,8 @@ app.listen(PORT, HOST, () => {
   console.log('  GET  /api/connector/job/result — wizard short-poll for completed result');
   // eslint-disable-next-line no-console
   console.log(`  GET  /api/connector/agent     — serve connector .exe from ${CONNECTOR_AGENT_PATH}`);
+  // eslint-disable-next-line no-console
+  console.log('  POST /api/report/export-ppt  — generate PowerPoint executive summary');
   // eslint-disable-next-line no-console
   console.log('  GET  /health             — liveness probe');
 });
