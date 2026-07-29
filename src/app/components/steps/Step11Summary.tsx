@@ -5859,7 +5859,8 @@ export function Step11Summary({ sessionData, templates, selectedProducts, checkl
             .filter(k => selectedProducts[k])
             .map(k => k.charAt(0).toUpperCase() + k.slice(1));
 
-          const response = await fetch('http://localhost:3001/api/report/export-ppt', {
+          const serverUrl = `${window.location.protocol}//${window.location.hostname}:3001/api/report/export-ppt`;
+          const response = await fetch(serverUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -5893,7 +5894,8 @@ export function Step11Summary({ sessionData, templates, selectedProducts, checkl
           setIsExporting(null);
           setExportDone(false);
           console.error('[Step11Summary] PowerPoint export failed:', err);
-          alert(`PowerPoint export failed:\n\n${(err as Error).message}\n\nMake sure the Forcepoint HC companion server (port 3001) is running.\n\nCheck the browser console for the full stack trace.`);
+          const hostname = window.location.hostname === 'localhost' ? 'localhost' : window.location.hostname;
+          alert(`PowerPoint export failed:\n\n${(err as Error).message}\n\nMake sure the Forcepoint HC companion server (${hostname}:3001) is running.\n\nCheck the browser console for the full stack trace.`);
         }
       }, 600);
       return;
