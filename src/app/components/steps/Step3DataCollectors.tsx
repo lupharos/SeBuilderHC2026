@@ -1336,11 +1336,7 @@ export function Step3DataCollectors({
       if (prev && prev !== next) {
         await deregisterConnectorToken(prev);
       }
-      const ok = await registerConnectorAllowlist(
-        next,
-        customerConnector.allowedSourceIp || '',
-        customerConnector.encryptionKey || undefined,
-      );
+      const ok = await registerConnectorAllowlist(next);
       if (ok) previouslyRegisteredTokenRef.current = next;
     };
     void sync();
@@ -1352,7 +1348,7 @@ export function Step3DataCollectors({
        the old key until the next 60s tick. */
     const id = setInterval(() => { void sync(); }, 60000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [customerConnector.enabled, customerConnector.token, customerConnector.allowedSourceIp, customerConnector.encryptionKey]);
+  }, [customerConnector.enabled, customerConnector.token]);
 
   /* Manual revoke — clears server-side state for the current token
      so a deployed connector loses its session. Status pill returns to
@@ -1376,18 +1372,15 @@ export function Step3DataCollectors({
     previouslyRegisteredTokenRef.current = '';
   };
 
-  /* Auto-mint token + AES-256 key the first time the operator flips the
-     Customer Connector switch on with empty fields. They can rotate
-     either via the inline regenerate buttons later. */
+  /* Auto-mint token when enabled. Token is the only credential (security via HTTPS + token). */
   useEffect(() => {
     if (!customerConnector.enabled) return;
-    if (customerConnector.token && customerConnector.encryptionKey) return;
+    if (customerConnector.token) return;
     setCustomerConnector((prev) => ({
       ...prev,
-      token:         prev.token         || randomHex256(),
-      encryptionKey: prev.encryptionKey || randomHex256(),
+      token: randomHex256(),
     }));
-  }, [customerConnector.enabled, customerConnector.token, customerConnector.encryptionKey, setCustomerConnector]);
+  }, [customerConnector.enabled, customerConnector.token, setCustomerConnector]);
 
   const updConnector = (patch: Partial<CustomerConnectorConfig>) =>
     setCustomerConnector((prev) => ({ ...prev, ...patch }));
@@ -1974,9 +1967,7 @@ export function Step3DataCollectors({
         const cfg = customerConnector;
         const st = connectorStatus;
         const tokenOk = !!cfg.token;
-        const keyOk = !!cfg.encryptionKey;
-        const ipOk = !!cfg.allowedSourceIp.trim();
-        const readyChecks = [tokenOk, keyOk, ipOk];
+        const readyChecks = [tokenOk];
         const readyCount = readyChecks.filter(Boolean).length;
         const readyTotal = readyChecks.length;
         const onlineColor = st?.online ? '#16A34A' : (st && st.totalHeartbeats > 0) ? '#D97706' : '#94A3B8';
@@ -2248,66 +2239,25 @@ export function Step3DataCollectors({
                   </div>
                 )}
 
-                {/* HC endpoint + IP allowlist */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.04em' }}>HC ENDPOINT (connector → here)</label>
-                    <input style={{ ...IS, marginTop: '4px' }}
-                      placeholder="https://hc.forcepoint-se.com"
-                      value={cfg.hcEndpoint} onChange={(e) => updConnector({ hcEndpoint: e.target.value })}
-                      onFocus={e => (e.currentTarget.style.border = '1.5px solid #C4B5FD')}
-                      onBlur={e =>  (e.currentTarget.style.border = '1.5px solid #E2E8F0')} />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.04em' }}>ALLOWED SOURCE IP / CIDR</label>
-                    <div style={{ position: 'relative', marginTop: '4px' }}>
-                      <Globe2 size={11} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }} />
-                      <input style={{ ...IS, paddingLeft: 28 }}
-                        placeholder="e.g. 213.74.55.10 or 213.74.55.0/24"
-                        value={cfg.allowedSourceIp} onChange={(e) => updConnector({ allowedSourceIp: e.target.value })}
-                        onFocus={e => (e.currentTarget.style.border = '1.5px solid #C4B5FD')}
-                        onBlur={e =>  (e.currentTarget.style.border = '1.5px solid #E2E8F0')} />
-                    </div>
-                  </div>
-                </div>
+                {/* HC endpoint & IP allowlist removed — configured interactively in .exe */}
 
-                {/* Token + AES-256 key — read-only with regenerate buttons */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.04em' }}>CONNECTOR TOKEN (256-bit)</label>
-                      <button onClick={() => updConnector({ token: randomHex256() })}
-                        className="flex items-center gap-1"
-                        style={{ fontSize: '10px', color: '#7C3AED', background: 'transparent', border: 'none', cursor: 'pointer', fontWeight: 600 }}
-                        title="Generate a new random token. Connector must be re-deployed with the new config.">
-                        <RefreshCw size={9} /> Regenerate
-                      </button>
-                    </div>
-                    <div style={{ ...IS, fontFamily: "'JetBrains Mono', monospace", fontSize: '10.5px', color: '#475569', wordBreak: 'break-all', lineHeight: 1.4, paddingTop: 6, paddingBottom: 6, cursor: 'text', userSelect: 'all' }}
-                      onClick={(e) => {
-                        const sel = window.getSelection();
-                        if (sel) { sel.selectAllChildren(e.currentTarget); }
-                      }}>
-                      {cfg.token || <span style={{ color: '#CBD5E1' }}>— pending generation —</span>}
-                    </div>
+                {/* Token — read-only (security via token + HTTPS) */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.04em' }}>CONNECTOR TOKEN (256-bit hex, HTTPS-only)</label>
+                    <button onClick={() => updConnector({ token: randomHex256() })}
+                      className="flex items-center gap-1"
+                      style={{ fontSize: '10px', color: '#7C3AED', background: 'transparent', border: 'none', cursor: 'pointer', fontWeight: 600 }}
+                      title="Generate a new random token. Must re-run connector .exe to register the new token.">
+                      <RefreshCw size={9} /> Regenerate
+                    </button>
                   </div>
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748B', letterSpacing: '0.04em' }}>AES-256-GCM KEY</label>
-                      <button onClick={() => updConnector({ encryptionKey: randomHex256() })}
-                        className="flex items-center gap-1"
-                        style={{ fontSize: '10px', color: '#7C3AED', background: 'transparent', border: 'none', cursor: 'pointer', fontWeight: 600 }}
-                        title="Generate a new AES-256-GCM key. Connector must be re-deployed with the new config.">
-                        <RefreshCw size={9} /> Regenerate
-                      </button>
-                    </div>
-                    <div style={{ ...IS, fontFamily: "'JetBrains Mono', monospace", fontSize: '10.5px', color: '#475569', wordBreak: 'break-all', lineHeight: 1.4, paddingTop: 6, paddingBottom: 6, cursor: 'text', userSelect: 'all' }}
-                      onClick={(e) => {
-                        const sel = window.getSelection();
-                        if (sel) { sel.selectAllChildren(e.currentTarget); }
-                      }}>
-                      {cfg.encryptionKey || <span style={{ color: '#CBD5E1' }}>— pending generation —</span>}
-                    </div>
+                  <div style={{ ...IS, fontFamily: "'JetBrains Mono', monospace", fontSize: '10.5px', color: '#475569', wordBreak: 'break-all', lineHeight: 1.4, paddingTop: 6, paddingBottom: 6, cursor: 'text', userSelect: 'all' }}
+                    onClick={(e) => {
+                      const sel = window.getSelection();
+                      if (sel) { sel.selectAllChildren(e.currentTarget); }
+                    }}>
+                    {cfg.token || <span style={{ color: '#CBD5E1' }}>— pending generation —</span>}
                   </div>
                 </div>
 
