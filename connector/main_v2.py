@@ -145,6 +145,7 @@ class Config:
         self.proxy_username = ""
         self.proxy_password = ""
 
+        self.sql_enabled = True  # User can skip SQL and use API only
         self.sql_host = ""
         self.sql_port = 1433
         self.sql_username = ""
@@ -201,49 +202,58 @@ def collect_config() -> Config:
         config.proxy_password = prompt_password("Proxy password (if required)", required=False)
 
     print("\n" + "=" * 60)
-    print("STEP 3: SQL SERVER CONFIGURATION")
+    print("STEP 3: DATA SOURCE CONFIGURATION")
     print("=" * 60)
-    print("DLP can connect to 1, 2, or 3 different SQL Server instances:")
-    print("  • Data   (wbsn-data-security)")
-    print("  • Web    (wslogdb70)")
-    print("  • Email  (esglogdb76)")
+    print("Choose how to access DLP data:")
+    print("  • SQL Server: Direct connection to SQL Server databases")
+    print("  • API Only: Use REST API without SQL Server access")
 
-    config.single_sql_host = prompt_bool("Same SQL Server for all databases?", True)
+    config.sql_enabled = prompt_bool("Configure SQL Server access?", True)
 
-    config.sql_auth_mode = "windows" if prompt_bool("Use Windows auth?", False) else "sql"
+    if config.sql_enabled:
+        print("\nSQL Server can have 1, 2, or 3 different instances:")
+        print("  • Data   (wbsn-data-security)")
+        print("  • Web    (wslogdb70)")
+        print("  • Email  (esglogdb76)")
 
-    config.sql_host = prompt("SQL Server IP or hostname")
-    config.sql_port = prompt_int("SQL Server port", 1433)
+        config.single_sql_host = prompt_bool("Same SQL Server for all databases?", True)
 
-    if config.sql_auth_mode == "sql":
-        config.sql_username = prompt("SQL Server username")
-        config.sql_password = prompt_password("SQL Server password")
+        config.sql_auth_mode = "windows" if prompt_bool("Use Windows auth?", False) else "sql"
 
-    if config.single_sql_host:
-        # Same host for all
-        config.db_data_host = config.sql_host
-        config.db_data_port = config.sql_port
-        config.db_web_host = config.sql_host
-        config.db_web_port = config.sql_port
-        config.db_email_host = config.sql_host
-        config.db_email_port = config.sql_port
+        config.sql_host = prompt("SQL Server IP or hostname")
+        config.sql_port = prompt_int("SQL Server port", 1433)
 
-        print(f"\nDatabase names (press Enter to use defaults):")
-        config.db_data_name = prompt("Data database", config.db_data_name, required=False) or config.db_data_name
-        config.db_web_name = prompt("Web database", config.db_web_name, required=False) or config.db_web_name
-        config.db_email_name = prompt("Email database", config.db_email_name, required=False) or config.db_email_name
+        if config.sql_auth_mode == "sql":
+            config.sql_username = prompt("SQL Server username")
+            config.sql_password = prompt_password("SQL Server password")
+
+        if config.single_sql_host:
+            # Same host for all
+            config.db_data_host = config.sql_host
+            config.db_data_port = config.sql_port
+            config.db_web_host = config.sql_host
+            config.db_web_port = config.sql_port
+            config.db_email_host = config.sql_host
+            config.db_email_port = config.sql_port
+
+            print(f"\nDatabase names (press Enter to use defaults):")
+            config.db_data_name = prompt("Data database", config.db_data_name, required=False) or config.db_data_name
+            config.db_web_name = prompt("Web database", config.db_web_name, required=False) or config.db_web_name
+            config.db_email_name = prompt("Email database", config.db_email_name, required=False) or config.db_email_name
+        else:
+            print("\nData database:")
+            config.db_data_host = prompt("IP or hostname", config.sql_host)
+            config.db_data_port = prompt_int("Port", config.sql_port)
+
+            print("\nWeb database:")
+            config.db_web_host = prompt("IP or hostname", config.sql_host)
+            config.db_web_port = prompt_int("Port", config.sql_port)
+
+            print("\nEmail database:")
+            config.db_email_host = prompt("IP or hostname", config.sql_host)
+            config.db_email_port = prompt_int("Port", config.sql_port)
     else:
-        print("\nData database:")
-        config.db_data_host = prompt("IP or hostname", config.sql_host)
-        config.db_data_port = prompt_int("Port", config.sql_port)
-
-        print("\nWeb database:")
-        config.db_web_host = prompt("IP or hostname", config.sql_host)
-        config.db_web_port = prompt_int("Port", config.sql_port)
-
-        print("\nEmail database:")
-        config.db_email_host = prompt("IP or hostname", config.sql_host)
-        config.db_email_port = prompt_int("Port", config.sql_port)
+        print("\n⚠ SQL Server skipped. Using API-only mode.")
 
     print("\n" + "=" * 60)
     print("STEP 4: FSM SERVER API (Optional)")
@@ -448,20 +458,30 @@ def main() -> int:
     print("=" * 60)
 
     hc_ok = test_hc_endpoint(config)
-    sql_data_ok = test_sql_connection(config, "data")
-    sql_web_ok = test_sql_connection(config, "web")
-    sql_email_ok = test_sql_connection(config, "email")
+
+    if config.sql_enabled:
+        sql_data_ok = test_sql_connection(config, "data")
+        sql_web_ok = test_sql_connection(config, "web")
+        sql_email_ok = test_sql_connection(config, "email")
+    else:
+        print("\n[TEST] SQL Server: SKIPPED (API-only mode)")
+        sql_data_ok = True  # Mark as OK since not needed
+        sql_web_ok = True
+        sql_email_ok = True
 
     # Summary
     print("\n" + "=" * 60)
     print("SUMMARY")
     print("=" * 60)
     print(f"HC Endpoint:  {'✓' if hc_ok else '✗'}")
-    print(f"SQL Data:     {'✓' if sql_data_ok else '✗'}")
-    print(f"SQL Web:      {'✓' if sql_web_ok else '✗'}")
-    print(f"SQL Email:    {'✓' if sql_email_ok else '✗'}")
-
-    all_ok = hc_ok and sql_data_ok  # HC and at least Data DB required
+    if config.sql_enabled:
+        print(f"SQL Data:     {'✓' if sql_data_ok else '✗'}")
+        print(f"SQL Web:      {'✓' if sql_web_ok else '✗'}")
+        print(f"SQL Email:    {'✓' if sql_email_ok else '✗'}")
+        all_ok = hc_ok and sql_data_ok  # HC and at least Data DB required
+    else:
+        print(f"Data Source:  API-Only (SQL Server not configured)")
+        all_ok = hc_ok  # HC endpoint is the only requirement for API-only
 
     if not all_ok:
         print("\n⚠ Some connections failed. Fix and retry? (Y/n): ", end="")
