@@ -1516,9 +1516,7 @@ app.post('/api/connector/job/queue', (req, res) => {
   if (!connectorAllowlist.has(token)) {
     return res.status(404).json({ ok: false, message: 'Token not registered. Call /api/connector/register first.' });
   }
-  if (!connectorKeys.has(token)) {
-    return res.status(412).json({ ok: false, message: 'No encryption key registered for this token. The wizard must include encryptionKey in the /register call before queueing jobs.' });
-  }
+  /* Encryption key check removed — token-only security. */
   if (!isConnectorOnline(token)) {
     return res.status(503).json({ ok: false, message: 'Connector for this token is OFFLINE (no heartbeat within the freshness window). Wait for the customer to start forcepoint-hc-connector.exe.' });
   }
@@ -1634,23 +1632,16 @@ app.post('/api/connector/job/result', (req, res) => {
     });
     return res.json({ ok: true });
   }
-  const keyHex = connectorKeys.get(job.token);
-  if (!keyHex) {
-    completedJobs.set(jobId, {
-      ok: false,
-      error: 'No encryption key on file for this connector token; cannot decrypt result.',
-      completedAt: Date.now(),
-    });
-    return res.json({ ok: true });
-  }
+  /* Token-only security: no encryption key used.
+     Result payload comes unencrypted from connector. */
   try {
-    const payload = decryptEnvelope(envelope, keyHex);
+    const payload = typeof envelope === 'object' ? envelope : null;
     completedJobs.set(jobId, { ok: true, payload, completedAt: Date.now() });
     res.json({ ok: true });
   } catch (e) {
     completedJobs.set(jobId, {
       ok: false,
-      error: e instanceof Error ? `Decrypt failed: ${e.message}` : 'Decrypt failed.',
+      error: e instanceof Error ? `Result processing failed: ${e.message}` : 'Result processing failed.',
       completedAt: Date.now(),
     });
     res.json({ ok: true });
