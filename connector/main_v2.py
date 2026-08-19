@@ -62,8 +62,7 @@ VERSION = _load_version()
 
 BANNER = r"""
 +──────────────────────────────────────────────────────────────+
-|  Forcepoint HC -- Customer Connector  v{ver:<6}              |
-|  Interactive Configuration · No JSON Secrets Required        |
+|  Forcepoint HC — Customer Connector  v{ver:<6}              |
 +──────────────────────────────────────────────────────────────+
 """
 
