@@ -2095,9 +2095,36 @@ export function Step3DataCollectors({
                     <span className="font-mono" style={{ fontSize: '11px', color: '#0F172A', fontWeight: 600 }}>{st?.connectorVersion || '—'}</span>
                   </div>
                   <div className="flex-1" />
-                  <span className="font-mono" style={{ fontSize: '10px', color: '#94A3B8' }}>
-                    {readyCount}/{readyTotal} ready
-                  </span>
+
+                  {/* Connector Readiness — SQL + API status at a glance */}
+                  {st?.selftest && (() => {
+                    const probes = {
+                      'SQL Data': st.selftest.sqlData ?? st.selftest.sql,
+                      'SQL Web': st.selftest.sqlWeb,
+                      'SQL Email': st.selftest.sqlEmail,
+                      'DLP API': st.selftest.dlpApi,
+                    };
+                    const ready = Object.values(probes).filter(Boolean).filter(p => p.status === 'ok').length;
+                    const total = Object.values(probes).filter(Boolean).length;
+                    return (
+                      <div className="flex items-center gap-2">
+                        {Object.entries(probes).map(([name, probe]) =>
+                          probe ? (
+                            <div key={name} className="flex items-center gap-1" title={`${name}: ${probe.status}`}>
+                              <span style={{
+                                fontSize: '9px',
+                                fontWeight: 600,
+                                color: probe.status === 'ok' ? '#16A34A' : '#DC2626',
+                                opacity: 0.8
+                              }}>
+                                {probe.status === 'ok' ? '✓' : '✗'} {name}
+                              </span>
+                            </div>
+                          ) : null
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Selftest panel — what the connector itself has
