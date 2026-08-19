@@ -2084,9 +2084,6 @@ export function Step3DataCollectors({
                     <span style={{ fontSize: '9.5px', fontWeight: 700, color: '#94A3B8', letterSpacing: '0.06em' }}>SOURCE IP</span>
                     <span className="font-mono" style={{ fontSize: '11px', color: '#0F172A', fontWeight: 600 }}>
                       {st?.lastSourceIp || '—'}
-                      {st?.lastSourceIp && cfg.allowedSourceIp && st.lastSourceIp !== cfg.allowedSourceIp && cfg.allowedSourceIp !== '' && (
-                        <span title={`Expected ${cfg.allowedSourceIp}`} style={{ color: '#DC2626', marginLeft: 6 }}>⚠</span>
-                      )}
                     </span>
                   </div>
                   <div className="flex flex-col">
