@@ -597,7 +597,8 @@ def execute_job(config: Config, kind: str, params: dict) -> dict:
         elif kind == "sql.query":
             # Execute SQL query
             product = params.get("product", "data")
-            query = params.get("query")
+            # Backend sends 'sql' field, fallback to 'query' for compatibility
+            query = params.get("sql") or params.get("query")
 
             if not query:
                 return {"ok": False, "error": "Missing query"}
