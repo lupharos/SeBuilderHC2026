@@ -472,6 +472,184 @@ def heartbeat_loop(config: Config, stop: threading.Event) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────
+#   Job Polling & Execution (Via-Connector support)
+# ─────────────────────────────────────────────────────────────────
+
+def job_loop(config: Config, stop: threading.Event) -> None:
+    """Poll for jobs from HC server and execute them."""
+    endpoint = config.hc_endpoint.lstrip('/').lstrip('http://').lstrip('https://')
+    base_url = f"http://{endpoint}:{config.hc_port}"
+    next_url = f"{base_url}/api/connector/job/next?token={config.hc_token}"
+    result_url = f"{base_url}/api/connector/job/result"
+
+    session = requests.Session()
+    if config.proxy_enabled:
+        proxy_auth = ""
+        if config.proxy_username:
+            proxy_auth = f"{config.proxy_username}:{config.proxy_password}@"
+        proxy_url = f"http://{proxy_auth}{config.proxy_url}:{config.proxy_port}"
+        session.proxies = {"http": proxy_url, "https": proxy_url}
+
+    print(f"\n[jobs] Long-poll enabled at {next_url}")
+    print(f"[jobs] Ready to receive: sql.test, sql.query\n")
+
+    while not stop.is_set():
+        try:
+            # 25-second long-poll for new jobs
+            r = session.get(next_url, timeout=30)
+
+            if r.status_code == 204:
+                # No job available (timeout)
+                continue
+
+            if r.status_code != 200:
+                print(f"[jobs] Error polling jobs: HTTP {r.status_code}")
+                time.sleep(2)
+                continue
+
+            job_data = r.json()
+            job_id = job_data.get("jobId")
+            kind = job_data.get("kind")
+            params = job_data.get("params") or {}
+
+            if not job_id or not kind:
+                continue
+
+            ts = datetime.now().strftime("%H:%M:%S")
+            print(f"[{ts}] JOB   {kind[:20]:<20} (id: {job_id[:8]}...)")
+
+            # Execute job
+            result = execute_job(config, kind, params)
+
+            # Send result back
+            payload = result.get("payload") if result.get("ok") else None
+            response_body = {
+                "jobId": job_id,
+                "ok": result.get("ok", False),
+                "error": result.get("error"),
+                "envelope": payload,  # unencrypted (token-only mode)
+            }
+
+            try:
+                res = session.post(result_url, json=response_body, timeout=10)
+                if res.status_code == 200:
+                    print(f"[{ts}] DONE  {kind[:20]:<20}")
+                else:
+                    print(f"[{ts}] FAIL  {kind[:20]:<20} (result post HTTP {res.status_code})")
+            except Exception as e:
+                print(f"[{ts}] FAIL  {kind[:20]:<20} (result post: {type(e).__name__})")
+
+        except Exception as e:
+            if not stop.is_set():
+                time.sleep(2)
+
+
+def execute_job(config: Config, kind: str, params: dict) -> dict:
+    """Execute a job requested by the backend."""
+    try:
+        if kind == "sql.test":
+            # Test SQL connection for given product
+            product = params.get("product", "data")
+
+            if product == "data":
+                host, port, db = config.db_data_host, config.db_data_port, config.db_data_name
+            elif product == "web":
+                host, port, db = config.db_web_host, config.db_web_port, config.db_web_name
+            elif product == "email":
+                host, port, db = config.db_email_host, config.db_email_port, config.db_email_name
+            else:
+                return {"ok": False, "error": f"Unknown product: {product}"}
+
+            # Try ODBC connection
+            try:
+                import pyodbc
+                drivers = [d for d in pyodbc.drivers() if "SQL Server" in d]
+                if not drivers:
+                    return {"ok": False, "error": "No SQL Server ODBC driver"}
+
+                driver = sorted(drivers, reverse=True)[0]
+                if config.sql_auth_mode == "windows":
+                    conn_str = f"DRIVER={{{driver}}};SERVER={host},{port};DATABASE={db};Trusted_Connection=yes;TrustServerCertificate=yes;"
+                else:
+                    conn_str = f"DRIVER={{{driver}}};SERVER={host},{port};DATABASE={db};UID={config.sql_username};PWD={config.sql_password};TrustServerCertificate=yes;"
+
+                conn = pyodbc.connect(conn_str, timeout=8)
+                cur = conn.cursor()
+                cur.execute("SELECT @@VERSION")
+                row = cur.fetchone()
+                conn.close()
+
+                version = row[0] if row else "?"
+                return {
+                    "ok": True,
+                    "payload": {
+                        "status": "ok",
+                        "message": f"SQL connection OK",
+                        "server": {"version": version},
+                    }
+                }
+            except Exception as e:
+                return {
+                    "ok": False,
+                    "error": f"SQL test failed: {type(e).__name__}: {str(e)[:100]}"
+                }
+
+        elif kind == "sql.query":
+            # Execute SQL query
+            product = params.get("product", "data")
+            query = params.get("query")
+
+            if not query:
+                return {"ok": False, "error": "Missing query"}
+
+            if product == "data":
+                host, port, db = config.db_data_host, config.db_data_port, config.db_data_name
+            elif product == "web":
+                host, port, db = config.db_web_host, config.db_web_port, config.db_web_name
+            elif product == "email":
+                host, port, db = config.db_email_host, config.db_email_port, config.db_email_name
+            else:
+                return {"ok": False, "error": f"Unknown product: {product}"}
+
+            try:
+                import pyodbc
+                drivers = [d for d in pyodbc.drivers() if "SQL Server" in d]
+                if not drivers:
+                    return {"ok": False, "error": "No SQL Server ODBC driver"}
+
+                driver = sorted(drivers, reverse=True)[0]
+                if config.sql_auth_mode == "windows":
+                    conn_str = f"DRIVER={{{driver}}};SERVER={host},{port};DATABASE={db};Trusted_Connection=yes;TrustServerCertificate=yes;"
+                else:
+                    conn_str = f"DRIVER={{{driver}}};SERVER={host},{port};DATABASE={db};UID={config.sql_username};PWD={config.sql_password};TrustServerCertificate=yes;"
+
+                conn = pyodbc.connect(conn_str, timeout=8)
+                cur = conn.cursor()
+                cur.execute(query)
+                rows = cur.fetchall()
+                conn.close()
+
+                return {
+                    "ok": True,
+                    "payload": {
+                        "rows": [list(row) for row in rows],
+                        "count": len(rows),
+                    }
+                }
+            except Exception as e:
+                return {
+                    "ok": False,
+                    "error": f"Query failed: {type(e).__name__}: {str(e)[:100]}"
+                }
+
+        else:
+            return {"ok": False, "error": f"Unknown job kind: {kind}"}
+
+    except Exception as e:
+        return {"ok": False, "error": f"Job execution error: {str(e)[:100]}"}
+
+
+# ─────────────────────────────────────────────────────────────────
 #   Main
 # ─────────────────────────────────────────────────────────────────
 
@@ -535,9 +713,17 @@ def main() -> int:
 
     signal.signal(signal.SIGINT, handle_signal)
 
-    # Run heartbeat loop
+    # Run heartbeat and job loops in parallel
+    heartbeat_thread = threading.Thread(target=heartbeat_loop, args=(config, stop), daemon=False)
+    job_thread = threading.Thread(target=job_loop, args=(config, stop), daemon=False)
+
     try:
-        heartbeat_loop(config, stop)
+        heartbeat_thread.start()
+        job_thread.start()
+
+        # Wait for both threads
+        heartbeat_thread.join()
+        job_thread.join()
     except KeyboardInterrupt:
         pass
 
