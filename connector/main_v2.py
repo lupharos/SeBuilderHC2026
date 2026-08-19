@@ -15,6 +15,7 @@ Usage:
 
 from __future__ import annotations
 
+import getpass
 import json
 import os
 import signal
@@ -114,6 +115,18 @@ def prompt_int(message: str, default: int = None) -> int:
             print("  (Enter a valid number)")
 
 
+def prompt_password(message: str, required: bool = True) -> str:
+    """Prompt for password (masked with asterisks)."""
+    while True:
+        value = getpass.getpass(f"{message}: ")
+        if value:
+            return value
+        elif not required:
+            return ""
+        else:
+            print("  (required)")
+
+
 # ─────────────────────────────────────────────────────────────────
 #   Configuration Collection
 # ─────────────────────────────────────────────────────────────────
@@ -156,6 +169,12 @@ class Config:
         self.dlp_username = ""
         self.dlp_password = ""
 
+        self.fsm_enabled = False
+        self.fsm_host = ""
+        self.fsm_port = 443
+        self.fsm_username = ""
+        self.fsm_password = ""
+
         self.heartbeat_interval = 30
 
 
@@ -179,7 +198,7 @@ def collect_config() -> Config:
         config.proxy_url = prompt("Proxy hostname or IP")
         config.proxy_port = prompt_int("Proxy port", 8080)
         config.proxy_username = prompt("Proxy username (if required)", required=False)
-        config.proxy_password = prompt("Proxy password (if required)", required=False)
+        config.proxy_password = prompt_password("Proxy password (if required)", required=False)
 
     print("\n" + "=" * 60)
     print("STEP 3: SQL SERVER CONFIGURATION")
@@ -198,7 +217,7 @@ def collect_config() -> Config:
 
     if config.sql_auth_mode == "sql":
         config.sql_username = prompt("SQL Server username")
-        config.sql_password = prompt("SQL Server password")
+        config.sql_password = prompt_password("SQL Server password")
 
     if config.single_sql_host:
         # Same host for all
@@ -225,6 +244,17 @@ def collect_config() -> Config:
         print("\nEmail database:")
         config.db_email_host = prompt("IP or hostname", config.sql_host)
         config.db_email_port = prompt_int("Port", config.sql_port)
+
+    print("\n" + "=" * 60)
+    print("STEP 4: FSM SERVER API (Optional)")
+    print("=" * 60)
+    config.fsm_enabled = prompt_bool("Configure FSM Server API access?", False)
+
+    if config.fsm_enabled:
+        config.fsm_host = prompt("FSM Server hostname or IP")
+        config.fsm_port = prompt_int("FSM Server port", 443)
+        config.fsm_username = prompt("FSM Server username")
+        config.fsm_password = prompt_password("FSM Server password")
 
     return config
 

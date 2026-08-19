@@ -2127,6 +2127,51 @@ export function Step3DataCollectors({
                   })()}
                 </div>
 
+                {/* Detailed Readiness Panel — Database & API connectivity details */}
+                {st?.selftest && (
+                  st.selftest.sqlData || st.selftest.sqlWeb || st.selftest.sqlEmail || st.selftest.dlpApi || st.selftest.sql
+                ) && (
+                  <div className="rounded-lg p-[12px_14px]"
+                    style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
+                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', marginBottom: '10px' }}>
+                      DATABASE & API CONNECTIVITY
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      {(() => {
+                        const hasNew = !!(st.selftest?.sqlData ?? st.selftest?.sqlWeb ?? st.selftest?.sqlEmail);
+                        const items = hasNew
+                          ? [
+                              { kind: 'sqlData', label: 'SQL · Data (wbsn-data-security)' },
+                              { kind: 'sqlWeb', label: 'SQL · Web (wslogdb70)' },
+                              { kind: 'sqlEmail', label: 'SQL · Email (esglogdb76)' },
+                              { kind: 'dlpApi', label: 'DLP REST API' },
+                            ]
+                          : [
+                              { kind: 'sql', label: 'SQL Server' },
+                              { kind: 'dlpApi', label: 'DLP REST API' },
+                            ];
+                        return items.map(({ kind, label }) => {
+                          const r = st.selftest?.[kind];
+                          if (!r) return null;
+                          const ok = r.status === 'ok';
+                          const color = ok ? '#16A34A' : '#DC2626';
+                          return (
+                            <div key={kind} className="flex items-center justify-between px-3 py-2 rounded" style={{ background: ok ? '#F0FDF4' : '#FEF2F2' }}>
+                              <span style={{ fontSize: '11px', color: '#0F172A', fontWeight: 500 }}>{label}</span>
+                              <div className="flex items-center gap-2">
+                                <span style={{ fontSize: '11px', fontWeight: 600, color: color }}>
+                                  {ok ? '✓ OK' : '✗ FAILED'}
+                                </span>
+                                {r.latencyMs && <span style={{ fontSize: '10px', color: '#94A3B8' }}>{r.latencyMs}ms</span>}
+                              </div>
+                            </div>
+                          );
+                        });
+                      })()}
+                    </div>
+                  </div>
+                )}
+
                 {/* Selftest panel — what the connector itself has
                     verified locally: SQL auth + DLP REST API auth.
                     Connector re-runs these every 5 minutes and sends
