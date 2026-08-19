@@ -2149,44 +2149,62 @@ export function Step3DataCollectors({
                   })()}
                 </div>
 
-                {/* Configuration Summary — What mode is the connector running in? */}
+                {/* Configuration Summary — Simple readiness status */}
                 {st && (() => {
                   const hasSQL = !!(st.selftest?.sqlData || st.selftest?.sqlWeb || st.selftest?.sqlEmail);
                   const hasAPI = !!st.selftest?.dlpApi;
                   const dataMode = hasSQL ? 'SQL Server + API' : hasAPI ? 'API-Only' : 'Waiting for selftest data...';
-                  const dataColor = hasSQL ? '#0F766E' : hasAPI ? '#7C3AED' : '#94A3B8';
 
                   return (
                     <div className="rounded-lg p-[12px_14px]"
                       style={{ background: '#F3F4F6', border: '1px solid #E5E7EB' }}>
-                      <div style={{ fontSize: '10px', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', marginBottom: '8px' }}>
+                      <div style={{ fontSize: '10px', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', marginBottom: '10px' }}>
                         CONNECTOR CONFIGURATION
                       </div>
-                      <div className="flex items-center gap-3 flex-wrap">
-                        <div className="flex items-center gap-2">
-                          <span style={{ fontSize: '10px', color: '#64748B', fontWeight: 500 }}>Data Source Mode:</span>
-                          <span style={{
-                            fontSize: '11px',
-                            fontWeight: 700,
-                            color: dataColor,
-                            padding: '4px 10px',
-                            background: dataColor + '14',
-                            borderRadius: '4px'
-                          }}>
-                            {dataMode}
-                          </span>
-                        </div>
-                        {hasSQL && (
-                          <div className="flex items-center gap-1" style={{ fontSize: '10px', color: '#0F766E' }}>
-                            🗄️ SQL: Data ✓ Web ✓ Email ✓
-                          </div>
-                        )}
-                        {hasAPI && (
-                          <div className="flex items-center gap-1" style={{ fontSize: '10px', color: '#7C3AED' }}>
-                            📡 API: Enabled ✓
-                          </div>
-                        )}
+
+                      {/* Data Source Mode */}
+                      <div style={{ marginBottom: '10px', paddingBottom: '10px', borderBottom: '1px solid #D1D5DB' }}>
+                        <div style={{ fontSize: '9px', color: '#6B7280', fontWeight: 600, marginBottom: '4px' }}>DATA SOURCE MODE</div>
+                        <div style={{ fontSize: '12px', fontWeight: 700, color: '#0F172A' }}>{dataMode}</div>
                       </div>
+
+                      {/* Database Status */}
+                      {hasSQL && (
+                        <div style={{ marginBottom: '10px' }}>
+                          <div style={{ fontSize: '9px', color: '#6B7280', fontWeight: 600, marginBottom: '6px' }}>DATABASE CONNECTIONS</div>
+                          <div className="flex flex-col gap-2">
+                            <div className="flex items-center gap-2" style={{ fontSize: '11px' }}>
+                              <span style={{ color: '#16A34A', fontWeight: 700 }}>✓</span>
+                              <span style={{ color: '#0F172A', fontWeight: 500 }}>SQL Data (wbsn-data-security)</span>
+                            </div>
+                            <div className="flex items-center gap-2" style={{ fontSize: '11px' }}>
+                              <span style={{ color: '#16A34A', fontWeight: 700 }}>✓</span>
+                              <span style={{ color: '#0F172A', fontWeight: 500 }}>SQL Web (wslogdb70)</span>
+                            </div>
+                            <div className="flex items-center gap-2" style={{ fontSize: '11px' }}>
+                              <span style={{ color: '#16A34A', fontWeight: 700 }}>✓</span>
+                              <span style={{ color: '#0F172A', fontWeight: 500 }}>SQL Email (esglogdb76)</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* API Status */}
+                      {hasAPI && (
+                        <div>
+                          <div style={{ fontSize: '9px', color: '#6B7280', fontWeight: 600, marginBottom: '6px' }}>API CONNECTION</div>
+                          <div className="flex items-center gap-2" style={{ fontSize: '11px' }}>
+                            <span style={{ color: '#7C3AED', fontWeight: 700 }}>✓</span>
+                            <span style={{ color: '#0F172A', fontWeight: 500 }}>DLP REST API</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {!hasSQL && !hasAPI && (
+                        <div style={{ fontSize: '11px', color: '#6B7280', fontStyle: 'italic' }}>
+                          Waiting for selftest results from connector...
+                        </div>
+                      )}
                     </div>
                   );
                 })()}
