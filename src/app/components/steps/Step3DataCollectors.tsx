@@ -2029,18 +2029,40 @@ export function Step3DataCollectors({
                   header so the SE can see SQL / DLP probe health even
                   when the body is collapsed. Empty when the connector
                   hasn't reported any selftest yet (no secrets file). */}
-              {cfg.enabled && selftestTotal > 0 && (
-                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg"
-                  title={`${selftestPassCount}/${selftestTotal} local credential probes passing on the connector`}
-                  style={{ background: `${selftestColor}14`, border: `1px solid ${selftestColor}40` }}>
-                  {selftestAllPass
-                    ? <CheckCircle2 size={12} style={{ color: selftestColor }} />
-                    : <XCircle      size={12} style={{ color: selftestColor }} />}
-                  <span style={{ fontSize: '11px', fontWeight: 700, color: selftestColor, letterSpacing: '0.05em' }}>
-                    SELFTEST {selftestPassCount}/{selftestTotal}
-                  </span>
-                </div>
-              )}
+              {cfg.enabled && st && (() => {
+                const probes = {
+                  'Data': st.selftest?.sqlData ?? st.selftest?.sql,
+                  'Web': st.selftest?.sqlWeb,
+                  'Email': st.selftest?.sqlEmail,
+                  'DLP': st.selftest?.dlpApi,
+                };
+                const readyProbes = Object.entries(probes)
+                  .filter(([_, p]) => p)
+                  .filter(([_, p]) => p?.status === 'ok')
+                  .map(([name]) => name);
+
+                return (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {selftestTotal > 0 && (
+                      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg"
+                        title={`${selftestPassCount}/${selftestTotal} local credential probes passing on the connector`}
+                        style={{ background: `${selftestColor}14`, border: `1px solid ${selftestColor}40` }}>
+                        {selftestAllPass
+                          ? <CheckCircle2 size={12} style={{ color: selftestColor }} />
+                          : <XCircle      size={12} style={{ color: selftestColor }} />}
+                        <span style={{ fontSize: '11px', fontWeight: 700, color: selftestColor, letterSpacing: '0.05em' }}>
+                          SELFTEST {selftestPassCount}/{selftestTotal}
+                        </span>
+                      </div>
+                    )}
+                    {readyProbes.length > 0 && (
+                      <div className="flex items-center gap-1" style={{ fontSize: '10px', color: '#16A34A', fontWeight: 600 }}>
+                        {readyProbes.join(' ✓ ')} ✓
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               <button onClick={(e) => {
                   e.stopPropagation();
