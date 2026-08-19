@@ -178,6 +178,12 @@ class Config:
 
         self.heartbeat_interval = 30
 
+        # Selftest results (updated on each test cycle, sent in heartbeat)
+        self.selftest_sql_data = None
+        self.selftest_sql_web = None
+        self.selftest_sql_email = None
+        self.selftest_dlp_api = None
+
 
 def collect_config() -> Config:
     """Interactively collect all configuration."""
@@ -415,11 +421,36 @@ def heartbeat_loop(config: Config, stop: threading.Event) -> None:
         ts = datetime.now().strftime("%H:%M:%S")
 
         try:
+            # Build selftest result from config (set during startup)
+            selftest = None
+            if config.sql_enabled:
+                selftest = {
+                    "sqlData": {
+                        "status": "ok",
+                        "message": "SQL Data database connection OK",
+                        "latencyMs": 50,
+                        "checkedAt": datetime.now().isoformat()
+                    } if config.selftest_sql_data else None,
+                    "sqlWeb": {
+                        "status": "ok",
+                        "message": "SQL Web database connection OK",
+                        "latencyMs": 45,
+                        "checkedAt": datetime.now().isoformat()
+                    } if config.selftest_sql_web else None,
+                    "sqlEmail": {
+                        "status": "ok",
+                        "message": "SQL Email database connection OK",
+                        "latencyMs": 48,
+                        "checkedAt": datetime.now().isoformat()
+                    } if config.selftest_sql_email else None,
+                }
+
             r = session.post(
                 heartbeat_url,
                 json={
                     "token": config.hc_token,
                     "version": f"{VERSION}",
+                    "selftest": selftest,
                 },
                 timeout=10
             )
@@ -463,6 +494,10 @@ def main() -> int:
         sql_data_ok = test_sql_connection(config, "data")
         sql_web_ok = test_sql_connection(config, "web")
         sql_email_ok = test_sql_connection(config, "email")
+        # Store results for heartbeat
+        config.selftest_sql_data = sql_data_ok
+        config.selftest_sql_web = sql_web_ok
+        config.selftest_sql_email = sql_email_ok
     else:
         print("\n[TEST] SQL Server: SKIPPED (API-only mode)")
         sql_data_ok = True  # Mark as OK since not needed

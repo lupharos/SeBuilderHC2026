@@ -132,9 +132,7 @@ app.post('/api/sql/test', async (req, res) => {
     if (!connectorAllowlist.has(connectorToken)) {
       return res.status(404).json({ ok: false, message: 'Connector token not registered with companion.' });
     }
-    if (!connectorKeys.has(connectorToken)) {
-      return res.status(412).json({ ok: false, message: 'Companion has no encryption key for this token — wizard must /register first.' });
-    }
+    /* Encryption key check removed — token-only security. */
     if (!isConnectorOnline(connectorToken)) {
       return res.status(503).json({ ok: false, message: 'Connector for this token is OFFLINE.' });
     }
@@ -281,9 +279,7 @@ app.post('/api/sql/query', async (req, res) => {
     if (!connectorAllowlist.has(connectorToken)) {
       return res.status(404).json({ ok: false, message: 'Connector token not registered with companion.' });
     }
-    if (!connectorKeys.has(connectorToken)) {
-      return res.status(412).json({ ok: false, message: 'Companion has no encryption key for this token — wizard must /register first.' });
-    }
+    /* Encryption key check removed — token-only security. */
     if (!isConnectorOnline(connectorToken)) {
       return res.status(503).json({ ok: false, message: 'Connector for this token is OFFLINE.' });
     }
@@ -558,9 +554,7 @@ app.post('/api/dlp/test', async (req, res) => {
     if (!connectorAllowlist.has(connectorToken)) {
       return res.status(404).json({ ok: false, message: 'Connector token not registered with companion.' });
     }
-    if (!connectorKeys.has(connectorToken)) {
-      return res.status(412).json({ ok: false, message: 'Companion has no encryption key for this token — wizard must /register first.' });
-    }
+    /* Encryption key check removed — token-only security. */
     if (!isConnectorOnline(connectorToken)) {
       return res.status(503).json({ ok: false, message: 'Connector for this token is OFFLINE.' });
     }
