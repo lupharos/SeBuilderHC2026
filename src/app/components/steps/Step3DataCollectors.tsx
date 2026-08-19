@@ -7,7 +7,7 @@ import { parseDlpAllLog, type DlpAllLogReport, type LogSeverity } from './dlpAll
 import { parseAuditSystemLogs, type AuditSystemLogsReport, type AuditSeverity } from './auditSystemLogsParser';
 import { parseDlpServiceLogs, isServiceLogFilename, type ServiceLogsReport, type ServiceLogSeverity, type ServiceLogFile } from './dlpServiceLogsParser';
 import { fetchDlpPosture, type DlpPostureSummary, type DlpPostureBlockId, type DestinationPatterns, DLP_POSTURE_BLOCKS, ALL_POSTURE_BLOCK_IDS, formatBytes } from './dlpPosture';
-import { type CustomerConnectorConfig, type CustomerConnectorStatus, randomHex256, fetchConnectorStatus, buildConnectorBundle, buildConnectorSecretsTemplate, registerConnectorAllowlist, deregisterConnectorToken, runJobViaConnector } from './customerConnector';
+import { type CustomerConnectorConfig, type CustomerConnectorStatus, randomHex256, fetchConnectorStatus, registerConnectorAllowlist, deregisterConnectorToken, runJobViaConnector } from './customerConnector';
 import { Key, Plug, RefreshCw, Activity, Globe2, Download, Eye, EyeOff, Copy } from 'lucide-react';
 
 /* Download URL for the customer connector .exe. The Ubuntu deploy
@@ -1392,60 +1392,10 @@ export function Step3DataCollectors({
   const updConnector = (patch: Partial<CustomerConnectorConfig>) =>
     setCustomerConnector((prev) => ({ ...prev, ...patch }));
 
-  /* Toggle state for the inline JSON preview that sits below the
-     Download buttons. null = collapsed, 'bundle' = show connector.json,
-     'secrets' = show connector-secrets.json. Same UX pattern as
-     "preview before download" on most config CLIs — operator can
-     eyeball values before handing the file to the customer. */
-  const [showingJson, setShowingJson] = useState<null | 'bundle' | 'secrets'>(null);
-  const [jsonCopied, setJsonCopied] = useState(false);
+  /* JSON preview state removed — connector v2 is interactive only. */
 
-  const downloadConnectorBundle = () => {
-    const bundle = buildConnectorBundle(customerConnector);
-    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `connector.json`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  };
-
-  /* Pre-fill the secrets template with whatever the wizard already
-     knows — saves the customer from re-typing credentials they've
-     already given the SE. SQL block maps onto sql_Data because the
-     wizard's single sqlConfig pin is wbsn-data-security; sql_Web and
-     sql_Email stay as CHANGE_ME placeholders unless / until we grow
-     a per-DB SQL UI. */
-  const downloadConnectorSecretsTemplate = () => {
-    const sqlPrefill = sqlConfig.enabled && sqlConfig.server
-      ? {
-          server: sqlConfig.server,
-          port: sqlConfig.port,
-          database: sqlConfig.database || 'wbsn-data-security',
-          authMode: sqlConfig.authType === 'windows' ? 'windows' as const : 'sql' as const,
-          username: sqlConfig.username,
-          password: sqlConfig.password,
-          trustServerCertificate: true,
-        }
-      : undefined;
-    const apiCfg = apiConnectors.dlpApi;
-    const apiPrefill = apiCfg.enabled && apiCfg.url
-      ? { url: apiCfg.url, username: apiCfg.username, password: apiCfg.password }
-      : undefined;
-    const template = buildConnectorSecretsTemplate({ sqlData: sqlPrefill, dlpApi: apiPrefill });
-    const blob = new Blob([JSON.stringify(template, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `connector-secrets.json`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  };
+  /* JSON bundle/secrets download removed — connector v2 is interactive
+     (no JSON files). Only exe download + token generation needed. */
 
   /* DLP REST API is basic-auth only (Application Administrator). Any session
      restored with the legacy 'apikey' authType or a lingering apiKey value
@@ -2361,90 +2311,12 @@ export function Step3DataCollectors({
                   </div>
                 </div>
 
-                {/* Action row — download connector.json + secrets template + revoke */}
+                {/* Action row — download .exe only (interactive config) */}
                 <div className="flex flex-wrap items-center gap-3 pt-2"
                   style={{ borderTop: '1px dashed #E2E8F0' }}>
-                  {/* connector.json — download paired with an inline
-                      "Show" toggle so the operator can sanity-check
-                      values (hcEndpoint, allowedSourceIp, etc.) before
-                      handing the file to the customer. */}
-                  <div className="flex">
-                    <button onClick={downloadConnectorBundle}
-                      disabled={!tokenOk || !keyOk}
-                      className="flex items-center gap-1.5 px-4 py-2 font-semibold transition-all"
-                      style={{
-                        fontSize: '12px',
-                        background: !tokenOk || !keyOk ? '#F1F5F9' : 'linear-gradient(135deg,#7C3AED,#5B21B6)',
-                        color:      !tokenOk || !keyOk ? '#94A3B8' : '#fff',
-                        cursor:     !tokenOk || !keyOk ? 'not-allowed' : 'pointer',
-                        border: '1.5px solid transparent',
-                        borderRadius: '8px 0 0 8px',
-                        boxShadow: !tokenOk || !keyOk ? 'none' : '0 4px 14px rgba(124,58,237,0.3)',
-                      }}
-                      title="Download the connector.json config (HC endpoint + token + AES-256 key + IP allowlist).">
-                      <Key size={12} /> Download connector.json
-                    </button>
-                    <button onClick={() => { setShowingJson((s) => s === 'bundle' ? null : 'bundle'); setJsonCopied(false); }}
-                      disabled={!tokenOk || !keyOk}
-                      className="flex items-center px-2.5 font-semibold transition-all"
-                      style={{
-                        fontSize: '11px',
-                        background: !tokenOk || !keyOk ? '#F1F5F9' : (showingJson === 'bundle' ? '#5B21B6' : 'rgba(124,58,237,0.85)'),
-                        color:      !tokenOk || !keyOk ? '#94A3B8' : '#fff',
-                        cursor:     !tokenOk || !keyOk ? 'not-allowed' : 'pointer',
-                        border: '1.5px solid transparent',
-                        borderRadius: '0 8px 8px 0',
-                        borderLeft: '1px solid rgba(255,255,255,0.18)',
-                      }}
-                      title={showingJson === 'bundle' ? 'Hide the connector.json preview.' : 'Show connector.json inline (preview the values before downloading).'}>
-                      {showingJson === 'bundle' ? <EyeOff size={12} /> : <Eye size={12} />}
-                    </button>
-                  </div>
-
-                  {/* connector-secrets.json — same Download + Show
-                      cluster. Template form, no live credentials
-                      unless the operator already filled in SQL +
-                      DLP-API in the wizard (those get pre-filled in
-                      and ARE visible in the preview). */}
-                  <div className="flex">
-                    <button onClick={downloadConnectorSecretsTemplate}
-                      className="flex items-center gap-1.5 px-4 py-2 font-semibold transition-all"
-                      style={{
-                        fontSize: '12px',
-                        background: 'linear-gradient(135deg,#0D9488,#0F766E)',
-                        color: '#fff',
-                        cursor: 'pointer',
-                        border: '1.5px solid transparent',
-                        borderRadius: '8px 0 0 8px',
-                        boxShadow: '0 4px 14px rgba(13,148,136,0.30)',
-                      }}
-                      title="Download a connector-secrets.json template the customer fills with their local SQL + DLP REST API credentials. Pre-filled from this wizard's SQL config + REST API config where available.">
-                      <FileText size={12} /> Download connector-secrets.json
-                    </button>
-                    <button onClick={() => { setShowingJson((s) => s === 'secrets' ? null : 'secrets'); setJsonCopied(false); }}
-                      className="flex items-center px-2.5 font-semibold transition-all"
-                      style={{
-                        fontSize: '11px',
-                        background: showingJson === 'secrets' ? '#0F766E' : 'rgba(13,148,136,0.85)',
-                        color: '#fff',
-                        cursor: 'pointer',
-                        border: '1.5px solid transparent',
-                        borderRadius: '0 8px 8px 0',
-                        borderLeft: '1px solid rgba(255,255,255,0.18)',
-                      }}
-                      title={showingJson === 'secrets' ? 'Hide the connector-secrets.json preview.' : 'Show connector-secrets.json template inline.'}>
-                      {showingJson === 'secrets' ? <EyeOff size={12} /> : <Eye size={12} />}
-                    </button>
-                  </div>
-                  {/* Connector binary download — same origin as the
-                      wizard (`/api/connector/agent` on the companion).
-                      The companion streams the file straight from the
-                      deploy host's filesystem, so there's no GitHub
-                      round-trip and the customer doesn't need
-                      internet access beyond the wizard URL. The
-                      `download` attribute makes Chrome / Edge save
-                      with the original filename rather than a hashed
-                      temp name. */}
+                  {/* Connector binary download — interactive CLI (no JSON files).
+                      Customer runs .exe and answers 3 prompts (HC endpoint,
+                      proxy optional, SQL servers). */}
                   <a href={CONNECTOR_EXE_URL}
                     download="forcepoint-hc-connector.exe"
                     className="flex items-center gap-1.5 px-4 py-2 rounded-lg font-semibold transition-all"
@@ -2457,7 +2329,7 @@ export function Step3DataCollectors({
                       boxShadow: '0 4px 14px rgba(15,41,82,0.30)',
                       textDecoration: 'none',
                     }}
-                    title="Download forcepoint-hc-connector.exe straight from this HC server. No external network round-trip; the binary is served from the deploy host's ConnectorAgent/ folder.">
+                    title="Download forcepoint-hc-connector.exe. Customer runs this and answers 3 interactive prompts.">
                     <Download size={12} /> Download forcepoint-hc-connector.exe
                   </a>
                   <button onClick={revokeConnectorAccess}
@@ -2474,104 +2346,16 @@ export function Step3DataCollectors({
                     <Trash2 size={12} /> Revoke access
                   </button>
                   <span style={{ fontSize: '10.5px', color: '#64748B', lineHeight: 1.5, flex: 1, minWidth: 240 }}>
-                    Hand the customer all three artifacts:
-                    {' '}<span className="font-mono" style={{ color: '#0F2952' }}>connector.json</span> (identity / HC endpoint),
-                    {' '}<span className="font-mono" style={{ color: '#0F2952' }}>connector-secrets.json</span> (local SQL + DLP-API creds — they fill / verify the pre-fill),
-                    and{' '}<span className="font-mono" style={{ color: '#0F2952' }}>forcepoint-hc-connector.exe</span> (served from this HC host).
-                    Customer drops all three in the same folder and starts the service. Once it phones home, the status pill above turns <span style={{ color: '#16A34A', fontWeight: 700 }}>ONLINE</span>.
+                    Give customer the .exe and the token above.
+                    Customer runs the .exe and is prompted for:
+                    {' '}<span className="font-mono" style={{ color: '#0F2952' }}>HC endpoint</span> (IP/port),
+                    {' '}<span className="font-mono" style={{ color: '#0F2952' }}>proxy settings</span> (optional),
+                    and{' '}<span className="font-mono" style={{ color: '#0F2952' }}>SQL servers</span> (data/web/email).
+                    Once it phones home, the status pill above turns <span style={{ color: '#16A34A', fontWeight: 700 }}>ONLINE</span>.
                   </span>
                 </div>
 
-                {/* Inline JSON preview — same content as the matching
-                    download, rendered as a monospace pre block so the
-                    operator can copy-paste into the customer's host
-                    directly when air-gapped file transfer is awkward.
-                    Header carries Copy-to-clipboard + a quick visual
-                    confirmation; clicking Copy doesn't change focus,
-                    so the operator stays in the wizard flow. */}
-                {showingJson && (() => {
-                  const isBundle = showingJson === 'bundle';
-                  const fileName = isBundle ? 'connector.json' : 'connector-secrets.json';
-                  const obj = isBundle
-                    ? buildConnectorBundle(customerConnector)
-                    : buildConnectorSecretsTemplate({
-                        sqlData: sqlConfig.enabled && sqlConfig.server ? {
-                          server: sqlConfig.server, port: sqlConfig.port,
-                          database: sqlConfig.database || 'wbsn-data-security',
-                          authMode: sqlConfig.authType === 'windows' ? 'windows' as const : 'sql' as const,
-                          username: sqlConfig.username, password: sqlConfig.password,
-                          trustServerCertificate: true,
-                        } : undefined,
-                        dlpApi: apiConnectors.dlpApi.enabled && apiConnectors.dlpApi.url ? {
-                          url: apiConnectors.dlpApi.url,
-                          username: apiConnectors.dlpApi.username,
-                          password: apiConnectors.dlpApi.password,
-                        } : undefined,
-                      });
-                  const jsonStr = JSON.stringify(obj, null, 2);
-                  const accent = isBundle ? '#5B21B6' : '#0F766E';
-                  return (
-                    <div className="rounded-lg overflow-hidden mt-2"
-                      style={{ border: `1px solid ${accent}33` }}>
-                      <div className="flex items-center justify-between px-3 py-2"
-                        style={{ background: accent, color: '#fff' }}>
-                        <span className="font-mono" style={{ fontSize: '11px', letterSpacing: '0.02em' }}>
-                          {fileName}
-                        </span>
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              try {
-                                await navigator.clipboard.writeText(jsonStr);
-                                setJsonCopied(true);
-                                setTimeout(() => setJsonCopied(false), 1800);
-                              } catch { /* clipboard blocked — ignore */ }
-                            }}
-                            className="flex items-center gap-1.5 px-2 py-1 rounded font-semibold"
-                            style={{
-                              fontSize: '10.5px',
-                              background: 'rgba(255,255,255,0.18)',
-                              color: '#fff',
-                              border: '1px solid rgba(255,255,255,0.28)',
-                              cursor: 'pointer',
-                            }}
-                            title="Copy the JSON to the clipboard.">
-                            {jsonCopied ? <><CheckCircle2 size={11} /> Copied</> : <><Copy size={11} /> Copy</>}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setShowingJson(null)}
-                            className="flex items-center justify-center rounded"
-                            style={{
-                              width: 22, height: 22,
-                              background: 'rgba(255,255,255,0.15)',
-                              color: '#fff',
-                              border: '1px solid rgba(255,255,255,0.25)',
-                              cursor: 'pointer',
-                            }}
-                            title="Hide preview.">
-                            <XIcon size={11} />
-                          </button>
-                        </div>
-                      </div>
-                      <pre className="font-mono"
-                        style={{
-                          margin: 0,
-                          padding: '12px 14px',
-                          fontSize: '11px',
-                          lineHeight: 1.55,
-                          color: '#0F172A',
-                          background: '#F8FAFC',
-                          maxHeight: 360,
-                          overflow: 'auto',
-                          whiteSpace: 'pre',
-                        }}>
-                        {jsonStr}
-                      </pre>
-                    </div>
-                  );
-                })()}
+                {/* JSON preview removed — connector v2 is interactive only. */}
               </div>
             )}
           </div>
