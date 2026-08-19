@@ -152,7 +152,7 @@ def collect_config() -> Config:
     print("\n" + "=" * 60)
     print("STEP 1: HC COMPANION ENDPOINT")
     print("=" * 60)
-    config.hc_endpoint = prompt("HC API IP address or hostname")
+    config.hc_endpoint = prompt("HC API IP address or hostname (without http://)")
     config.hc_port = prompt_int("HC API port", 80)
     config.hc_token = prompt("HC Connector token (from wizard)")
 
@@ -222,7 +222,15 @@ def collect_config() -> Config:
 def test_hc_endpoint(config: Config) -> bool:
     """Test HC API endpoint connectivity."""
     print("\n[TEST] HC Endpoint:")
-    url = f"http://{config.hc_endpoint}:{config.hc_port}/health"
+
+    # Strip protocol prefix if user accidentally included it
+    hc_endpoint = config.hc_endpoint.lstrip('/')
+    if hc_endpoint.startswith('http://'):
+        hc_endpoint = hc_endpoint[7:]
+    elif hc_endpoint.startswith('https://'):
+        hc_endpoint = hc_endpoint[8:]
+
+    url = f"http://{hc_endpoint}:{config.hc_port}/health"
 
     try:
         session = requests.Session()
@@ -325,7 +333,14 @@ def test_sql_tcp(host: str, port: int) -> bool:
 
 def heartbeat_loop(config: Config, stop: threading.Event) -> None:
     """Send heartbeats every N seconds."""
-    endpoint = f"http://{config.hc_endpoint}:{config.hc_port}"
+    # Strip protocol prefix if user accidentally included it
+    hc_endpoint = config.hc_endpoint.lstrip('/')
+    if hc_endpoint.startswith('http://'):
+        hc_endpoint = hc_endpoint[7:]
+    elif hc_endpoint.startswith('https://'):
+        hc_endpoint = hc_endpoint[8:]
+
+    endpoint = f"http://{hc_endpoint}:{config.hc_port}"
     heartbeat_url = endpoint + "/api/connector/heartbeat"
 
     session = requests.Session()
