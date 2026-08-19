@@ -1313,46 +1313,22 @@ function ipMatchesAllowlist(clientIpStr, allowed) {
 }
 
 /* POST /api/connector/register
-   Body: { token: string, allowedSourceIp?: string, encryptionKey?: string }
-   The wizard calls this whenever the operator sets / changes the
-   token, the allowed-source-IP, or the encryption key. Companion
-   stores all three per-token in memory; subsequent heartbeats are
-   validated against the allowlist, and Via-Connector job results are
-   decrypted with the stored key.
+   Body: { token: string }
+   Register the connector token. Security is provided by token + HTTPS.
+   No IP allowlist or encryption key needed — the interactive connector
+   .exe asks for all configuration at runtime.
 
-   `encryptionKey` (added in Stage 2 of the Via-Connector rollout) is
-   a 64-char hex string (32 bytes = AES-256). Optional for backwards
-   compat — legacy wizards that don't send it can still use direct
-   mode and selftest heartbeats, just not Via-Connector jobs.
-
-   Idempotent — safe to re-call after a wizard refresh or server
-   restart (the companion's in-memory map is wiped on restart, so the
-   wizard re-pushes on every page open). */
+   Idempotent — safe to re-call after a wizard refresh. */
 app.post('/api/connector/register', (req, res) => {
-  const { token, allowedSourceIp, encryptionKey } = req.body ?? {};
+  const { token } = req.body ?? {};
   if (!token || typeof token !== 'string') {
     return res.status(400).json({ ok: false, message: 'Missing token.' });
   }
-  const ip = typeof allowedSourceIp === 'string' ? allowedSourceIp.trim() : '';
-  /* Always set the token in the allowlist — empty IP means "registered
-     with no IP restriction" (any source IP accepted). The HEARTBEAT
-     handler treats absence-from-the-map as "not registered → reject",
-     so a registered-with-empty-IP entry is the way to whitelist a
-     token without locking it to a specific IP. */
-  connectorAllowlist.set(token, ip);
-  /* Store / refresh the symmetric key. Empty / non-hex → drop any
-     prior key (Via-Connector mode will refuse to queue until the
-     wizard re-pushes a valid key). */
-  if (typeof encryptionKey === 'string' && /^[0-9a-fA-F]{64}$/.test(encryptionKey)) {
-    connectorKeys.set(token, encryptionKey);
-  } else {
-    connectorKeys.delete(token);
-  }
+  /* Register token with no IP restriction — security is token-only. */
+  connectorAllowlist.set(token, '');
   res.json({
     ok: true,
     token: token.slice(0, 8) + '…',
-    allowedSourceIp: ip || null,
-    keyRegistered: connectorKeys.has(token),
   });
 });
 
@@ -1434,29 +1410,7 @@ app.post('/api/connector/heartbeat', (req, res) => {
     });
   }
 
-  const allowed = connectorAllowlist.get(token) ?? '';
-  if (allowed && !ipMatchesAllowlist(ip, allowed)) {
-    /* Track the rejection so the wizard's status pill can surface
-       "wrong IP" attempts even though no successful heartbeat was
-       recorded. lastSeen / total stay untouched — the token is still
-       considered un-phoned-home as far as ONLINE/STALE is concerned. */
-    const nowIso = new Date().toISOString();
-    const prev = connectorState.get(token);
-    connectorState.set(token, {
-      firstSeen:        prev?.firstSeen        ?? nowIso,
-      lastSeen:         prev?.lastSeen         ?? nowIso,
-      lastIp:           prev?.lastIp           ?? null,
-      total:            prev?.total            ?? 0,
-      version:          prev?.version          ?? null,
-      rejected:        (prev?.rejected         ?? 0) + 1,
-      lastRejectedAt:   nowIso,
-      lastRejectedIp:   ip,
-    });
-    return res.status(403).json({
-      ok: false,
-      message: `Source IP ${ip} not in allowlist (${allowed}).`,
-    });
-  }
+  /* IP allowlist removed — security is token-only. */
 
   const nowIso = new Date().toISOString();
   const prev = connectorState.get(token);

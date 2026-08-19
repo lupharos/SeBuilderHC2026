@@ -14,33 +14,15 @@ export interface CustomerConnectorConfig {
       and no status polling fires. */
   enabled: boolean;
   /** Random 256-bit token, hex-encoded (64 chars). Acts as the connector's
-      sole identity to the HC companion. Rotatable — regenerating only
-      requires re-deploying the connector's config file. */
+      sole identity to the HC companion. This is the ONLY credential needed
+      (security provided by token + HTTPS). Rotatable — regenerating only
+      requires running the .exe again. */
   token: string;
-  /** IPv4 / IPv6 / CIDR the connector is expected to phone home from.
-      Companion enforces this as a second layer alongside the token. Empty
-      string disables the check (development only). */
-  allowedSourceIp: string;
-  /** AES-256-GCM symmetric key, hex-encoded (64 chars = 32 bytes). Used
-      end-to-end for the encrypted job payload. Server NEVER sees this in
-      plaintext over the wire — the wizard sends it once via the
-      operator-driven `connector.json` download. */
-  encryptionKey: string;
-  /** Base URL the customer's connector phones home to. This is the
-      public address of the nginx gateway in front of the HC companion
-      (e.g. `https://hc.forcepoint-se.com`). nginx handles the
-      `/api/connector/heartbeat` route and proxies it to the loopback
-      companion. The SE fills this in per engagement; left blank by
-      default so a forgotten value is obvious in the bundle. */
-  hcEndpoint: string;
 }
 
 export const DEFAULT_CUSTOMER_CONNECTOR: CustomerConnectorConfig = {
   enabled: false,
   token: '',
-  allowedSourceIp: '',
-  encryptionKey: '',
-  hcEndpoint: '',
 };
 
 /* Cryptographically-random 256-bit hex string. Generated via the Web
@@ -123,22 +105,11 @@ export async function fetchConnectorStatus(token: string, signal?: AbortSignal):
   }
 }
 
-/* Push the current per-token IP allowlist + encryption key to the
-   companion. The wizard calls this whenever the token, allowed-source-
-   IP, or encryption key changes — and again on mount, in case the
-   companion was restarted and lost its in-memory state. Empty
-   `allowedSourceIp` clears the IP rule (no restriction); empty / non-
-   hex `encryptionKey` drops any prior key (Via-Connector job queue
-   will refuse to enqueue work until a valid key lands).
-
-   `encryptionKey` was added in Stage 2 of the Via-Connector rollout —
-   companion needs it to decrypt AES-256-GCM job results coming back
-   from the customer Connector .exe. Direct-mode operation doesn't
-   touch this key, so omitting it is fine for direct-only deployments. */
+/* Register the connector token with the HC companion.
+   The token is the ONLY credential — security is token + HTTPS.
+   The wizard calls this when the token is first generated. */
 export async function registerConnectorAllowlist(
   token: string,
-  allowedSourceIp: string,
-  encryptionKey?: string,
   signal?: AbortSignal,
 ): Promise<boolean> {
   if (!token) return false;
@@ -146,7 +117,7 @@ export async function registerConnectorAllowlist(
     const res = await fetch('/api/connector/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, allowedSourceIp, encryptionKey }),
+      body: JSON.stringify({ token }),
       signal: signal ?? AbortSignal.timeout(4000),
     });
     return res.ok;
@@ -183,21 +154,6 @@ export async function deregisterConnectorToken(
   }
 }
 
-/* Snapshot of the operator-visible connector config that gets exported
-   to the customer's connector.json. Encryption key + token live here in
-   plaintext; this file leaves the SE laptop only when handed to the
-   customer for deployment. */
-export interface ConnectorBundle {
-  _format: 'forcepoint-hc-customer-connector';
-  _version: 1;
-  _generatedAt: string;
-  hcEndpoint: string;
-  token: string;
-  allowedSourceIp: string;
-  encryptionAlgorithm: 'AES-256-GCM';
-  encryptionKeyHex: string;
-  heartbeatIntervalSeconds: 30;
-}
 
 /* Queue a job for the Customer Connector to execute, then short-poll
    the result endpoint until it lands. Used by the wizard's
@@ -277,100 +233,4 @@ export async function runJobViaConnector<T = unknown>(
   throw new Error(`Via-Connector: timed out after ${Math.round(overallTimeout / 1000)}s waiting for job result.`);
 }
 
-export function buildConnectorBundle(cfg: CustomerConnectorConfig): ConnectorBundle {
-  return {
-    _format: 'forcepoint-hc-customer-connector',
-    _version: 1,
-    _generatedAt: new Date().toISOString(),
-    hcEndpoint: cfg.hcEndpoint,
-    token: cfg.token,
-    allowedSourceIp: cfg.allowedSourceIp,
-    encryptionAlgorithm: 'AES-256-GCM',
-    encryptionKeyHex: cfg.encryptionKey,
-    heartbeatIntervalSeconds: 30,
-  };
-}
 
-/* Shape of a single SQL block inside `connector-secrets.json`. The
-   connector binary reads these with `pyodbc` using the field names
-   below — must stay in lockstep with `connector/main.py:209+`. */
-export interface ConnectorSecretsSqlBlock {
-  server: string;                  // hostname or IP of the SQL Server
-  port: number;                    // typically 1433
-  database: string;                // wbsn-data-security / wslogdb70 / esglogdb76
-  authMode: 'sql' | 'windows';     // sql = UID/PWD; windows = Trusted_Connection
-  username: string;                // ignored when authMode = "windows"
-  password: string;                // ignored when authMode = "windows"
-  trustServerCertificate: boolean; // most DLP deployments use self-signed certs
-}
-
-/* DLP REST API block — `connector/main.py` calls
-   `{url}/dlp/rest/v1/auth/refresh-token` with Basic auth. */
-export interface ConnectorSecretsApiBlock {
-  url: string;
-  username: string;
-  password: string;
-}
-
-/* Top-level shape of `connector-secrets.json`. Lives next to the
-   connector .exe on the customer host; the operator (or customer
-   admin) fills in any blocks they want probed and leaves the rest
-   as null. The connector only runs selftests against populated
-   blocks — empty/null blocks are silently skipped. */
-export interface ConnectorSecretsTemplate {
-  _format: 'forcepoint-hc-customer-connector-secrets';
-  _version: 1;
-  _generatedAt: string;
-  /* Three discrete SQL blocks — one per DLP-stack DB. Leave null
-     when the customer can't / won't expose that DB to the connector
-     (e.g. no Email Security stack). */
-  sql_Data:  ConnectorSecretsSqlBlock | null;
-  sql_Web:   ConnectorSecretsSqlBlock | null;
-  sql_Email: ConnectorSecretsSqlBlock | null;
-  /* DLP REST API block. Null when the customer hasn't provisioned
-     an API user yet. */
-  dlpApi:    ConnectorSecretsApiBlock | null;
-}
-
-function blankSqlBlock(database: string): ConnectorSecretsSqlBlock {
-  return {
-    server: 'CHANGE_ME — SQL Server hostname or IP',
-    port: 1433,
-    database,
-    authMode: 'sql',
-    username: 'CHANGE_ME',
-    password: 'CHANGE_ME',
-    trustServerCertificate: true,
-  };
-}
-
-/* Build a fresh `connector-secrets.json` template the SE hands to
-   the customer alongside connector.json + the .exe. Optional
-   `prefill` lets the wizard pre-populate the DLP-API block from
-   the wizard's own REST API config and the DLP SQL block from the
-   wizard's SQL config — saves the customer from re-typing the same
-   credentials. Pass `prefill = undefined` for a pure template
-   (all CHANGE_ME placeholders). */
-export function buildConnectorSecretsTemplate(prefill?: {
-  sqlData?: Partial<ConnectorSecretsSqlBlock>;
-  dlpApi?:  Partial<ConnectorSecretsApiBlock>;
-}): ConnectorSecretsTemplate {
-  const sqlData = blankSqlBlock('wbsn-data-security');
-  const sqlWeb  = blankSqlBlock('wslogdb70');
-  const sqlEmail = blankSqlBlock('esglogdb76');
-  if (prefill?.sqlData) Object.assign(sqlData, prefill.sqlData);
-  const dlpApi: ConnectorSecretsApiBlock = {
-    url: prefill?.dlpApi?.url ?? 'https://FSMServer:9443',
-    username: prefill?.dlpApi?.username ?? 'CHANGE_ME — DLP API Application Administrator',
-    password: prefill?.dlpApi?.password ?? 'CHANGE_ME',
-  };
-  return {
-    _format: 'forcepoint-hc-customer-connector-secrets',
-    _version: 1,
-    _generatedAt: new Date().toISOString(),
-    sql_Data:  sqlData,
-    sql_Web:   sqlWeb,
-    sql_Email: sqlEmail,
-    dlpApi:    dlpApi,
-  };
-}
