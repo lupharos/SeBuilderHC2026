@@ -298,21 +298,12 @@ app.post('/api/sql/query', async (req, res) => {
         sqlKey,
         windowDays: effectiveDays,
         topN: effectiveTopN,
-        message: done.error,
+        message: done.error || 'Connector reported SQL query failure.',
         latencyMs: ms,
       });
     }
+    /* Success case: done.ok === true, so done.payload has the result */
     const p = done.payload || {};
-    if (!p.ok) {
-      return res.status(400).json({
-        ok: false,
-        sqlKey,
-        windowDays: effectiveDays,
-        topN: effectiveTopN,
-        message: p.error || 'Connector reported SQL query failure.',
-        latencyMs: p.latencyMs ?? ms,
-      });
-    }
     return res.json({
       ok: true,
       sqlKey,
