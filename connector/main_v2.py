@@ -643,6 +643,43 @@ def execute_job(config: Config, kind: str, params: dict) -> dict:
                     "error": f"Query failed: {type(e).__name__}: {str(e)[:100]}"
                 }
 
+        elif kind == "dlp.test":
+            # Test DLP REST API connection
+            # Via-Connector mode: connector uses FSM credentials stored locally
+            if not config.fsm_enabled:
+                return {"ok": False, "error": "FSM Server API not configured"}
+
+            try:
+                import requests
+                import ssl
+                ssl_context = ssl.create_default_context()
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
+
+                url = f"https://{config.fsm_host}:{config.fsm_port}/api/v1/deploy/status"
+                auth = (config.fsm_username, config.fsm_password)
+                response = requests.get(url, auth=auth, timeout=10, verify=False)
+
+                if response.status_code == 200:
+                    return {
+                        "ok": True,
+                        "payload": {
+                            "status": "ok",
+                            "message": "DLP REST API authenticated",
+                            "server": {"version": "via FSM"}
+                        }
+                    }
+                else:
+                    return {
+                        "ok": False,
+                        "error": f"DLP API returned HTTP {response.status_code}"
+                    }
+            except Exception as e:
+                return {
+                    "ok": False,
+                    "error": f"DLP API test failed: {type(e).__name__}: {str(e)[:100]}"
+                }
+
         else:
             return {"ok": False, "error": f"Unknown job kind: {kind}"}
 
