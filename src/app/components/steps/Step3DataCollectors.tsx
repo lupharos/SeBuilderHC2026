@@ -2280,8 +2280,12 @@ export function Step3DataCollectors({
                       boxShadow: '0 4px 14px rgba(15,41,82,0.30)',
                       textDecoration: 'none',
                     }}
-                    title="Download forcepoint-hc-connector.exe. Customer runs this and answers 3 interactive prompts.">
-                    <Download size={12} /> Download forcepoint-hc-connector.exe
+                    title={`Download forcepoint-hc-connector.exe${st?.version ? ` (v${st.version})` : ''}. Customer runs this and answers 3 interactive prompts.`}>
+                    <Download size={12} /> Download forcepoint-hc-connector.exe{st?.version && (
+                      <span style={{ marginLeft: '6px', fontSize: '11px', color: '#94A3B8', fontWeight: 500 }}>
+                        (v{st.version})
+                      </span>
+                    )}
                   </a>
                   <button onClick={revokeConnectorAccess}
                     disabled={!tokenOk}
