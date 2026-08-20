@@ -44,22 +44,9 @@ except ImportError:
 
 import secrets as _secrets
 
-# Load version from versioncheck.json (synced at build time)
-def _load_version() -> str:
-    """Load version from versioncheck.json or fall back to default."""
-    try:
-        # Try to load from same directory as this script
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        version_file = os.path.join(script_dir, 'versioncheck.json')
-        if os.path.exists(version_file):
-            with open(version_file, 'r') as f:
-                data = json.load(f)
-                return data.get('version', '0.2.0')
-    except Exception:
-        pass
-    return "0.2.0"
-
-VERSION = _load_version()
+# Version is hardcoded here and must be updated with each build
+# Update this whenever versioncheck.json version changes
+VERSION = "2026.08.20.3"
 
 BANNER = r"""
 +──────────────────────────────────────────────────────────────+
