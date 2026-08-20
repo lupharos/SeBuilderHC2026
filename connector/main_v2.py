@@ -583,6 +583,7 @@ def execute_job(config: Config, kind: str, params: dict) -> dict:
                 return {
                     "ok": True,
                     "payload": {
+                        "ok": True,
                         "status": "ok",
                         "message": f"SQL connection OK",
                         "server": {"version": version},
@@ -664,6 +665,7 @@ def execute_job(config: Config, kind: str, params: dict) -> dict:
                     return {
                         "ok": True,
                         "payload": {
+                            "ok": True,
                             "status": "ok",
                             "message": "DLP REST API authenticated",
                             "server": {"version": "via FSM"}
