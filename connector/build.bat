@@ -23,7 +23,7 @@ pyinstaller --onefile ^
             --console ^
             --name forcepoint-hc-connector ^
             --noconfirm ^
-            main.py
+            main_v2.py
 
 if errorlevel 1 (
     echo.
