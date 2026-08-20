@@ -644,7 +644,9 @@ def execute_job(config: Config, kind: str, params: dict) -> dict:
                 ssl_context.check_hostname = False
                 ssl_context.verify_mode = ssl.CERT_NONE
 
-                url = f"https://{config.fsm_host}:{config.fsm_port}/api/v1/deploy/status"
+                # DLP REST API endpoint: /dlp/rest/v1/deploy/status
+                # This endpoint returns the current DLP deploy status
+                url = f"https://{config.fsm_host}:{config.fsm_port}/dlp/rest/v1/deploy/status"
                 auth = (config.fsm_username, config.fsm_password)
                 response = requests.get(url, auth=auth, timeout=10, verify=False)
 
@@ -658,10 +660,15 @@ def execute_job(config: Config, kind: str, params: dict) -> dict:
                             "server": {"version": "via FSM"}
                         }
                     }
+                elif response.status_code == 401:
+                    return {
+                        "ok": False,
+                        "error": "DLP API authentication failed (401) — check username/password"
+                    }
                 else:
                     return {
                         "ok": False,
-                        "error": f"DLP API returned HTTP {response.status_code}"
+                        "error": f"DLP API returned HTTP {response.status_code} at /dlp/rest/v1/deploy/status"
                     }
             except Exception as e:
                 return {
