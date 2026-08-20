@@ -643,11 +643,15 @@ def execute_job(config: Config, kind: str, params: dict) -> dict:
                 import json
 
                 base_url = f"https://{config.fsm_host}:{config.fsm_port}"
-                auth = (config.fsm_username, config.fsm_password)
 
                 # Step 1: Get refresh token
+                # DLP 10.4 API: credentials as explicit header parameters (not Basic auth)
                 refresh_token_url = f"{base_url}/dlp/rest/v1/auth/refresh-token"
-                response1 = requests.post(refresh_token_url, auth=auth, timeout=10, verify=False)
+                headers1 = {
+                    "username": config.fsm_username,
+                    "password": config.fsm_password
+                }
+                response1 = requests.post(refresh_token_url, headers=headers1, timeout=10, verify=False)
 
                 if response1.status_code != 200:
                     return {
