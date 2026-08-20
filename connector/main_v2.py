@@ -632,44 +632,70 @@ def execute_job(config: Config, kind: str, params: dict) -> dict:
                 }
 
         elif kind == "dlp.test":
-            # Test DLP REST API connection
-            # Via-Connector mode: connector uses FSM credentials stored locally
+            # Test DLP REST API connection using JWT token auth flow
+            # Step 1: Get refresh token (Basic auth)
+            # Step 2: Get access token (using refresh token)
             if not config.fsm_enabled:
                 return {"ok": False, "error": "FSM Server API not configured"}
 
             try:
                 import requests
-                import ssl
-                ssl_context = ssl.create_default_context()
-                ssl_context.check_hostname = False
-                ssl_context.verify_mode = ssl.CERT_NONE
+                import json
 
-                # DLP REST API endpoint: /dlp/rest/v1/deploy/status
-                # This endpoint returns the current DLP deploy status
-                url = f"https://{config.fsm_host}:{config.fsm_port}/dlp/rest/v1/deploy/status"
+                base_url = f"https://{config.fsm_host}:{config.fsm_port}"
                 auth = (config.fsm_username, config.fsm_password)
-                response = requests.get(url, auth=auth, timeout=10, verify=False)
 
-                if response.status_code == 200:
+                # Step 1: Get refresh token
+                refresh_token_url = f"{base_url}/dlp/rest/v1/auth/refresh-token"
+                response1 = requests.post(refresh_token_url, auth=auth, timeout=10, verify=False)
+
+                if response1.status_code != 200:
                     return {
+                        "ok": False,
+                        "error": f"Failed to get refresh token (HTTP {response1.status_code}) — check credentials"
+                    }
+
+                refresh_data = response1.json()
+                refresh_token = refresh_data.get("refresh_token")
+                if not refresh_token:
+                    return {
+                        "ok": False,
+                        "error": "No refresh_token in response"
+                    }
+
+                # Step 2: Get access token using refresh token
+                access_token_url = f"{base_url}/dlp/rest/v1/auth/access-token"
+                headers = {
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {refresh_token}"
+                }
+                response2 = requests.post(access_token_url, headers=headers, json={}, timeout=10, verify=False)
+
+                if response2.status_code != 200:
+                    return {
+                        "ok": False,
+                        "error": f"Failed to get access token (HTTP {response2.status_code})"
+                    }
+
+                access_data = response2.json()
+                access_token = access_data.get("access_token")
+                if not access_token:
+                    return {
+                        "ok": False,
+                        "error": "No access_token in response"
+                    }
+
+                # Success: We have valid JWT tokens, DLP API is accessible
+                return {
+                    "ok": True,
+                    "payload": {
                         "ok": True,
-                        "payload": {
-                            "ok": True,
-                            "status": "ok",
-                            "message": "DLP REST API authenticated",
-                            "server": {"version": "via FSM"}
-                        }
+                        "status": "ok",
+                        "message": "DLP REST API authenticated",
+                        "server": {"version": "JWT auth successful"}
                     }
-                elif response.status_code == 401:
-                    return {
-                        "ok": False,
-                        "error": "DLP API authentication failed (401) — check username/password"
-                    }
-                else:
-                    return {
-                        "ok": False,
-                        "error": f"DLP API returned HTTP {response.status_code} at /dlp/rest/v1/deploy/status"
-                    }
+                }
+
             except Exception as e:
                 return {
                     "ok": False,
