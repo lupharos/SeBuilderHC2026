@@ -2277,6 +2277,7 @@ export function Step3DataCollectors({
                   <a href={CONNECTOR_EXE_URL}
                     download="forcepoint-hc-connector.exe"
                     className="flex items-center gap-1.5 px-4 py-2 rounded-lg font-semibold transition-all"
+                    title={`Download Connector v${st?.connectorVersion || '—'}`}
                     style={{
                       fontSize: '12px',
                       background: 'linear-gradient(135deg,#0F2952,#1E40AF)',
