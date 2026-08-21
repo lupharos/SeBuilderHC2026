@@ -46,7 +46,7 @@ import logging
 
 # Version is hardcoded here and must be updated with each build
 # Update this whenever versioncheck.json version changes
-VERSION = "2026.08.21.6"
+VERSION = "2026.08.21.7"
 
 # ─────────────────────────────────────────────────────────────────
 #   File Logging Setup (PHASE 2 FIX #1)
@@ -408,6 +408,32 @@ def interactive_setup() -> Config:
             break
 
     # ─────────────────────────────────────────────────────────────
+    # STEP 1.5: TLS/HTTPS SETTINGS (Optional)
+    # ─────────────────────────────────────────────────────────────
+    print("\n" + "=" * 60)
+    print("STEP 1.5: TLS/HTTPS SETTINGS (Optional)")
+    print("=" * 60)
+    print("Configure HTTPS certificate validation:")
+    print("  • Verify certificates (default) - strict security")
+    print("  • Accept self-signed - needed for internal DLP servers")
+    print("  • Custom CA path - use corporate CA file")
+
+    config.tls_verify = prompt_bool("Verify HTTPS certificates?", True)
+    if not config.tls_verify:
+        config.tls_insecure_mode_acknowledged = prompt_bool("Accept self-signed certificates?", True)
+        print("  → Self-signed certificates will be accepted")
+        config.tls_verify = False
+    else:
+        custom_ca = prompt_bool("Use custom CA certificate file?", False)
+        if custom_ca:
+            config.tls_custom_ca_path = prompt("Path to CA certificate file (.pem or .crt)")
+            print(f"  → Using custom CA: {config.tls_custom_ca_path}")
+            config.tls_verify = config.tls_custom_ca_path
+        else:
+            print("  → Using system default CA certificates")
+            config.tls_verify = True
+
+    # ─────────────────────────────────────────────────────────────
     # STEP 2: HC API - Test immediately
     # ─────────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
@@ -580,8 +606,21 @@ def interactive_setup() -> Config:
                     sys.exit(1)
 
             except Exception as e:
-                safe_msg = sanitize_error_message(str(e)[:100])
-                print(f"  ✗ DLP API test failed: {safe_msg}")
+                error_str = str(e)
+                safe_msg = sanitize_error_message(error_str[:150])
+
+                # Help diagnose SSL/certificate issues
+                if "certificate" in error_str.lower() or "ssl" in error_str.lower() or "self" in error_str.lower():
+                    print(f"  ✗ HTTPS Certificate Error: {safe_msg}")
+                    print("    → If using self-signed certificate, re-run setup and select 'Accept self-signed'")
+                    print("    → If using corporate CA, re-run setup and provide custom CA path")
+                elif "max retries" in error_str.lower() or "connection" in error_str.lower():
+                    print(f"  ✗ Connection Error: {safe_msg}")
+                    print("    → Check DLP Manager hostname/IP and port are correct")
+                    print("    → Verify network connectivity")
+                else:
+                    print(f"  ✗ DLP API test failed: {safe_msg}")
+
                 retry = prompt_bool("  Retry DLP API configuration?", True)
                 if not retry:
                     print("  → Exiting...")
