@@ -48,7 +48,7 @@ import logging
 
 # Version is hardcoded here and must be updated with each build
 # Update this whenever versioncheck.json version changes
-VERSION = "2026.08.21.11"
+VERSION = "2026.08.21.12"
 
 # ─────────────────────────────────────────────────────────────────
 #   File Logging Setup (PHASE 2 FIX #1)
@@ -82,7 +82,8 @@ def setup_logging() -> logging.Logger:
     # Main log handler - current working directory (always updated)
     # This is the file user should watch for real-time diagnostics
     try:
-        current_handler = logging.FileHandler(log_file_current, mode='w')  # Overwrite on restart
+        # Use UTF-8 encoding for unicode support (box-drawing chars, emojis, etc)
+        current_handler = logging.FileHandler(log_file_current, mode='w', encoding='utf-8')  # Overwrite on restart
         current_handler.setLevel(logging.DEBUG)
         current_handler.setFormatter(file_formatter)
         logger.addHandler(current_handler)
@@ -93,7 +94,7 @@ def setup_logging() -> logging.Logger:
 
     # Archive handler - timestamped file for keeping history
     try:
-        archive_handler = logging.FileHandler(log_file_archive)
+        archive_handler = logging.FileHandler(log_file_archive, encoding='utf-8')
         archive_handler.setLevel(logging.DEBUG)
         archive_handler.setFormatter(file_formatter)
         logger.addHandler(archive_handler)
