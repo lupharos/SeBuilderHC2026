@@ -46,7 +46,7 @@ import logging
 
 # Version is hardcoded here and must be updated with each build
 # Update this whenever versioncheck.json version changes
-VERSION = "2026.08.21.5"
+VERSION = "2026.08.21.6"
 
 # ─────────────────────────────────────────────────────────────────
 #   File Logging Setup (PHASE 2 FIX #1)
@@ -431,24 +431,27 @@ def interactive_setup() -> Config:
                 sys.exit(1)
 
     # ─────────────────────────────────────────────────────────────
-    # STEP 3: SQL CONFIGURATION (Optional) - Test immediately
+    # STEP 3: SQL DATABASES (Optional, per-database) - Test immediately
     # ─────────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
-    print("STEP 3: SQL SERVER CONFIGURATION (Optional)")
+    print("STEP 3: SQL SERVER DATABASES (Optional)")
     print("=" * 60)
-    print("Choose how to access DLP data:")
-    print("  • SQL Server: Direct connection to SQL Server databases")
-    print("  • API Only: Use REST API without SQL Server access")
+    print("Choose which DLP databases to access:")
+    print("  • Data   (wbsn-data-security) - security/endpoint data")
+    print("  • Web    (wslogdb70)          - web traffic logs")
+    print("  • Email  (esglogdb76)         - email logs")
+    print("\nYou can use any combination, or skip all and use API-only mode.")
 
-    config.sql_enabled = prompt_bool("Configure SQL Server access?", True)
+    # Ask which databases to configure
+    enable_sql_data = prompt_bool("Configure SQL Data database (wbsn-data-security)?", True)
+    enable_sql_web = prompt_bool("Configure SQL Web database (wslogdb70)?", False)
+    enable_sql_email = prompt_bool("Configure SQL Email database (esglogdb76)?", False)
+
+    config.sql_enabled = enable_sql_data or enable_sql_web or enable_sql_email
 
     if config.sql_enabled:
         while True:
-            print("\nSQL Server can have 1, 2, or 3 different instances:")
-            print("  • Data   (wbsn-data-security)")
-            print("  • Web    (wslogdb70)")
-            print("  • Email  (esglogdb76)")
-
+            # Ask about shared SQL Server
             config.single_sql_host = prompt_bool("Same SQL Server for all databases?", True)
             config.sql_auth_mode = "windows" if prompt_bool("Use Windows auth?", False) else "sql"
             config.sql_host = prompt("SQL Server IP or hostname")
@@ -458,43 +461,63 @@ def interactive_setup() -> Config:
                 config.sql_username = prompt("SQL Server username")
                 config.sql_password = prompt_password("SQL Server password")
 
-            if config.single_sql_host:
-                config.db_data_host = config.sql_host
-                config.db_data_port = config.sql_port
-                config.db_web_host = config.sql_host
-                config.db_web_port = config.sql_port
-                config.db_email_host = config.sql_host
-                config.db_email_port = config.sql_port
+            # Configure each enabled database
+            if enable_sql_data:
+                if config.single_sql_host:
+                    config.db_data_host = config.sql_host
+                    config.db_data_port = config.sql_port
+                else:
+                    print("\nData database (wbsn-data-security):")
+                    config.db_data_host = prompt("IP or hostname", config.sql_host)
+                    config.db_data_port = prompt_int("Port", config.sql_port)
+                config.db_data_name = prompt("Database name", config.db_data_name, required=False) or config.db_data_name
 
-                print(f"\nDatabase names (press Enter to use defaults):")
-                config.db_data_name = prompt("Data database", config.db_data_name, required=False) or config.db_data_name
-                config.db_web_name = prompt("Web database", config.db_web_name, required=False) or config.db_web_name
-                config.db_email_name = prompt("Email database", config.db_email_name, required=False) or config.db_email_name
-            else:
-                print("\nData database:")
-                config.db_data_host = prompt("IP or hostname", config.sql_host)
-                config.db_data_port = prompt_int("Port", config.sql_port)
+            if enable_sql_web:
+                if config.single_sql_host:
+                    config.db_web_host = config.sql_host
+                    config.db_web_port = config.sql_port
+                else:
+                    print("\nWeb database (wslogdb70):")
+                    config.db_web_host = prompt("IP or hostname", config.sql_host)
+                    config.db_web_port = prompt_int("Port", config.sql_port)
+                config.db_web_name = prompt("Database name", config.db_web_name, required=False) or config.db_web_name
 
-                print("\nWeb database:")
-                config.db_web_host = prompt("IP or hostname", config.sql_host)
-                config.db_web_port = prompt_int("Port", config.sql_port)
+            if enable_sql_email:
+                if config.single_sql_host:
+                    config.db_email_host = config.sql_host
+                    config.db_email_port = config.sql_port
+                else:
+                    print("\nEmail database (esglogdb76):")
+                    config.db_email_host = prompt("IP or hostname", config.sql_host)
+                    config.db_email_port = prompt_int("Port", config.sql_port)
+                config.db_email_name = prompt("Database name", config.db_email_name, required=False) or config.db_email_name
 
-                print("\nEmail database:")
-                config.db_email_host = prompt("IP or hostname", config.sql_host)
-                config.db_email_port = prompt_int("Port", config.sql_port)
-
-            # Test SQL connections
+            # Test each enabled database
             print("\n[TEST] SQL Connections:")
-            sql_data_ok = test_sql_connection(config, "data")
-            sql_web_ok = test_sql_connection(config, "web")
-            sql_email_ok = test_sql_connection(config, "email")
+            all_ok = True
+            if enable_sql_data:
+                sql_data_ok = test_sql_connection(config, "data")
+                config.selftest_sql_data = sql_data_ok
+                all_ok = all_ok and sql_data_ok
+            else:
+                config.selftest_sql_data = None
 
-            config.selftest_sql_data = sql_data_ok
-            config.selftest_sql_web = sql_web_ok
-            config.selftest_sql_email = sql_email_ok
+            if enable_sql_web:
+                sql_web_ok = test_sql_connection(config, "web")
+                config.selftest_sql_web = sql_web_ok
+                all_ok = all_ok and sql_web_ok
+            else:
+                config.selftest_sql_web = None
 
-            if sql_data_ok and sql_web_ok and sql_email_ok:
-                print("  ✓ All SQL connections OK")
+            if enable_sql_email:
+                sql_email_ok = test_sql_connection(config, "email")
+                config.selftest_sql_email = sql_email_ok
+                all_ok = all_ok and sql_email_ok
+            else:
+                config.selftest_sql_email = None
+
+            if all_ok:
+                print("  ✓ All configured SQL connections OK")
                 break
             else:
                 retry = prompt_bool("  Retry SQL configuration?", True)
@@ -504,27 +527,27 @@ def interactive_setup() -> Config:
                     sys.exit(1)
     else:
         print("\n  → SQL Server skipped. Using API-only mode.")
-        config.selftest_sql_data = True
-        config.selftest_sql_web = True
-        config.selftest_sql_email = True
 
     # ─────────────────────────────────────────────────────────────
-    # STEP 4: FSM API (Optional) - Test immediately
+    # STEP 4: DLP REST API (Optional) - Test immediately
     # ─────────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
-    print("STEP 4: FSM SERVER API (Optional)")
+    print("STEP 4: DLP REST API (Optional)")
     print("=" * 60)
-    config.fsm_enabled = prompt_bool("Configure FSM Server API access?", False)
+    print("Configure DLP REST API access for posture and incident queries.")
+    print("This is optional - you can use SQL databases without DLP API.")
+
+    config.fsm_enabled = prompt_bool("Configure DLP REST API access?", False)
 
     if config.fsm_enabled:
         while True:
-            config.fsm_host = prompt("FSM Server hostname or IP")
-            config.fsm_port = prompt_int("FSM Server port", 443)
-            config.fsm_username = prompt("FSM Server username")
-            config.fsm_password = prompt_password("FSM Server password")
+            config.fsm_host = prompt("DLP Manager hostname or IP")
+            config.fsm_port = prompt_int("DLP Manager port", 443)
+            config.fsm_username = prompt("DLP API username")
+            config.fsm_password = prompt_password("DLP API password")
 
-            print("\n[TEST] FSM API:")
-            # Test FSM connection using dlp.test logic
+            print("\n[TEST] DLP REST API:")
+            # Test DLP API connection using dlp.test logic
             try:
                 import requests
                 base_url = f"https://{config.fsm_host}:{config.fsm_port}"
@@ -542,29 +565,30 @@ def interactive_setup() -> Config:
                 if response.status_code == 200:
                     data = response.json()
                     if data.get("access_token"):
-                        print("  ✓ FSM API authenticated successfully")
+                        print("  ✓ DLP REST API authenticated successfully")
+                        config.selftest_dlp_api = True
                         break
                     else:
-                        print("  ✗ FSM API response missing access_token")
+                        print("  ✗ DLP API response missing access_token")
                 else:
-                    print(f"  ✗ FSM API returned HTTP {response.status_code}")
+                    print(f"  ✗ DLP API returned HTTP {response.status_code}")
 
-                retry = prompt_bool("  Retry FSM API configuration?", True)
+                retry = prompt_bool("  Retry DLP API configuration?", True)
                 if not retry:
                     print("  → Exiting...")
-                    LOGGER.info("User exited at FSM API configuration")
+                    LOGGER.info("User exited at DLP API configuration")
                     sys.exit(1)
 
             except Exception as e:
                 safe_msg = sanitize_error_message(str(e)[:100])
-                print(f"  ✗ FSM API test failed: {safe_msg}")
-                retry = prompt_bool("  Retry FSM API configuration?", True)
+                print(f"  ✗ DLP API test failed: {safe_msg}")
+                retry = prompt_bool("  Retry DLP API configuration?", True)
                 if not retry:
                     print("  → Exiting...")
-                    LOGGER.info("User exited at FSM API configuration")
+                    LOGGER.info("User exited at DLP API configuration")
                     sys.exit(1)
     else:
-        print("\n  → FSM Server skipped")
+        print("\n  → DLP REST API skipped")
 
     return config
 
@@ -1013,7 +1037,8 @@ def job_loop(config: Config, stop: threading.Event) -> None:
 
             try:
                 # PHASE 3 FIX #2: Use configurable timeout
-                res = session.post(result_url, json=response_body, headers=headers, timeout=config.hc_request_timeout_sec, verify=verify_ssl)
+                # No headers needed for job/result (jobId in body is sufficient)
+                res = session.post(result_url, json=response_body, timeout=config.hc_request_timeout_sec, verify=verify_ssl)
                 if res.status_code == 200:
                     print(f"[{ts}] DONE  {kind[:20]:<20}")
                     LOGGER.info(f"Job result posted successfully: {kind}")
