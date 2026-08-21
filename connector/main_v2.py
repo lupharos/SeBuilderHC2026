@@ -42,9 +42,47 @@ except ImportError:
     AESGCM = None
     _HAS_AESGCM = False
 
+import logging
+
 # Version is hardcoded here and must be updated with each build
 # Update this whenever versioncheck.json version changes
 VERSION = "2026.08.21.4"
+
+# ─────────────────────────────────────────────────────────────────
+#   File Logging Setup (PHASE 2 FIX #1)
+# ─────────────────────────────────────────────────────────────────
+
+def setup_logging() -> logging.Logger:
+    """Initialize file and console logging."""
+    log_dir = os.path.expanduser("~/.forcepoint-hc")
+    os.makedirs(log_dir, exist_ok=True)
+
+    log_file = os.path.join(log_dir, f"connector_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+
+    logger = logging.getLogger("forcepoint-hc-connector")
+    logger.setLevel(logging.DEBUG)
+
+    # File handler (DEBUG level)
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setLevel(logging.DEBUG)
+    file_formatter = logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    file_handler.setFormatter(file_formatter)
+    logger.addHandler(file_handler)
+
+    # Console handler (INFO level)
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_formatter = logging.Formatter('%(message)s')
+    console_handler.setFormatter(console_formatter)
+    logger.addHandler(console_handler)
+
+    return logger
+
+# Global logger
+LOGGER = setup_logging()
 
 # ─────────────────────────────────────────────────────────────────
 #   Endpoint Normalization (CRITICAL FIX #1)
@@ -393,7 +431,58 @@ def collect_config() -> Config:
         config.fsm_username = prompt("FSM Server username")
         config.fsm_password = prompt_password("FSM Server password")
 
+    # PHASE 2 FIX #2: Validate configuration before returning
+    _validate_config(config)
+
     return config
+
+
+def _validate_config(config: Config) -> None:
+    """Validate configuration values (port ranges, required fields, etc.)."""
+    errors = []
+
+    # Required fields
+    if not config.hc_endpoint or not config.hc_endpoint.strip():
+        errors.append("HC endpoint is required")
+    if not config.hc_token or not config.hc_token.strip():
+        errors.append("HC token is required")
+
+    # Port ranges
+    if not (0 < config.hc_port < 65536):
+        errors.append(f"HC port must be 1-65535, got {config.hc_port}")
+    if config.proxy_enabled and not (0 < config.proxy_port < 65536):
+        errors.append(f"Proxy port must be 1-65535, got {config.proxy_port}")
+    if config.sql_enabled and not (0 < config.sql_port < 65536):
+        errors.append(f"SQL port must be 1-65535, got {config.sql_port}")
+    if config.fsm_enabled and not (0 < config.fsm_port < 65536):
+        errors.append(f"FSM port must be 1-65535, got {config.fsm_port}")
+
+    # SQL required fields (if enabled)
+    if config.sql_enabled:
+        if not config.db_data_host or not config.db_data_host.strip():
+            errors.append("SQL Server host is required")
+        if config.sql_auth_mode == "sql":
+            if not config.sql_username or not config.sql_username.strip():
+                errors.append("SQL username is required")
+            if not config.sql_password or not config.sql_password.strip():
+                errors.append("SQL password is required")
+
+    # FSM required fields (if enabled)
+    if config.fsm_enabled:
+        if not config.fsm_host or not config.fsm_host.strip():
+            errors.append("FSM host is required")
+        if not config.fsm_username or not config.fsm_username.strip():
+            errors.append("FSM username is required")
+        if not config.fsm_password or not config.fsm_password.strip():
+            errors.append("FSM password is required")
+
+    if errors:
+        print("\n❌ Configuration validation failed:")
+        for err in errors:
+            print(f"  - {err}")
+        sys.exit(1)
+
+    LOGGER.info(f"Configuration validated: HC={config.hc_endpoint}:{config.hc_port}, SQL={config.sql_enabled}, FSM={config.fsm_enabled}")
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -557,9 +646,12 @@ def heartbeat_loop(config: Config, stop: threading.Event) -> None:
 
     ok_count = 0
     fail_count = 0
+    consecutive_failures = 0
+    max_backoff = 120  # Max 2 minutes between retries
 
     print(f"\n[start] Phoning home to {heartbeat_url}")
     print(f"        Heartbeat every {config.heartbeat_interval}s. Press Ctrl+C to stop.\n")
+    LOGGER.info(f"Heartbeat loop started: {heartbeat_url}")
 
     while not stop.is_set():
         ts = datetime.now().strftime("%H:%M:%S")
@@ -609,17 +701,36 @@ def heartbeat_loop(config: Config, stop: threading.Event) -> None:
 
             if r.status_code == 200:
                 ok_count += 1
+                consecutive_failures = 0  # Reset backoff counter
                 print(f"[{ts}] OK    heartbeat #{ok_count}  ({r.elapsed.total_seconds()*1000:.0f}ms)")
+                LOGGER.info(f"Heartbeat #{ok_count} success ({r.elapsed.total_seconds()*1000:.0f}ms)")
             else:
                 fail_count += 1
+                consecutive_failures += 1
                 print(f"[{ts}] FAIL  HTTP {r.status_code}")
+                LOGGER.warning(f"Heartbeat failed with HTTP {r.status_code}")
         except Exception as e:
             fail_count += 1
-            print(f"[{ts}] FAIL  {type(e).__name__}: {e}")
+            consecutive_failures += 1
+            safe_msg = sanitize_error_message(str(e)[:100])
+            print(f"[{ts}] FAIL  {type(e).__name__}: {safe_msg}")
+            LOGGER.error(f"Heartbeat exception: {type(e).__name__}: {safe_msg}")
 
-        if stop.wait(config.heartbeat_interval):
+        # PHASE 2 FIX #3: Exponential backoff retry logic
+        wait_time = config.heartbeat_interval
+        if consecutive_failures > 0:
+            # exponential backoff: 2^n seconds, capped at max_backoff
+            backoff = min(2 ** consecutive_failures, max_backoff)
+            wait_time = backoff
+            if consecutive_failures <= 3:
+                print(f"[{ts}] Retrying in {backoff}s (attempt {consecutive_failures})...")
+            else:
+                print(f"[{ts}] Persistent failure (attempt {consecutive_failures}), backing off {backoff}s...")
+
+        if stop.wait(wait_time):
             break
 
+    LOGGER.info(f"Heartbeat loop stopped: {ok_count} OK / {fail_count} failed")
     print(f"\n[stopped] {ok_count} OK / {fail_count} failed")
 
 
@@ -650,6 +761,10 @@ def job_loop(config: Config, stop: threading.Event) -> None:
 
     print(f"\n[jobs] Long-poll enabled at {next_url}")
     print(f"[jobs] Ready to receive: sql.test, sql.query\n")
+    LOGGER.info(f"Job polling loop started: {next_url}")
+
+    consecutive_poll_failures = 0
+    max_backoff = 120
 
     while not stop.is_set():
         try:
@@ -662,13 +777,18 @@ def job_loop(config: Config, stop: threading.Event) -> None:
 
             if r.status_code == 204:
                 # No job available (timeout)
+                consecutive_poll_failures = 0  # Reset counter on successful poll (no timeout)
                 continue
 
             if r.status_code != 200:
-                print(f"[jobs] Error polling jobs: HTTP {r.status_code}")
-                time.sleep(2)
+                consecutive_poll_failures += 1
+                backoff = min(2 ** consecutive_poll_failures, max_backoff)
+                print(f"[jobs] Error polling jobs: HTTP {r.status_code}, retry in {backoff}s")
+                LOGGER.warning(f"Job poll failed: HTTP {r.status_code}, backoff={backoff}s")
+                time.sleep(backoff)
                 continue
 
+            consecutive_poll_failures = 0  # Reset on successful job retrieval
             job_data = r.json()
             job_id = job_data.get("jobId")
             kind = job_data.get("kind")
@@ -679,6 +799,7 @@ def job_loop(config: Config, stop: threading.Event) -> None:
 
             ts = datetime.now().strftime("%H:%M:%S")
             print(f"[{ts}] JOB   {kind[:20]:<20} (id: {job_id[:8]}...)")
+            LOGGER.info(f"Job received: {kind} (id={job_id[:8]})")
 
             # Execute job
             result = execute_job(config, kind, params)
@@ -696,20 +817,29 @@ def job_loop(config: Config, stop: threading.Event) -> None:
                 res = session.post(result_url, json=response_body, headers=headers, timeout=10, verify=verify_ssl)
                 if res.status_code == 200:
                     print(f"[{ts}] DONE  {kind[:20]:<20}")
+                    LOGGER.info(f"Job result posted successfully: {kind}")
                 else:
                     print(f"[{ts}] FAIL  {kind[:20]:<20} (result post HTTP {res.status_code})")
+                    LOGGER.warning(f"Job result post failed: HTTP {res.status_code}")
             except Exception as e:
+                safe_msg = sanitize_error_message(str(e)[:100])
                 print(f"[{ts}] FAIL  {kind[:20]:<20} (result post: {type(e).__name__})")
+                LOGGER.error(f"Job result post exception: {type(e).__name__}: {safe_msg}")
 
         except Exception as e:
             if not stop.is_set():
-                time.sleep(2)
+                consecutive_poll_failures += 1
+                backoff = min(2 ** consecutive_poll_failures, max_backoff)
+                safe_msg = sanitize_error_message(str(e)[:100])
+                LOGGER.error(f"Job polling exception: {type(e).__name__}: {safe_msg}, backoff={backoff}s")
+                time.sleep(backoff)
 
 
 def execute_job(config: Config, kind: str, params: dict) -> dict:
     """Execute a job requested by the backend."""
     try:
         if kind == "sql.test":
+            LOGGER.debug(f"Executing sql.test job with params: {params}")
             # Test SQL connection for given product
             product = params.get("product", "data")
 
@@ -919,6 +1049,8 @@ def main() -> int:
     print(f"📦 Agent Version: {VERSION}")
     print(f"🕐 Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
 
+    LOGGER.info(f"Forcepoint HC Connector v{VERSION} started")
+
     # Collect configuration
     config = collect_config()
 
@@ -926,6 +1058,7 @@ def main() -> int:
     print("\n" + "=" * 60)
     print("TESTING CONNECTIONS")
     print("=" * 60)
+    LOGGER.info("Testing connections...")
 
     hc_ok = test_hc_endpoint(config)
 
@@ -970,24 +1103,54 @@ def main() -> int:
 
     def handle_signal(signum, _frame):
         print("\n[shutdown] Interrupt received...")
+        LOGGER.info("Shutdown signal received")
         stop.set()
 
     signal.signal(signal.SIGINT, handle_signal)
 
-    # Run heartbeat and job loops in parallel
+    # PHASE 2 FIX #5: Improve thread cleanup and graceful shutdown
     heartbeat_thread = threading.Thread(target=heartbeat_loop, args=(config, stop), daemon=False)
     job_thread = threading.Thread(target=job_loop, args=(config, stop), daemon=False)
+    heartbeat_thread.name = "heartbeat-loop"
+    job_thread.name = "job-loop"
 
     try:
         heartbeat_thread.start()
         job_thread.start()
+        LOGGER.info("Both threads started successfully")
 
-        # Wait for both threads
-        heartbeat_thread.join()
-        job_thread.join()
+        # Wait for both threads with timeout (prevent infinite hangs)
+        # Check every 5 seconds if both are still alive
+        while heartbeat_thread.is_alive() or job_thread.is_alive():
+            heartbeat_thread.join(timeout=5)
+            job_thread.join(timeout=5)
+
+            # If one thread dies unexpectedly, signal stop to the other
+            if (not heartbeat_thread.is_alive() and job_thread.is_alive()) or \
+               (heartbeat_thread.is_alive() and not job_thread.is_alive()):
+                print("\n⚠ One thread died unexpectedly, signaling shutdown...")
+                LOGGER.warning("One thread died, signaling graceful shutdown")
+                stop.set()
+
     except KeyboardInterrupt:
-        pass
+        LOGGER.info("KeyboardInterrupt in main")
+    except Exception as e:
+        LOGGER.error(f"Unexpected error in main: {type(e).__name__}: {str(e)}")
 
+    # Ensure both threads are stopped
+    if heartbeat_thread.is_alive() or job_thread.is_alive():
+        print("\n[shutdown] Waiting for threads to finish...")
+        LOGGER.info("Waiting for threads to gracefully shutdown")
+        stop.set()  # Signal stop if not already set
+        heartbeat_thread.join(timeout=10)
+        job_thread.join(timeout=10)
+
+        if heartbeat_thread.is_alive():
+            LOGGER.warning(f"Thread {heartbeat_thread.name} did not stop within timeout")
+        if job_thread.is_alive():
+            LOGGER.warning(f"Thread {job_thread.name} did not stop within timeout")
+
+    LOGGER.info("Shutdown complete")
     print("\nPress Enter to close...")
     try:
         input()
