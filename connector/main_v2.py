@@ -46,7 +46,7 @@ import secrets as _secrets
 
 # Version is hardcoded here and must be updated with each build
 # Update this whenever versioncheck.json version changes
-VERSION = "2026.08.20.5"
+VERSION = "2026.08.21.3"
 
 BANNER = r"""
 +──────────────────────────────────────────────────────────────+
