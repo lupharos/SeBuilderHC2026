@@ -879,8 +879,7 @@ def heartbeat_loop(config: Config, stop: threading.Event) -> None:
                     } if config.selftest_sql_email else None,
                 }
 
-            # CRITICAL FIX #11: Move token to header (not body)
-            headers = {"X-Connector-Token": config.hc_token}
+            # CRITICAL FIX #11: Token goes in request body (not header)
             verify_ssl = config.tls_verify
             if config.tls_custom_ca_path:
                 verify_ssl = config.tls_custom_ca_path
@@ -889,10 +888,10 @@ def heartbeat_loop(config: Config, stop: threading.Event) -> None:
             r = session.post(
                 heartbeat_url,
                 json={
+                    "token": config.hc_token,
                     "version": f"{VERSION}",
                     "selftest": selftest,
                 },
-                headers=headers,
                 timeout=config.hc_request_timeout_sec,
                 verify=verify_ssl
             )
@@ -967,12 +966,12 @@ def job_loop(config: Config, stop: threading.Event) -> None:
     while not stop.is_set():
         try:
             # 25-second long-poll for new jobs
-            headers = {"X-Connector-Token": config.hc_token}
+            # CRITICAL FIX #12: Token goes in query string (not header)
             verify_ssl = config.tls_verify
             if config.tls_custom_ca_path:
                 verify_ssl = config.tls_custom_ca_path
             # PHASE 3 FIX #2: Use configurable timeout (job polling has longer timeout for long-poll)
-            r = session.get(next_url, headers=headers, timeout=config.hc_request_timeout_sec + 20, verify=verify_ssl)
+            r = session.get(f"{next_url}?token={config.hc_token}", timeout=config.hc_request_timeout_sec + 20, verify=verify_ssl)
 
             if r.status_code == 204:
                 # No job available (timeout)
