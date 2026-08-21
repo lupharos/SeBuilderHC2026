@@ -2168,23 +2168,29 @@ export function Step3DataCollectors({
                         <div style={{ fontSize: '12px', fontWeight: 700, color: '#0F172A' }}>{dataMode}</div>
                       </div>
 
-                      {/* Database Status */}
+                      {/* Database Status — Show only enabled databases */}
                       {hasSQL && (
                         <div style={{ marginBottom: '10px' }}>
                           <div style={{ fontSize: '9px', color: '#6B7280', fontWeight: 600, marginBottom: '6px' }}>DATABASE CONNECTIONS</div>
                           <div className="flex flex-col gap-2">
-                            <div className="flex items-center gap-2" style={{ fontSize: '11px' }}>
-                              <span style={{ color: '#16A34A', fontWeight: 700 }}>✓</span>
-                              <span style={{ color: '#0F172A', fontWeight: 500 }}>SQL Data (wbsn-data-security)</span>
-                            </div>
-                            <div className="flex items-center gap-2" style={{ fontSize: '11px' }}>
-                              <span style={{ color: '#16A34A', fontWeight: 700 }}>✓</span>
-                              <span style={{ color: '#0F172A', fontWeight: 500 }}>SQL Web (wslogdb70)</span>
-                            </div>
-                            <div className="flex items-center gap-2" style={{ fontSize: '11px' }}>
-                              <span style={{ color: '#16A34A', fontWeight: 700 }}>✓</span>
-                              <span style={{ color: '#0F172A', fontWeight: 500 }}>SQL Email (esglogdb76)</span>
-                            </div>
+                            {st.selftest?.sqlData && (
+                              <div className="flex items-center gap-2" style={{ fontSize: '11px' }}>
+                                <span style={{ color: '#16A34A', fontWeight: 700 }}>✓</span>
+                                <span style={{ color: '#0F172A', fontWeight: 500 }}>SQL Data (wbsn-data-security)</span>
+                              </div>
+                            )}
+                            {st.selftest?.sqlWeb && (
+                              <div className="flex items-center gap-2" style={{ fontSize: '11px' }}>
+                                <span style={{ color: '#16A34A', fontWeight: 700 }}>✓</span>
+                                <span style={{ color: '#0F172A', fontWeight: 500 }}>SQL Web (wslogdb70)</span>
+                              </div>
+                            )}
+                            {st.selftest?.sqlEmail && (
+                              <div className="flex items-center gap-2" style={{ fontSize: '11px' }}>
+                                <span style={{ color: '#16A34A', fontWeight: 700 }}>✓</span>
+                                <span style={{ color: '#0F172A', fontWeight: 500 }}>SQL Email (esglogdb76)</span>
+                              </div>
+                            )}
                           </div>
                         </div>
                       )}

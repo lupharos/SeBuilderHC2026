@@ -30,6 +30,8 @@ from urllib.parse import urljoin, urlsplit
 try:
     import requests
     import urllib3
+    # Suppress InsecureRequestWarning for self-signed certificates
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 except ImportError:
     print("ERROR: Missing dependency 'requests'.")
     print("       Run: pip install -r requirements.txt")
@@ -46,7 +48,7 @@ import logging
 
 # Version is hardcoded here and must be updated with each build
 # Update this whenever versioncheck.json version changes
-VERSION = "2026.08.21.8"
+VERSION = "2026.08.21.9"
 
 # ─────────────────────────────────────────────────────────────────
 #   File Logging Setup (PHASE 2 FIX #1)
@@ -835,7 +837,7 @@ def execute_sql_query(config: Config, host: str, port: int, db: str, query: str,
     conn = pyodbc.connect(conn_str, timeout=config.sql_connection_timeout_sec)
     try:
         cur = conn.cursor()
-        cur.timeout = timeout_sec
+        # NOTE: pyodbc.Cursor doesn't have timeout attribute; timeout is set at connection level
         cur.execute(query)
         rows = cur.fetchall()
         return {
