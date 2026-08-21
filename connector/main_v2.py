@@ -985,8 +985,9 @@ def execute_job(config: Config, kind: str, params: dict) -> dict:
         elif kind == "dlp.test":
             # Test DLP REST API connection using JWT token auth flow
             # CRITICAL FIX: Use proper certificate verification, not verify=False
-            # Step 1: Get refresh token (header-based auth)
-            # Step 2: Get access token (using refresh token)
+            # DLP 10.4 API NOTE: /auth/refresh-token endpoint returns BOTH refresh_token
+            # AND access_token in one call, so no follow-up /auth/access-token needed.
+            # This matches the API server implementation (index.mjs line 405-407).
             if not config.fsm_enabled:
                 return {"ok": False, "error": "FSM Server API not configured"}
 
@@ -1001,54 +1002,43 @@ def execute_job(config: Config, kind: str, params: dict) -> dict:
                 if config.tls_custom_ca_path:
                     verify_ssl = config.tls_custom_ca_path
 
-                # Step 1: Get refresh token
+                # Single-step JWT auth: Get both refresh and access tokens
                 # DLP 10.4 API: credentials as explicit header parameters (not Basic auth)
+                # Per spec section 1.1: response includes both refresh_token AND access_token
                 refresh_token_url = f"{base_url}/dlp/rest/v1/auth/refresh-token"
-                headers1 = {
+                headers = {
                     "username": config.fsm_username,
                     "password": config.fsm_password
                 }
                 # PHASE 3 FIX #2: Use configurable timeout for FSM API
-                response1 = requests.post(refresh_token_url, headers=headers1, timeout=config.fsm_request_timeout_sec, verify=verify_ssl)
+                response = requests.post(refresh_token_url, headers=headers, timeout=config.fsm_request_timeout_sec, verify=verify_ssl)
 
-                if response1.status_code != 200:
+                if response.status_code != 200:
                     return {
                         "ok": False,
-                        "error": f"Failed to get refresh token (HTTP {response1.status_code}) — check credentials"
+                        "error": f"Failed to authenticate with DLP API (HTTP {response.status_code}) — check FSM credentials"
                     }
 
-                refresh_data = response1.json()
-                refresh_token = refresh_data.get("refresh_token")
+                token_data = response.json()
+
+                # Check for both tokens in response (per DLP 10.4 spec)
+                refresh_token = token_data.get("refresh_token")
+                access_token = token_data.get("access_token")
+
                 if not refresh_token:
                     return {
                         "ok": False,
-                        "error": "No refresh_token in response"
+                        "error": "DLP API response missing refresh_token"
                     }
 
-                # Step 2: Get access token using refresh token
-                # DLP 10.4 API: use 'refresh-token' header (not 'Authorization')
-                access_token_url = f"{base_url}/dlp/rest/v1/auth/access-token"
-                headers2 = {
-                    "refresh-token": f"Bearer {refresh_token}"
-                }
-                # PHASE 3 FIX #2: Use configurable timeout for FSM API
-                response2 = requests.post(access_token_url, headers=headers2, timeout=config.fsm_request_timeout_sec, verify=verify_ssl)
-
-                if response2.status_code != 200:
-                    return {
-                        "ok": False,
-                        "error": f"Failed to get access token (HTTP {response2.status_code})"
-                    }
-
-                access_data = response2.json()
-                access_token = access_data.get("access_token")
                 if not access_token:
                     return {
                         "ok": False,
-                        "error": "No access_token in response"
+                        "error": "DLP API response missing access_token"
                     }
 
                 # Success: We have valid JWT tokens, DLP API is accessible
+                # No need for second call to /auth/access-token per DLP 10.4 spec
                 return {
                     "ok": True,
                     "payload": {
@@ -1060,9 +1050,10 @@ def execute_job(config: Config, kind: str, params: dict) -> dict:
                 }
 
             except Exception as e:
+                safe_msg = sanitize_error_message(str(e)[:100])
                 return {
                     "ok": False,
-                    "error": f"DLP API test failed: {type(e).__name__}: {str(e)[:100]}"
+                    "error": f"DLP API test failed: {type(e).__name__}: {safe_msg}"
                 }
 
         else:
