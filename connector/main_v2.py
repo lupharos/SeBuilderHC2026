@@ -328,6 +328,13 @@ class Config:
 
         self.heartbeat_interval = 30
 
+        # PHASE 3 FIX #2: Configurable connection timeouts
+        self.sql_connection_timeout_sec = 8  # pyodbc.connect() timeout
+        self.sql_query_timeout_sec = 30  # Query execution timeout
+        self.hc_request_timeout_sec = 10  # HC API request timeout
+        self.tcp_connect_timeout_sec = 5  # TCP reachability test timeout
+        self.fsm_request_timeout_sec = 10  # FSM API request timeout
+
         # Selftest results (updated on each test cycle, sent in heartbeat)
         # CRITICAL FIX #5: Store actual measured latencies, not hardcoded
         self.selftest_sql_data = None  # Dict with {status, latencyMs, timestamp}
@@ -527,7 +534,8 @@ def test_hc_endpoint(config: Config) -> bool:
 
         # Measure actual latency
         start_time = time.time()
-        r = session.get(url, timeout=10, verify=verify_ssl)
+        # PHASE 3 FIX #2: Use configurable timeout
+        r = session.get(url, timeout=config.hc_request_timeout_sec, verify=verify_ssl)
         elapsed_ms = (time.time() - start_time) * 1000
 
         # Store measured latency
@@ -566,53 +574,109 @@ def test_sql_connection(config: Config, db_type: str) -> bool:
         import pyodbc
     except ImportError:
         print(f"  ⚠ pyodbc not available (TCP fallback)")
-        return test_sql_tcp(host, port)
+        return test_sql_tcp(config, host, port)
+
+    try:
+        # PHASE 3 FIX #1: Use consolidated helper function
+        version = execute_sql_version_check(config, host, port, db)
+        version_short = " ".join(version.split())[:60]
+        print(f"  ✓ {host}:{port}/{db}")
+        print(f"    {version_short}")
+        LOGGER.info(f"SQL {db_type} connection OK: {version_short}")
+        return True
+    except RuntimeError as e:
+        # No ODBC driver
+        print(f"  ⚠ {str(e)} (TCP fallback)")
+        return test_sql_tcp(config, host, port)
+    except Exception as e:
+        safe_msg = sanitize_error_message(str(e)[:100])
+        print(f"  ✗ {type(e).__name__}: {safe_msg}")
+        LOGGER.warning(f"SQL {db_type} connection failed: {type(e).__name__}")
+        return False
+
+
+# ─────────────────────────────────────────────────────────────────
+#   SQL Connection Consolidation (PHASE 3 FIX #1)
+# ─────────────────────────────────────────────────────────────────
+
+def build_sql_connection(config: Config, host: str, port: int, db: str) -> tuple:
+    """
+    Build ODBC connection string for SQL Server.
+
+    Returns: (connection_string, driver_name) or raises exception
+    """
+    import pyodbc
 
     drivers = [d for d in pyodbc.drivers() if "SQL Server" in d]
     if not drivers:
-        print(f"  ⚠ No SQL Server ODBC driver (TCP fallback)")
-        return test_sql_tcp(host, port)
+        raise RuntimeError("No SQL Server ODBC driver found")
 
     driver = sorted(drivers, reverse=True)[0]
 
     if config.sql_auth_mode == "windows":
-        conn_str = (
-            f"DRIVER={{{driver}}};"
-            f"SERVER={host},{port};"
-            f"DATABASE={db};"
-            f"Trusted_Connection=yes;"
-            f"TrustServerCertificate=yes;"
-        )
+        conn_str = f"DRIVER={{{driver}}};SERVER={host},{port};DATABASE={db};Trusted_Connection=yes;TrustServerCertificate=yes;"
     else:
-        conn_str = (
-            f"DRIVER={{{driver}}};"
-            f"SERVER={host},{port};"
-            f"DATABASE={db};"
-            f"UID={config.sql_username};PWD={config.sql_password};"
-            f"TrustServerCertificate=yes;"
-        )
+        conn_str = f"DRIVER={{{driver}}};SERVER={host},{port};DATABASE={db};UID={config.sql_username};PWD={config.sql_password};TrustServerCertificate=yes;"
 
+    return conn_str, driver
+
+
+def execute_sql_query(config: Config, host: str, port: int, db: str, query: str, timeout_sec: int = None) -> dict:
+    """
+    Execute SQL query against target database.
+
+    Returns: dict with "rows" and "count" keys
+    Raises: Exception on connection/execution failure
+    """
+    import pyodbc
+
+    conn_str, _ = build_sql_connection(config, host, port, db)
+
+    # PHASE 3 FIX #2: Use configurable timeouts
+    if timeout_sec is None:
+        timeout_sec = config.sql_query_timeout_sec
+
+    conn = pyodbc.connect(conn_str, timeout=config.sql_connection_timeout_sec)
     try:
-        conn = pyodbc.connect(conn_str, timeout=8)
+        cur = conn.cursor()
+        cur.timeout = timeout_sec
+        cur.execute(query)
+        rows = cur.fetchall()
+        return {
+            "rows": [list(row) for row in rows],
+            "count": len(rows),
+        }
+    finally:
+        conn.close()
+
+
+def execute_sql_version_check(config: Config, host: str, port: int, db: str) -> str:
+    """
+    Get SQL Server version string.
+
+    Returns: version string (e.g., "Microsoft SQL Server 2019...")
+    Raises: Exception on connection failure
+    """
+    import pyodbc
+
+    conn_str, _ = build_sql_connection(config, host, port, db)
+
+    # PHASE 3 FIX #2: Use configurable timeouts
+    conn = pyodbc.connect(conn_str, timeout=config.sql_connection_timeout_sec)
+    try:
         cur = conn.cursor()
         cur.execute("SELECT @@VERSION")
         row = cur.fetchone()
+        return row[0] if row else "?"
+    finally:
         conn.close()
 
-        version = row[0] if row else "?"
-        version_short = " ".join(version.split())[:60]
-        print(f"  ✓ {host}:{port}/{db}")
-        print(f"    {version_short}")
-        return True
-    except Exception as e:
-        print(f"  ✗ {type(e).__name__}: {e}")
-        return False
 
-
-def test_sql_tcp(host: str, port: int) -> bool:
+def test_sql_tcp(config: Config, host: str, port: int) -> bool:
     """TCP reachability test (when pyodbc unavailable)."""
+    # PHASE 3 FIX #2: Use configurable timeout
     try:
-        with socket.create_connection((host, port), timeout=5):
+        with socket.create_connection((host, port), timeout=config.tcp_connect_timeout_sec):
             print(f"  ✓ {host}:{port} reachable (auth not tested)")
             return True
     except Exception as e:
@@ -688,6 +752,7 @@ def heartbeat_loop(config: Config, stop: threading.Event) -> None:
             if config.tls_custom_ca_path:
                 verify_ssl = config.tls_custom_ca_path
 
+            # PHASE 3 FIX #2: Use configurable timeout
             r = session.post(
                 heartbeat_url,
                 json={
@@ -695,7 +760,7 @@ def heartbeat_loop(config: Config, stop: threading.Event) -> None:
                     "selftest": selftest,
                 },
                 headers=headers,
-                timeout=10,
+                timeout=config.hc_request_timeout_sec,
                 verify=verify_ssl
             )
 
@@ -773,7 +838,8 @@ def job_loop(config: Config, stop: threading.Event) -> None:
             verify_ssl = config.tls_verify
             if config.tls_custom_ca_path:
                 verify_ssl = config.tls_custom_ca_path
-            r = session.get(next_url, headers=headers, timeout=30, verify=verify_ssl)
+            # PHASE 3 FIX #2: Use configurable timeout (job polling has longer timeout for long-poll)
+            r = session.get(next_url, headers=headers, timeout=config.hc_request_timeout_sec + 20, verify=verify_ssl)
 
             if r.status_code == 204:
                 # No job available (timeout)
@@ -814,7 +880,8 @@ def job_loop(config: Config, stop: threading.Event) -> None:
             }
 
             try:
-                res = session.post(result_url, json=response_body, headers=headers, timeout=10, verify=verify_ssl)
+                # PHASE 3 FIX #2: Use configurable timeout
+                res = session.post(result_url, json=response_body, headers=headers, timeout=config.hc_request_timeout_sec, verify=verify_ssl)
                 if res.status_code == 200:
                     print(f"[{ts}] DONE  {kind[:20]:<20}")
                     LOGGER.info(f"Job result posted successfully: {kind}")
@@ -840,7 +907,7 @@ def execute_job(config: Config, kind: str, params: dict) -> dict:
     try:
         if kind == "sql.test":
             LOGGER.debug(f"Executing sql.test job with params: {params}")
-            # Test SQL connection for given product
+            # PHASE 3 FIX #1: Use consolidated helper function
             product = params.get("product", "data")
 
             if product == "data":
@@ -852,26 +919,8 @@ def execute_job(config: Config, kind: str, params: dict) -> dict:
             else:
                 return {"ok": False, "error": f"Unknown product: {product}"}
 
-            # Try ODBC connection
             try:
-                import pyodbc
-                drivers = [d for d in pyodbc.drivers() if "SQL Server" in d]
-                if not drivers:
-                    return {"ok": False, "error": "No SQL Server ODBC driver"}
-
-                driver = sorted(drivers, reverse=True)[0]
-                if config.sql_auth_mode == "windows":
-                    conn_str = f"DRIVER={{{driver}}};SERVER={host},{port};DATABASE={db};Trusted_Connection=yes;TrustServerCertificate=yes;"
-                else:
-                    conn_str = f"DRIVER={{{driver}}};SERVER={host},{port};DATABASE={db};UID={config.sql_username};PWD={config.sql_password};TrustServerCertificate=yes;"
-
-                conn = pyodbc.connect(conn_str, timeout=8)
-                cur = conn.cursor()
-                cur.execute("SELECT @@VERSION")
-                row = cur.fetchone()
-                conn.close()
-
-                version = row[0] if row else "?"
+                version = execute_sql_version_check(config, host, port, db)
                 return {
                     "ok": True,
                     "payload": {
@@ -882,9 +931,10 @@ def execute_job(config: Config, kind: str, params: dict) -> dict:
                     }
                 }
             except Exception as e:
+                safe_msg = sanitize_error_message(str(e)[:100])
                 return {
                     "ok": False,
-                    "error": f"SQL test failed: {type(e).__name__}: {str(e)[:100]}"
+                    "error": f"SQL test failed: {type(e).__name__}: {safe_msg}"
                 }
 
         elif kind == "sql.query":
@@ -919,31 +969,11 @@ def execute_job(config: Config, kind: str, params: dict) -> dict:
                 return {"ok": False, "error": f"Unknown product: {product}"}
 
             try:
-                import pyodbc
-                drivers = [d for d in pyodbc.drivers() if "SQL Server" in d]
-                if not drivers:
-                    return {"ok": False, "error": "No SQL Server ODBC driver"}
-
-                driver = sorted(drivers, reverse=True)[0]
-                if config.sql_auth_mode == "windows":
-                    conn_str = f"DRIVER={{{driver}}};SERVER={host},{port};DATABASE={db};Trusted_Connection=yes;TrustServerCertificate=yes;"
-                else:
-                    conn_str = f"DRIVER={{{driver}}};SERVER={host},{port};DATABASE={db};UID={config.sql_username};PWD={config.sql_password};TrustServerCertificate=yes;"
-
-                conn = pyodbc.connect(conn_str, timeout=8)
-                cur = conn.cursor()
-                # CRITICAL FIX #12c: Execution timeout (30 seconds max)
-                cur.timeout = 30
-                cur.execute(query)
-                rows = cur.fetchall()
-                conn.close()
-
+                # PHASE 3 FIX #1: Use consolidated helper function
+                result = execute_sql_query(config, host, port, db, query, timeout_sec=30)
                 return {
                     "ok": True,
-                    "payload": {
-                        "rows": [list(row) for row in rows],
-                        "count": len(rows),
-                    }
+                    "payload": result,
                 }
             except Exception as e:
                 safe_msg = sanitize_error_message(str(e)[:200])
@@ -978,7 +1008,8 @@ def execute_job(config: Config, kind: str, params: dict) -> dict:
                     "username": config.fsm_username,
                     "password": config.fsm_password
                 }
-                response1 = requests.post(refresh_token_url, headers=headers1, timeout=10, verify=verify_ssl)
+                # PHASE 3 FIX #2: Use configurable timeout for FSM API
+                response1 = requests.post(refresh_token_url, headers=headers1, timeout=config.fsm_request_timeout_sec, verify=verify_ssl)
 
                 if response1.status_code != 200:
                     return {
@@ -1000,7 +1031,8 @@ def execute_job(config: Config, kind: str, params: dict) -> dict:
                 headers2 = {
                     "refresh-token": f"Bearer {refresh_token}"
                 }
-                response2 = requests.post(access_token_url, headers=headers2, timeout=10, verify=verify_ssl)
+                # PHASE 3 FIX #2: Use configurable timeout for FSM API
+                response2 = requests.post(access_token_url, headers=headers2, timeout=config.fsm_request_timeout_sec, verify=verify_ssl)
 
                 if response2.status_code != 200:
                     return {
