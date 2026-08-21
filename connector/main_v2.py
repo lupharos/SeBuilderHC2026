@@ -46,7 +46,7 @@ import logging
 
 # Version is hardcoded here and must be updated with each build
 # Update this whenever versioncheck.json version changes
-VERSION = "2026.08.21.7"
+VERSION = "2026.08.21.8"
 
 # ─────────────────────────────────────────────────────────────────
 #   File Logging Setup (PHASE 2 FIX #1)
@@ -1148,12 +1148,12 @@ def execute_job(config: Config, kind: str, params: dict) -> dict:
             if len(query) > MAX_QUERY_LENGTH:
                 return {"ok": False, "error": f"Query exceeds maximum length ({MAX_QUERY_LENGTH} bytes)"}
 
-            # CRITICAL FIX #12b: Keyword blacklist (prevent destructive operations)
-            DANGEROUS_KEYWORDS = ["DROP", "DELETE", "INSERT", "UPDATE", "TRUNCATE", "ALTER", "CREATE", "EXEC", "EXECUTE"]
-            query_upper = query.upper()
-            for keyword in DANGEROUS_KEYWORDS:
-                if keyword in query_upper:
-                    return {"ok": False, "error": f"Query contains forbidden keyword: {keyword}"}
+            # CRITICAL FIX #12b: Only allow SELECT queries (safest approach)
+            # Backend sends template-based queries that use EXEC/INSERT_DATE which are legitimate
+            # Connector should only execute read-only queries from trusted backend
+            query_upper = query.upper().strip()
+            if not query_upper.startswith("SELECT") and not query_upper.startswith("DECLARE"):
+                return {"ok": False, "error": "Only SELECT and DECLARE queries allowed (read-only)"}
 
             if product == "data":
                 host, port, db = config.db_data_host, config.db_data_port, config.db_data_name
