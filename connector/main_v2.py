@@ -48,33 +48,59 @@ import logging
 
 # Version is hardcoded here and must be updated with each build
 # Update this whenever versioncheck.json version changes
-VERSION = "2026.08.21.10"
+VERSION = "2026.08.21.11"
 
 # ─────────────────────────────────────────────────────────────────
 #   File Logging Setup (PHASE 2 FIX #1)
 # ─────────────────────────────────────────────────────────────────
 
 def setup_logging() -> logging.Logger:
-    """Initialize file and console logging."""
-    log_dir = os.path.expanduser("~/.forcepoint-hc")
-    os.makedirs(log_dir, exist_ok=True)
+    """Initialize file and console logging.
 
-    log_file = os.path.join(log_dir, f"connector_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+    Logs to two locations:
+    1. Current working directory: ./connector.log (rolling, always up-to-date)
+    2. Logs subdirectory: ./logs/connector_YYYYMMDD_HHMMSS.log (archive)
+    """
+    # Log to current working directory (where connector is running)
+    cwd = os.getcwd()
+    log_file_current = os.path.join(cwd, "connector.log")
+
+    # Also keep timestamped archive in logs/ subdirectory
+    log_archive_dir = os.path.join(cwd, "logs")
+    os.makedirs(log_archive_dir, exist_ok=True)
+    log_file_archive = os.path.join(log_archive_dir, f"connector_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
 
     logger = logging.getLogger("forcepoint-hc-connector")
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.DEBUG)  # Capture everything
 
-    # File handler (DEBUG level)
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setLevel(logging.DEBUG)
+    # File formatter (detailed)
     file_formatter = logging.Formatter(
-        '%(asctime)s [%(levelname)s] %(message)s',
+        '%(asctime)s [%(levelname)-8s] %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
-    file_handler.setFormatter(file_formatter)
-    logger.addHandler(file_handler)
 
-    # Console handler (INFO level)
+    # Main log handler - current working directory (always updated)
+    # This is the file user should watch for real-time diagnostics
+    try:
+        current_handler = logging.FileHandler(log_file_current, mode='w')  # Overwrite on restart
+        current_handler.setLevel(logging.DEBUG)
+        current_handler.setFormatter(file_formatter)
+        logger.addHandler(current_handler)
+        # Print startup message to console
+        print(f"📝 Logging to: {log_file_current}")
+    except Exception as e:
+        print(f"⚠️  Could not write to {log_file_current}: {e}")
+
+    # Archive handler - timestamped file for keeping history
+    try:
+        archive_handler = logging.FileHandler(log_file_archive)
+        archive_handler.setLevel(logging.DEBUG)
+        archive_handler.setFormatter(file_formatter)
+        logger.addHandler(archive_handler)
+    except Exception as e:
+        print(f"⚠️  Could not write to {log_file_archive}: {e}")
+
+    # Console handler (INFO level only - quiet mode)
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     console_formatter = logging.Formatter('%(message)s')
@@ -964,11 +990,13 @@ def heartbeat_loop(config: Config, stop: threading.Event) -> None:
                 consecutive_failures = 0  # Reset backoff counter
                 print(f"[{ts}] OK    heartbeat #{ok_count}  ({r.elapsed.total_seconds()*1000:.0f}ms)")
                 LOGGER.info(f"Heartbeat #{ok_count} success ({r.elapsed.total_seconds()*1000:.0f}ms)")
+                LOGGER.debug(f"Response: {r.text[:200]}")
             else:
                 fail_count += 1
                 consecutive_failures += 1
                 print(f"[{ts}] FAIL  HTTP {r.status_code}")
                 LOGGER.warning(f"Heartbeat failed with HTTP {r.status_code}")
+                LOGGER.debug(f"Response body: {r.text[:500]}")
         except Exception as e:
             fail_count += 1
             consecutive_failures += 1
@@ -1032,7 +1060,9 @@ def job_loop(config: Config, stop: threading.Event) -> None:
             if config.tls_custom_ca_path:
                 verify_ssl = config.tls_custom_ca_path
             # PHASE 3 FIX #2: Use configurable timeout (job polling has longer timeout for long-poll)
+            LOGGER.debug(f"Polling for jobs: {next_url}?token=***")
             r = session.get(f"{next_url}?token={config.hc_token}", timeout=config.hc_request_timeout_sec + 20, verify=verify_ssl)
+            LOGGER.debug(f"Job poll response: HTTP {r.status_code}")
 
             if r.status_code == 204:
                 # No job available (timeout)
@@ -1043,7 +1073,8 @@ def job_loop(config: Config, stop: threading.Event) -> None:
                 consecutive_poll_failures += 1
                 backoff = min(2 ** consecutive_poll_failures, max_backoff)
                 print(f"[jobs] Error polling jobs: HTTP {r.status_code}, retry in {backoff}s")
-                LOGGER.warning(f"Job poll failed: HTTP {r.status_code}, backoff={backoff}s")
+                LOGGER.warning(f"Job poll failed: HTTP {r.status_code}")
+                LOGGER.debug(f"Response: {r.text[:500]}")
                 time.sleep(backoff)
                 continue
 
@@ -1244,10 +1275,13 @@ def execute_job(config: Config, kind: str, params: dict) -> dict:
                 }
 
             except Exception as e:
-                safe_msg = sanitize_error_message(str(e)[:100])
+                safe_msg = sanitize_error_message(str(e)[:200])
+                error_msg = f"DLP API test failed: {type(e).__name__}: {safe_msg}"
+                LOGGER.error(f"DLP test exception: {error_msg}")
+                LOGGER.debug(f"Full exception:\n{str(e)}")
                 return {
                     "ok": False,
-                    "error": f"DLP API test failed: {type(e).__name__}: {safe_msg}"
+                    "error": error_msg
                 }
 
         else:
@@ -1264,9 +1298,15 @@ def execute_job(config: Config, kind: str, params: dict) -> dict:
 def main() -> int:
     print(BANNER.format(ver=VERSION))
     print(f"📦 Agent Version: {VERSION}")
-    print(f"🕐 Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+    print(f"🕐 Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"📂 Working Directory: {os.getcwd()}")
+    print(f"📝 Logs: {os.path.join(os.getcwd(), 'connector.log')}\n")
 
-    LOGGER.info(f"Forcepoint HC Connector v{VERSION} started")
+    LOGGER.info(f"╔════════════════════════════════════════════════════════════╗")
+    LOGGER.info(f"║ Forcepoint HC Connector v{VERSION} started")
+    LOGGER.info(f"║ Working Directory: {os.getcwd()}")
+    LOGGER.info(f"║ PID: {os.getpid()}")
+    LOGGER.info(f"╚════════════════════════════════════════════════════════════╝")
 
     # Collect configuration (with interactive step-by-step testing)
     config = collect_config()
