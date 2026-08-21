@@ -48,7 +48,7 @@ import logging
 
 # Version is hardcoded here and must be updated with each build
 # Update this whenever versioncheck.json version changes
-VERSION = "2026.08.21.9"
+VERSION = "2026.08.21.10"
 
 # ─────────────────────────────────────────────────────────────────
 #   File Logging Setup (PHASE 2 FIX #1)
@@ -911,8 +911,6 @@ def heartbeat_loop(config: Config, stop: threading.Event) -> None:
     consecutive_failures = 0
     max_backoff = 120  # Max 2 minutes between retries
 
-    print(f"\n[start] Phoning home to {heartbeat_url}")
-    print(f"        Heartbeat every {config.heartbeat_interval}s. Press Ctrl+C to stop.\n")
     LOGGER.info(f"Heartbeat loop started: {heartbeat_url}")
 
     while not stop.is_set():
@@ -1021,8 +1019,6 @@ def job_loop(config: Config, stop: threading.Event) -> None:
             "password": config.proxy_password,
         })
 
-    print(f"\n[jobs] Long-poll enabled at {next_url}")
-    print(f"[jobs] Ready to receive: sql.test, sql.query\n")
     LOGGER.info(f"Job polling loop started: {next_url}")
 
     consecutive_poll_failures = 0
