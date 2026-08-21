@@ -668,12 +668,12 @@ def execute_job(config: Config, kind: str, params: dict) -> dict:
                     }
 
                 # Step 2: Get access token using refresh token
+                # DLP 10.4 API: use 'refresh-token' header (not 'Authorization')
                 access_token_url = f"{base_url}/dlp/rest/v1/auth/access-token"
-                headers = {
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {refresh_token}"
+                headers2 = {
+                    "refresh-token": f"Bearer {refresh_token}"
                 }
-                response2 = requests.post(access_token_url, headers=headers, json={}, timeout=10, verify=False)
+                response2 = requests.post(access_token_url, headers=headers2, timeout=10, verify=False)
 
                 if response2.status_code != 200:
                     return {
