@@ -351,30 +351,90 @@ class Config:
         self.measured_latency_dlp_api_ms = 0
 
 
-def collect_config() -> Config:
-    """Interactively collect all configuration."""
+def interactive_setup() -> Config:
+    """Interactive step-by-step configuration with per-section testing.
+
+    WORKFLOW:
+    1. Proxy configuration (optional) - ask then test
+    2. HC API configuration - ask then test
+    3. SQL configuration (optional) - ask then test
+    4. FSM API configuration (optional) - ask then test
+
+    Each step allows retry, skip (if optional), or exit.
+    """
     config = Config()
 
+    # ─────────────────────────────────────────────────────────────
+    # STEP 1: PROXY (Optional) - Test immediately
+    # ─────────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
-    print("STEP 1: HC COMPANION ENDPOINT")
+    print("STEP 1: PROXY SETTINGS (Optional)")
     print("=" * 60)
-    config.hc_endpoint = prompt("HC API IP address or hostname (without http://)")
-    config.hc_port = prompt_int("HC API port", 80)
-    config.hc_token = prompt("HC Connector token (from wizard)")
 
+    while True:
+        config.proxy_enabled = prompt_bool("Use proxy for outbound?", False)
+
+        if config.proxy_enabled:
+            config.proxy_url = prompt("Proxy hostname or IP")
+            config.proxy_port = prompt_int("Proxy port", 8080)
+            config.proxy_username = prompt("Proxy username (if required)", required=False)
+            config.proxy_password = prompt_password("Proxy password (if required)", required=False)
+
+            print("\n[TEST] Proxy configuration:")
+            try:
+                # Simple test: try to create a session with proxy auth
+                from requests.auth import HTTPProxyAuth
+                import requests
+                session = requests.Session()
+                configure_session_with_proxy(session, {
+                    "enabled": True,
+                    "url": config.proxy_url,
+                    "port": config.proxy_port,
+                    "username": config.proxy_username,
+                    "password": config.proxy_password,
+                })
+                print("  ✓ Proxy configuration valid")
+                break
+            except Exception as e:
+                safe_msg = sanitize_error_message(str(e)[:100])
+                print(f"  ✗ Proxy test failed: {safe_msg}")
+                retry = prompt_bool("  Retry proxy configuration?", True)
+                if not retry:
+                    print("  → Skipping proxy (direct connection)")
+                    config.proxy_enabled = False
+                    break
+        else:
+            print("  → No proxy")
+            break
+
+    # ─────────────────────────────────────────────────────────────
+    # STEP 2: HC API - Test immediately
+    # ─────────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
-    print("STEP 2: PROXY SETTINGS (Optional)")
+    print("STEP 2: HC COMPANION ENDPOINT")
     print("=" * 60)
-    config.proxy_enabled = prompt_bool("Use proxy for outbound?", False)
 
-    if config.proxy_enabled:
-        config.proxy_url = prompt("Proxy hostname or IP")
-        config.proxy_port = prompt_int("Proxy port", 8080)
-        config.proxy_username = prompt("Proxy username (if required)", required=False)
-        config.proxy_password = prompt_password("Proxy password (if required)", required=False)
+    while True:
+        config.hc_endpoint = prompt("HC API IP address or hostname (without http://)")
+        config.hc_port = prompt_int("HC API port", 80)
+        config.hc_token = prompt("HC Connector token (from wizard)")
 
+        print("\n[TEST] HC Endpoint:")
+        if test_hc_endpoint(config):
+            print("  ✓ HC endpoint OK")
+            break
+        else:
+            retry = prompt_bool("  Retry HC endpoint configuration?", True)
+            if not retry:
+                print("  → Exiting...")
+                LOGGER.info("User exited at HC endpoint configuration")
+                sys.exit(1)
+
+    # ─────────────────────────────────────────────────────────────
+    # STEP 3: SQL CONFIGURATION (Optional) - Test immediately
+    # ─────────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
-    print("STEP 3: DATA SOURCE CONFIGURATION")
+    print("STEP 3: SQL SERVER CONFIGURATION (Optional)")
     print("=" * 60)
     print("Choose how to access DLP data:")
     print("  • SQL Server: Direct connection to SQL Server databases")
@@ -383,64 +443,137 @@ def collect_config() -> Config:
     config.sql_enabled = prompt_bool("Configure SQL Server access?", True)
 
     if config.sql_enabled:
-        print("\nSQL Server can have 1, 2, or 3 different instances:")
-        print("  • Data   (wbsn-data-security)")
-        print("  • Web    (wslogdb70)")
-        print("  • Email  (esglogdb76)")
+        while True:
+            print("\nSQL Server can have 1, 2, or 3 different instances:")
+            print("  • Data   (wbsn-data-security)")
+            print("  • Web    (wslogdb70)")
+            print("  • Email  (esglogdb76)")
 
-        config.single_sql_host = prompt_bool("Same SQL Server for all databases?", True)
+            config.single_sql_host = prompt_bool("Same SQL Server for all databases?", True)
+            config.sql_auth_mode = "windows" if prompt_bool("Use Windows auth?", False) else "sql"
+            config.sql_host = prompt("SQL Server IP or hostname")
+            config.sql_port = prompt_int("SQL Server port", 1433)
 
-        config.sql_auth_mode = "windows" if prompt_bool("Use Windows auth?", False) else "sql"
+            if config.sql_auth_mode == "sql":
+                config.sql_username = prompt("SQL Server username")
+                config.sql_password = prompt_password("SQL Server password")
 
-        config.sql_host = prompt("SQL Server IP or hostname")
-        config.sql_port = prompt_int("SQL Server port", 1433)
+            if config.single_sql_host:
+                config.db_data_host = config.sql_host
+                config.db_data_port = config.sql_port
+                config.db_web_host = config.sql_host
+                config.db_web_port = config.sql_port
+                config.db_email_host = config.sql_host
+                config.db_email_port = config.sql_port
 
-        if config.sql_auth_mode == "sql":
-            config.sql_username = prompt("SQL Server username")
-            config.sql_password = prompt_password("SQL Server password")
+                print(f"\nDatabase names (press Enter to use defaults):")
+                config.db_data_name = prompt("Data database", config.db_data_name, required=False) or config.db_data_name
+                config.db_web_name = prompt("Web database", config.db_web_name, required=False) or config.db_web_name
+                config.db_email_name = prompt("Email database", config.db_email_name, required=False) or config.db_email_name
+            else:
+                print("\nData database:")
+                config.db_data_host = prompt("IP or hostname", config.sql_host)
+                config.db_data_port = prompt_int("Port", config.sql_port)
 
-        if config.single_sql_host:
-            # Same host for all
-            config.db_data_host = config.sql_host
-            config.db_data_port = config.sql_port
-            config.db_web_host = config.sql_host
-            config.db_web_port = config.sql_port
-            config.db_email_host = config.sql_host
-            config.db_email_port = config.sql_port
+                print("\nWeb database:")
+                config.db_web_host = prompt("IP or hostname", config.sql_host)
+                config.db_web_port = prompt_int("Port", config.sql_port)
 
-            print(f"\nDatabase names (press Enter to use defaults):")
-            config.db_data_name = prompt("Data database", config.db_data_name, required=False) or config.db_data_name
-            config.db_web_name = prompt("Web database", config.db_web_name, required=False) or config.db_web_name
-            config.db_email_name = prompt("Email database", config.db_email_name, required=False) or config.db_email_name
-        else:
-            print("\nData database:")
-            config.db_data_host = prompt("IP or hostname", config.sql_host)
-            config.db_data_port = prompt_int("Port", config.sql_port)
+                print("\nEmail database:")
+                config.db_email_host = prompt("IP or hostname", config.sql_host)
+                config.db_email_port = prompt_int("Port", config.sql_port)
 
-            print("\nWeb database:")
-            config.db_web_host = prompt("IP or hostname", config.sql_host)
-            config.db_web_port = prompt_int("Port", config.sql_port)
+            # Test SQL connections
+            print("\n[TEST] SQL Connections:")
+            sql_data_ok = test_sql_connection(config, "data")
+            sql_web_ok = test_sql_connection(config, "web")
+            sql_email_ok = test_sql_connection(config, "email")
 
-            print("\nEmail database:")
-            config.db_email_host = prompt("IP or hostname", config.sql_host)
-            config.db_email_port = prompt_int("Port", config.sql_port)
+            config.selftest_sql_data = sql_data_ok
+            config.selftest_sql_web = sql_web_ok
+            config.selftest_sql_email = sql_email_ok
+
+            if sql_data_ok and sql_web_ok and sql_email_ok:
+                print("  ✓ All SQL connections OK")
+                break
+            else:
+                retry = prompt_bool("  Retry SQL configuration?", True)
+                if not retry:
+                    print("  → Exiting...")
+                    LOGGER.info("User exited at SQL configuration")
+                    sys.exit(1)
     else:
-        print("\n⚠ SQL Server skipped. Using API-only mode.")
+        print("\n  → SQL Server skipped. Using API-only mode.")
+        config.selftest_sql_data = True
+        config.selftest_sql_web = True
+        config.selftest_sql_email = True
 
+    # ─────────────────────────────────────────────────────────────
+    # STEP 4: FSM API (Optional) - Test immediately
+    # ─────────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
     print("STEP 4: FSM SERVER API (Optional)")
     print("=" * 60)
     config.fsm_enabled = prompt_bool("Configure FSM Server API access?", False)
 
     if config.fsm_enabled:
-        config.fsm_host = prompt("FSM Server hostname or IP")
-        config.fsm_port = prompt_int("FSM Server port", 443)
-        config.fsm_username = prompt("FSM Server username")
-        config.fsm_password = prompt_password("FSM Server password")
+        while True:
+            config.fsm_host = prompt("FSM Server hostname or IP")
+            config.fsm_port = prompt_int("FSM Server port", 443)
+            config.fsm_username = prompt("FSM Server username")
+            config.fsm_password = prompt_password("FSM Server password")
 
+            print("\n[TEST] FSM API:")
+            # Test FSM connection using dlp.test logic
+            try:
+                import requests
+                base_url = f"https://{config.fsm_host}:{config.fsm_port}"
+                verify_ssl = config.tls_verify
+                if config.tls_custom_ca_path:
+                    verify_ssl = config.tls_custom_ca_path
+
+                response = requests.post(
+                    f"{base_url}/dlp/rest/v1/auth/refresh-token",
+                    headers={"username": config.fsm_username, "password": config.fsm_password},
+                    timeout=config.fsm_request_timeout_sec,
+                    verify=verify_ssl
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("access_token"):
+                        print("  ✓ FSM API authenticated successfully")
+                        break
+                    else:
+                        print("  ✗ FSM API response missing access_token")
+                else:
+                    print(f"  ✗ FSM API returned HTTP {response.status_code}")
+
+                retry = prompt_bool("  Retry FSM API configuration?", True)
+                if not retry:
+                    print("  → Exiting...")
+                    LOGGER.info("User exited at FSM API configuration")
+                    sys.exit(1)
+
+            except Exception as e:
+                safe_msg = sanitize_error_message(str(e)[:100])
+                print(f"  ✗ FSM API test failed: {safe_msg}")
+                retry = prompt_bool("  Retry FSM API configuration?", True)
+                if not retry:
+                    print("  → Exiting...")
+                    LOGGER.info("User exited at FSM API configuration")
+                    sys.exit(1)
+    else:
+        print("\n  → FSM Server skipped")
+
+    return config
+
+
+def collect_config() -> Config:
+    """Legacy function - redirects to interactive setup."""
+    config = interactive_setup()
     # PHASE 2 FIX #2: Validate configuration before returning
     _validate_config(config)
-
     return config
 
 
@@ -1074,52 +1207,16 @@ def main() -> int:
 
     LOGGER.info(f"Forcepoint HC Connector v{VERSION} started")
 
-    # Collect configuration
+    # Collect configuration (with interactive step-by-step testing)
     config = collect_config()
 
-    # Test connections
+    # All tests already passed during interactive setup
     print("\n" + "=" * 60)
-    print("TESTING CONNECTIONS")
+    print("CONFIGURATION COMPLETE")
     print("=" * 60)
-    LOGGER.info("Testing connections...")
-
-    hc_ok = test_hc_endpoint(config)
-
-    if config.sql_enabled:
-        sql_data_ok = test_sql_connection(config, "data")
-        sql_web_ok = test_sql_connection(config, "web")
-        sql_email_ok = test_sql_connection(config, "email")
-        # Store results for heartbeat
-        config.selftest_sql_data = sql_data_ok
-        config.selftest_sql_web = sql_web_ok
-        config.selftest_sql_email = sql_email_ok
-    else:
-        print("\n[TEST] SQL Server: SKIPPED (API-only mode)")
-        sql_data_ok = True  # Mark as OK since not needed
-        sql_web_ok = True
-        sql_email_ok = True
-
-    # Summary
-    print("\n" + "=" * 60)
-    print("SUMMARY")
-    print("=" * 60)
-    print(f"HC Endpoint:  {'✓' if hc_ok else '✗'}")
-    if config.sql_enabled:
-        print(f"SQL Data:     {'✓' if sql_data_ok else '✗'}")
-        print(f"SQL Web:      {'✓' if sql_web_ok else '✗'}")
-        print(f"SQL Email:    {'✓' if sql_email_ok else '✗'}")
-        all_ok = hc_ok and sql_data_ok  # HC and at least Data DB required
-    else:
-        print(f"Data Source:  API-Only (SQL Server not configured)")
-        all_ok = hc_ok  # HC endpoint is the only requirement for API-only
-
-    if not all_ok:
-        print("\n⚠ Some connections failed. Fix and retry? (Y/n): ", end="")
-        if not prompt_bool("", True):
-            return 1
-        return main()
-
-    print("\n✓ All critical connections OK. Starting heartbeat...")
+    print("✓ All connections tested and verified")
+    print("✓ Starting heartbeat loop...")
+    LOGGER.info("Configuration complete, starting heartbeat loop")
 
     # Graceful shutdown
     stop = threading.Event()
