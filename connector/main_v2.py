@@ -48,7 +48,7 @@ import logging
 
 # Version is hardcoded here and must be updated with each build
 # Update this whenever versioncheck.json version changes
-VERSION = "2026.08.21.13"
+VERSION = "2026.08.22.1"
 
 # ─────────────────────────────────────────────────────────────────
 #   File Logging Setup (PHASE 2 FIX #1)
@@ -1287,6 +1287,116 @@ def execute_job(config: Config, kind: str, params: dict) -> dict:
                 return {
                     "ok": False,
                     "error": error_msg
+                }
+
+        elif kind == "dlp.fetch":
+            # Via-Connector transport: Fetch a DLP REST API endpoint on behalf of the server
+            # Server sends: path (e.g., "/incidents"), method (GET/POST), body (optional)
+            # We authenticate with DLP, make the call, and return status + response body
+            path = params.get("path")
+            method = params.get("method", "GET").upper()
+            body = params.get("body")
+            timeout_sec = params.get("timeout", 30)
+
+            if not path:
+                return {"ok": False, "error": "Missing path"}
+
+            if not config.fsm_enabled:
+                return {"ok": False, "error": "DLP API not configured"}
+
+            try:
+                import requests
+                import json
+
+                base_url = f"https://{config.fsm_host}:{config.fsm_port}"
+
+                # Configure TLS verification (same as dlp.test)
+                verify_ssl = config.tls_verify
+                if config.tls_custom_ca_path:
+                    verify_ssl = config.tls_custom_ca_path
+
+                # Step 1: Get access token from /auth/refresh-token
+                LOGGER.debug(f"dlp.fetch: Getting access token for {method} {path}")
+                refresh_token_url = f"{base_url}/dlp/rest/v1/auth/refresh-token"
+                auth_headers = {
+                    "username": config.fsm_username,
+                    "password": config.fsm_password
+                }
+                auth_response = requests.post(
+                    refresh_token_url,
+                    headers=auth_headers,
+                    timeout=config.fsm_request_timeout_sec,
+                    verify=verify_ssl
+                )
+
+                if auth_response.status_code != 200:
+                    return {
+                        "ok": False,
+                        "error": f"DLP API auth failed (HTTP {auth_response.status_code})"
+                    }
+
+                token_data = auth_response.json()
+                access_token = token_data.get("access_token")
+                if not access_token:
+                    return {
+                        "ok": False,
+                        "error": "DLP API response missing access_token"
+                    }
+
+                # Step 2: Make the actual API call with Bearer token
+                full_url = f"{base_url}/dlp/rest/v1{path}"
+                api_headers = {
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json"
+                }
+
+                # Handle body: could be dict (already parsed by server) or string
+                request_body = None
+                if body:
+                    if isinstance(body, dict):
+                        request_body = json.dumps(body)
+                    else:
+                        request_body = body
+
+                LOGGER.debug(f"dlp.fetch: {method} {full_url} timeout={timeout_sec}s body_len={len(request_body) if request_body else 0}")
+
+                api_response = requests.request(
+                    method=method,
+                    url=full_url,
+                    headers=api_headers,
+                    data=request_body,
+                    timeout=timeout_sec,
+                    verify=verify_ssl
+                )
+
+                # Parse response body as JSON if possible, otherwise return text
+                try:
+                    response_body = api_response.json()
+                except:
+                    response_body = api_response.text
+
+                LOGGER.debug(f"dlp.fetch: Response {api_response.status_code} (body_len={len(str(response_body))})")
+
+                return {
+                    "ok": True,
+                    "payload": {
+                        "ok": True,
+                        "status": api_response.status_code,
+                        "body": response_body
+                    }
+                }
+
+            except requests.exceptions.Timeout:
+                return {
+                    "ok": False,
+                    "error": f"DLP API request timed out (>{timeout_sec}s)"
+                }
+            except Exception as e:
+                safe_msg = sanitize_error_message(str(e)[:200])
+                LOGGER.error(f"dlp.fetch exception: {safe_msg}")
+                return {
+                    "ok": False,
+                    "error": f"DLP fetch failed: {type(e).__name__}: {safe_msg}"
                 }
 
         else:
