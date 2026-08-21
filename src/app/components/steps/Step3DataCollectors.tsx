@@ -3570,7 +3570,9 @@ export function Step3DataCollectors({
               onChange={(e) => setPostureWindow(parseInt(e.target.value, 10))}
               disabled={postureFetching}
               style={{ fontSize: '10.5px', fontWeight: 600, color: '#475569', background: '#fff', border: '1px solid #E2E8F0', borderRadius: 4, padding: '2px 6px', cursor: postureFetching ? 'not-allowed' : 'pointer' }}>
-              {[7, 14, 30, 60, 90].map((d) => <option key={d} value={d}>{d} days</option>)}
+              {/* DLP REST API accepts 1-365 days per server (index.mjs line 736).
+                   Extended options to support longer-window analysis. */}
+              {[7, 14, 30, 60, 90, 180, 365].map((d) => <option key={d} value={d}>{d} days</option>)}
             </select>
           </div>
           <div className="flex-1" />

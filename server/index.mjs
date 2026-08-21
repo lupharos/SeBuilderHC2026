@@ -792,8 +792,11 @@ app.post('/api/dlp/posture', async (req, res) => {
 
     /* Three independent fetches in parallel: deploy/status, enabled-names
        (DLP + DISCOVERY), and the incident window. /incidents tops out at
-       10K rows; we request DLP type only (DISCOVERY would be a separate
-       call but isn't included in the posture dashboard for v1).
+       10K rows per spec section 2.1; we request DLP type only (DISCOVERY
+       would be a separate call but isn't included in the posture dashboard
+       for v1). For large deployments (>10K incidents in window), the
+       response will be truncated—consider filtering to a shorter window
+       or raising this with Forcepoint Support for pagination.
        Same call shape in both transport modes — `dlpFetchVia` hides
        the routing decision so the aggregator below stays oblivious. */
     const [deployRes, polDlpRes, polDiscRes, incRes] = await Promise.all([
@@ -826,7 +829,11 @@ app.post('/api/dlp/posture', async (req, res) => {
        CXO-grade categorical rollup. Top-Users surfaces login_name from
        source.* — CXO healthcheck reports universally name top offenders.
        Higher-cardinality identifiers (AD domain, run-as, host name) are
-       NOT surfaced — those remain under the parser-side redaction rule. */
+       NOT surfaced — those remain under the parser-side redaction rule.
+
+       NOTE: If incidents.length === 10000, the API response was likely
+       truncated (per spec section 2.1, /incidents returns max 10K rows).
+       In that case, topDestinations/topPolicies counts are incomplete. */
     const bySeverity = { HIGH: 0, MEDIUM: 0, LOW: 0 };
     const byAction = {};
     const byChannel = {};
