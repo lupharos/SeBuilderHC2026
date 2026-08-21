@@ -48,7 +48,7 @@ import logging
 
 # Version is hardcoded here and must be updated with each build
 # Update this whenever versioncheck.json version changes
-VERSION = "2026.08.21.12"
+VERSION = "2026.08.21.13"
 
 # ─────────────────────────────────────────────────────────────────
 #   File Logging Setup (PHASE 2 FIX #1)
@@ -946,28 +946,32 @@ def heartbeat_loop(config: Config, stop: threading.Event) -> None:
         try:
             # Build selftest result from config (set during startup)
             # CRITICAL FIX #10: Use measured latency values (not hardcoded 50/45/48)
-            selftest = None
-            if config.sql_enabled:
-                selftest = {
-                    "sqlData": {
-                        "status": "ok",
-                        "message": "SQL Data database connection OK",
-                        "latencyMs": config.measured_latency_sql_data_ms or 0,
-                        "checkedAt": datetime.now().isoformat()
-                    } if config.selftest_sql_data else None,
-                    "sqlWeb": {
-                        "status": "ok",
-                        "message": "SQL Web database connection OK",
-                        "latencyMs": config.measured_latency_sql_web_ms or 0,
-                        "checkedAt": datetime.now().isoformat()
-                    } if config.selftest_sql_web else None,
-                    "sqlEmail": {
-                        "status": "ok",
-                        "message": "SQL Email database connection OK",
-                        "latencyMs": config.measured_latency_sql_email_ms or 0,
-                        "checkedAt": datetime.now().isoformat()
-                    } if config.selftest_sql_email else None,
-                }
+            selftest = {
+                "sqlData": {
+                    "status": "ok",
+                    "message": "SQL Data database connection OK",
+                    "latencyMs": config.measured_latency_sql_data_ms or 0,
+                    "checkedAt": datetime.now().isoformat()
+                } if config.sql_enabled and config.selftest_sql_data else None,
+                "sqlWeb": {
+                    "status": "ok",
+                    "message": "SQL Web database connection OK",
+                    "latencyMs": config.measured_latency_sql_web_ms or 0,
+                    "checkedAt": datetime.now().isoformat()
+                } if config.sql_enabled and config.selftest_sql_web else None,
+                "sqlEmail": {
+                    "status": "ok",
+                    "message": "SQL Email database connection OK",
+                    "latencyMs": config.measured_latency_sql_email_ms or 0,
+                    "checkedAt": datetime.now().isoformat()
+                } if config.sql_enabled and config.selftest_sql_email else None,
+                "dlpApi": {
+                    "status": "ok",
+                    "message": "DLP REST API authenticated",
+                    "latencyMs": config.measured_latency_dlp_api_ms or 0,
+                    "checkedAt": datetime.now().isoformat()
+                } if config.fsm_enabled and config.selftest_dlp_api else None,
+            }
 
             # CRITICAL FIX #11: Token goes in request body (not header)
             verify_ssl = config.tls_verify
