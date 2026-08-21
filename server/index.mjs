@@ -40,7 +40,10 @@ const app = express();
 const PORT = Number(process.env.PORT) || 3001;
 
 app.use(cors());                // Vite dev server is on a different origin
-app.use(express.json({ limit: '256kb' }));
+/* Raised to 2MB to accommodate large DLP incident payloads (~595KB typical
+   for a 30-day window with 10K incidents). Via-Connector job results can be
+   large when the FSM returns full incident details. */
+app.use(express.json({ limit: '2mb' }));
 
 /* DLP Manager certificates are typically self-signed; the companion talks
    to the FSM over HTTPS but skips chain validation. Node native fetch
