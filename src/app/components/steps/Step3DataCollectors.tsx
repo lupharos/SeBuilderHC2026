@@ -3513,6 +3513,7 @@ export function Step3DataCollectors({
             case 'channel':           return `${Object.keys(ps.byChannel).length} channels`;
             case 'status':            return `${Object.keys(ps.byStatus).length} status states`;
             case 'policies':          return `top: ${topLabel(ps.topPolicies)}`;
+            case 'never_used_policies': return `${ps.neverUsedDlpPoliciesCount ?? 0} unused · ${ps.neverUsedPoliciesWindowDays ?? 30}d window`;
             case 'destinations':      return `top: ${topLabel(ps.topDestinations)}`;
             case 'users':             return ps.topUsers?.length ? `top: ${topLabel(ps.topUsers)}` : 'no user telemetry';
             case 'genai_apps':        return `${ps.genAiIncidentCount ?? 0} hits · ${(ps.topGenAiApps?.length ?? 0)} apps`;

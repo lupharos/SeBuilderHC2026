@@ -912,7 +912,28 @@ function buildReportHTML(p: {
           </table>`}
       </div>` : ''}
     </div>` : ''}
-  
+
+    ${sec.never_used_policies && (ps.neverUsedDlpPoliciesCount ?? 0) > 0 ? `<!-- Policy Audit: Never-Used Policies -->
+    <div style="margin-bottom:14px;page-break-inside:avoid;">
+      <div style="background:#FFF7ED;border:1px solid var(--fp-amber-rule);border-left:4px solid var(--fp-amber);border-radius:6px;padding:14px 18px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px;">
+          <div style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--fp-ink-faint);">⚠️ Policy Audit: Never-Used Policies</div>
+          <div style="font-size:9.5px;color:var(--fp-ink-faint);">${ps.neverUsedPoliciesWindowDays ?? 30}-day window</div>
+        </div>
+        <div style="margin-bottom:10px;font-size:10.5px;color:var(--fp-ink-muted);">
+          <strong>${ps.neverUsedDlpPoliciesCount ?? 0}</strong> enabled DLP policies generated zero incidents. Recommendation: review for misconfiguration or unnecessary overhead.
+        </div>
+        ${(ps.neverUsedDlpPoliciesList ?? []).length === 0
+          ? `<div style="font-size:10.5px;color:var(--fp-ink-faint);font-style:italic;">No unused policies found.</div>`
+          : `<table style="margin:0;box-shadow:none;border:1px solid var(--fp-amber-rule);">
+            <thead><tr><th style="padding:5px 8px;font-size:9px;">Policy Name</th></tr></thead>
+            <tbody>${(ps.neverUsedDlpPoliciesList ?? []).map((p) => `<tr>
+              <td style="padding:5px 8px;font-size:10.5px;color:var(--fp-ink);font-weight:500;">${esc(p)}</td>
+            </tr>`).join('')}</tbody>
+          </table>`}
+      </div>
+    </div>` : ''}
+
     ${sec.users ? (() => {
       const list = ps.topUsers ?? [];
       const maxCount = Math.max(1, ...list.map((u) => u.count));

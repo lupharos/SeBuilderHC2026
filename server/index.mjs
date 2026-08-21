@@ -867,6 +867,10 @@ app.post('/api/dlp/posture', async (req, res) => {
     let riskLevelPositiveCount = 0;
     let slaBreachCount = 0;
 
+    /* Track which policies produced incidents — so we can surface
+       never-used policies as a policy audit recommendation. */
+    const usedPolicies = new Set();
+
     const bump = (m, k) => { if (!k) return; m[k] = (m[k] || 0) + 1; };
 
     for (const i of incidents) {
@@ -884,10 +888,12 @@ app.post('/api/dlp/posture', async (req, res) => {
       bump(byDetectedBy, String(i.detected_by || '').replace(/\s+\d.*/, '').trim());
       /* policies may be ";"-delimited (e.g. "Credit Cards; PCI"). Split
          and tally each policy separately so multi-policy hits don't get
-         double-counted against a phantom combined label. */
+         double-counted against a phantom combined label. Track which
+         policies are actually being used so we can surface never-used ones. */
       if (i.policies) {
         for (const p of String(i.policies).split(/[;|]/).map((s) => s.trim()).filter(Boolean)) {
           policyCounts[p] = (policyCounts[p] || 0) + 1;
+          usedPolicies.add(p);
         }
       }
 
@@ -955,6 +961,14 @@ app.post('/api/dlp/posture', async (req, res) => {
         .slice(0, n)
         .map(([label, count]) => ({ label, count }));
 
+    /* Never-Used Policies: enabled but generated 0 incidents in the window.
+       This is a policy audit finding — unused policies should be reviewed
+       for misconfig or unnecessary overhead. */
+    const enabledDlpPoliciesList = Array.isArray(polDlpJson.enabled_policies)
+      ? polDlpJson.enabled_policies
+      : [];
+    const neverUsedPolicies = enabledDlpPoliciesList.filter(p => !usedPolicies.has(p));
+
     const ms = Date.now() - started;
     res.json({
       ok: true,
@@ -994,6 +1008,12 @@ app.post('/api/dlp/posture', async (req, res) => {
       ignoredCount,
       riskLevelPositiveCount,
       slaBreachCount,
+      /* Policy Audit: Never-Used Policies */
+      enabledDlpPoliciesCount: enabledDlpPoliciesList.length,
+      usedDlpPoliciesCount: usedPolicies.size,
+      neverUsedDlpPoliciesCount: neverUsedPolicies.length,
+      neverUsedDlpPoliciesList: neverUsedPolicies,
+      neverUsedPoliciesWindowDays: days,
     });
   } catch (err) {
     res.status(400).json({

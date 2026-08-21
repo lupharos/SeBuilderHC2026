@@ -158,6 +158,7 @@ export type DlpPostureBlockId =
   | 'channel'            // Channel distribution bars
   | 'status'             // Workflow status chips
   | 'policies'           // Top 10 triggered policies
+  | 'never_used_policies' // Policy audit: enabled but unused
   | 'destinations'       // Top 10 raw destinations (uncategorised)
   | 'users'              // Top 10 users by incident count — CXO offender list
   | 'genai_apps'         // Top GenAI applications hit + total exposure
@@ -185,6 +186,7 @@ export const DLP_POSTURE_BLOCKS: DlpPostureBlockDef[] = [
   { id: 'channel',           group: 'Incidents',      title: 'Channel Distribution',         description: 'EMAIL / ENDPOINT_* / HTTP / HTTPS / CASB channel counts.' },
   { id: 'status',            group: 'Incidents',      title: 'Workflow Status',              description: 'NEW / IN_PROCESS / CLOSE / FALSE_POSITIVE / ESCALATED + any custom statuses.' },
   { id: 'policies',          group: 'Incidents',      title: 'Top Triggered Policies',       description: 'Top 10 policies by violation count over the window.' },
+  { id: 'never_used_policies', group: 'Incidents',   title: 'Policy Audit: Never-Used',    description: 'Enabled DLP policies that generated zero incidents in the window. Recommendation: review for misconfiguration or unnecessary overhead.' },
   { id: 'destinations',      group: 'Incidents',      title: 'Top Destinations (raw)',       description: 'Top 10 destination labels — full set including uncategorised endpoints, devices, and printers.' },
   { id: 'endpoint_type',     group: 'Incidents',      title: 'Endpoint Type',                description: 'Laptop / Desktop / Network breakdown of incident sources.' },
   { id: 'detection_sources', group: 'Incidents',      title: 'Detection Sources',            description: 'Where incidents are detected (Endpoint Agent, Protector, Email Gateway, etc.).' },
@@ -236,6 +238,11 @@ export interface DlpPostureSummary {
   byDetectedBy: Record<string, number>;
 
   topPolicies: DlpPostureLabelCount[];
+  /** Policy audit: enabled policies that generated zero incidents in window. */
+  neverUsedDlpPoliciesCount: number;
+  neverUsedDlpPoliciesList: string[];
+  neverUsedPoliciesWindowDays: number;
+
   topDestinations: DlpPostureLabelCount[];
 
   /** Top 10 users by incident count — login_name from source. CXO reports
