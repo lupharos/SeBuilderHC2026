@@ -886,9 +886,22 @@ def execute_sql_query(config: Config, host: str, port: int, db: str, query: str,
         # NOTE: pyodbc.Cursor doesn't have timeout attribute; timeout is set at connection level
         cur.execute(query)
         rows = cur.fetchall()
+
+        # Get column names from cursor.description
+        # Each element is a tuple: (name, type_code, display_size, internal_size, precision, scale, null_ok)
+        column_names = [desc[0] for desc in cur.description] if cur.description else []
+
+        # Convert rows to list of dicts with column names
+        result_rows = []
+        for row in rows:
+            row_dict = {}
+            for i, col_name in enumerate(column_names):
+                row_dict[col_name] = convert_sql_types(row[i])
+            result_rows.append(row_dict)
+
         return {
-            "rows": [[convert_sql_types(v) for v in row] for row in rows],
-            "count": len(rows),
+            "rows": result_rows,
+            "count": len(result_rows),
         }
     finally:
         conn.close()

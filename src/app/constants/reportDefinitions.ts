@@ -33,7 +33,6 @@ export const WEB_REPORTS: ReportDef[] = [
   /* Web Security Usage Analysis — Kemal's query pack (parametrized window + TOP N) */
   { id: 'web_top_value_classes',      title: 'Top Risk Classes (Value Classes)',                                      product: 'web', sqlKey: 'web_top_value_classes',      defaultWindowDays: 7, defaultTopN: 5 },
   { id: 'web_value_class_breakdown',  title: 'Risk Class → Category Breakdown',                                        product: 'web', sqlKey: 'web_value_class_breakdown',  defaultWindowDays: 7, defaultTopN: 5 },
-  { id: 'web_disposition_analysis',   title: 'Allow/Block Policy Effectiveness',                                      product: 'web', sqlKey: 'web_disposition_analysis',   defaultWindowDays: 7, defaultTopN: 5 },
   { id: 'web_top_categories',         title: 'Top Categories Overall',                                                product: 'web', sqlKey: 'web_top_categories',         defaultWindowDays: 7, defaultTopN: 5 },
   { id: 'web_user_time_analysis',     title: 'User Time Usage by Category',                                           product: 'web', sqlKey: 'web_user_time_analysis',     defaultWindowDays: 7, defaultTopN: 5 },
   { id: 'web_top_users',              title: 'Top Users by Activity',                                                 product: 'web', sqlKey: 'web_top_users',              defaultWindowDays: 7, defaultTopN: 5 },

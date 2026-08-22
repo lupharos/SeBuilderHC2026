@@ -475,35 +475,6 @@ ORDER BY
   },
 
   /* 3) Disposition Analysis — Allow/Block/Quota breakdown for a risk class */
-  web_disposition_analysis: {
-    title: 'Allow/Block Policy Effectiveness',
-    description: 'Risk class traffic by disposition (Permitted, Blocked, Quota, etc.).',
-    defaultWindowDays: 90,
-    sql: ({ days, topN }) => `
-SELECT ${topClause(topN)}
-    VC.NAME as RiskClass,
-    D.DESCRIPTION as Action,
-    SUM(CAST(d.hits AS NUMERIC)) as Hits
-FROM
-    SUMMARY_NOUSER d (NOLOCK),
-    VALUE_CLASS VC (NOLOCK),
-    VALUE_CLASS_CATEGORY_MAP vcmap (NOLOCK),
-    DISPOSITION D (NOLOCK)
-WHERE
-    vcmap.value_id = 4
-    AND VC.value_id = vcmap.value_id
-    AND vcmap.category_id = d.category
-    AND D.DISPOSITION_CODE = d.disposition_code
-    AND d.date_time >= DATEADD(day, -${sanitiseDays(days, 90)}, CONVERT(smalldatetime, CONVERT(date, GETDATE())))
-    AND d.date_time < CONVERT(smalldatetime, CONVERT(date, GETDATE()))
-GROUP BY
-    vcmap.value_id, VC.NAME, d.disposition_code, D.DESCRIPTION
-HAVING
-    SUM(CAST(d.hits AS NUMERIC)) > 0
-ORDER BY
-    SUM(CAST(d.hits AS NUMERIC)) DESC`,
-  },
-
   /* 4) Top Categories Overall — general usage profile */
   web_top_categories: {
     title: 'Top Categories Overall',
