@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import {
   FolderOpen, Folder, Trash2, ArrowUpRight, Search, Clock,
   CheckCircle2, ChevronRight, BarChart2, Layers, Plus,
@@ -37,8 +37,42 @@ export function SessionsPage({
      preserveSessions flag is true when restoring from "Get Updates" (GitHub),
      false for regular "Import Backup" (file upload). */
   const backupInputRef = useRef<HTMLInputElement>(null);
-  const [restorePreview, setRestorePreview] = useState<{ backup: SystemBackup; summary: BackupSummary; fileName: string; preserveSessions?: boolean } | null>(null);
+  const [restorePreview, setRestorePreview] = useState<{ backup: SystemBackup; summary: BackupSummary; fileName: string; preserveSessions?: boolean; etag?: string } | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
+
+  /* Track if GitHub backup.json has updates available.
+     Checked on mount by comparing ETag with localStorage.
+     Get Updates button is only enabled if updates are available. */
+  const [updatesAvailable, setUpdatesAvailable] = useState<boolean>(false);
+  const [checkingUpdates, setCheckingUpdates] = useState<boolean>(true);
+
+  /* Check if GitHub backup.json has updates available.
+     Compares ETag with stored value in localStorage.
+     Called on component mount and after successful restore. */
+  async function checkForUpdates() {
+    try {
+      setCheckingUpdates(true);
+      const url = 'https://raw.githubusercontent.com/lupharos/SeBuilderHC2026/main/template/backup.json';
+      const response = await fetch(url, { method: 'HEAD' });
+      const etag = response.headers.get('etag') || response.headers.get('last-modified') || 'unknown';
+      const storedEtag = localStorage.getItem('hc_backup_etag');
+
+      /* Updates available if no stored ETag or ETag changed */
+      const hasUpdates = !storedEtag || storedEtag !== etag;
+      setUpdatesAvailable(hasUpdates);
+    } catch (err) {
+      /* On network error, assume updates might be available (optimistic) */
+      setUpdatesAvailable(true);
+      console.warn('Could not check for updates:', err);
+    } finally {
+      setCheckingUpdates(false);
+    }
+  }
+
+  /* Check for updates on mount */
+  useEffect(() => {
+    checkForUpdates();
+  }, []);
 
   function handleExportBackup() {
     try {
@@ -77,6 +111,12 @@ export function SessionsPage({
       } else {
         applyBackup(restorePreview.backup);
       }
+
+      /* Store ETag if from GitHub (Get Updates) */
+      if (restorePreview.etag) {
+        localStorage.setItem('hc_backup_etag', restorePreview.etag);
+      }
+
       /* React state mirrors localStorage via useLocalStorage hooks, which
          only read on mount. A page reload is the cleanest way to re-hydrate
          the whole tree from the restored payload. */
@@ -89,7 +129,8 @@ export function SessionsPage({
 
   async function handleGetUpdates() {
     /* Fetch backup.json from GitHub repo and import it.
-       Preserves existing HC sessions — only updates templates and catalogs. */
+       Preserves existing HC sessions — only updates templates and catalogs.
+       Stores ETag to track if updates have been applied. */
     try {
       setRestoreError(null);
       const url = 'https://raw.githubusercontent.com/lupharos/SeBuilderHC2026/main/template/backup.json';
@@ -97,6 +138,10 @@ export function SessionsPage({
       if (!response.ok) {
         throw new Error(`GitHub returned ${response.status}: ${response.statusText}`);
       }
+
+      /* Store ETag for future update checks */
+      const etag = response.headers.get('etag') || response.headers.get('last-modified') || 'unknown';
+
       const text = await response.text();
       const backup = parseBackup(text);
       setRestorePreview({
@@ -104,6 +149,7 @@ export function SessionsPage({
         summary: summarize(backup),
         fileName: 'GitHub Template Updates',
         preserveSessions: true, /* Keep existing HC sessions */
+        etag, /* Pass ETag to confirmRestore */
       });
     } catch (err) {
       setRestoreError(`Failed to fetch updates from GitHub: ${(err as Error).message}`);
@@ -182,17 +228,38 @@ export function SessionsPage({
           </button>
           <button
             onClick={handleGetUpdates}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-white transition-all hover:scale-[1.02]"
+            disabled={checkingUpdates || !updatesAvailable}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold transition-all"
             style={{
               fontSize: '12.5px',
-              background: 'linear-gradient(135deg, #059669, #10B981)',
-              boxShadow: '0 4px 14px rgba(5,150,105,0.35)',
+              background: updatesAvailable && !checkingUpdates
+                ? 'linear-gradient(135deg, #059669, #10B981)'
+                : '#E0E7FF',
+              color: updatesAvailable && !checkingUpdates ? 'white' : '#6B7280',
+              boxShadow: updatesAvailable && !checkingUpdates
+                ? '0 4px 14px rgba(5,150,105,0.35)'
+                : 'none',
+              cursor: updatesAvailable && !checkingUpdates ? 'pointer' : 'not-allowed',
+              opacity: updatesAvailable && !checkingUpdates ? 1 : 0.6,
             }}
-            title="Fetch latest template updates from GitHub repository"
+            title={
+              checkingUpdates
+                ? 'Checking for updates...'
+                : updatesAvailable
+                  ? 'Updates available! Click to sync templates from GitHub'
+                  : 'No updates available - backup.json is up to date'
+            }
           >
-            <RefreshCw size={14} strokeWidth={2.5} />
-            Get Updates
+            <RefreshCw size={14} strokeWidth={2.5} style={{ animation: checkingUpdates ? 'spin 1s linear infinite' : 'none' }} />
+            {checkingUpdates ? 'Checking...' : updatesAvailable ? 'Get Updates' : 'Up to Date'}
           </button>
+
+          <style>{`
+            @keyframes spin {
+              from { transform: rotate(0deg); }
+              to { transform: rotate(360deg); }
+            }
+          `}</style>
 
           <div className="relative">
             <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: '#94A3B8' }} />
