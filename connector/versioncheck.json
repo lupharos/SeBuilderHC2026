@@ -1,60 +1,6 @@
 {
-    "productName":  "HC Studio",
-    "version":  "2026.08.22.3",
-    "releasedAt":  "2026-08-22T05:24:00Z",
-    "notes":  "Release notes for HC Studio version 2026.08.22.3:
-
-WEB & EMAIL SECURITY REPORTS FIX:
-
-1. Problem
-   - Web Security and Email reports failed when run via-connector
-   - Error: 'Job result post exception: TypeError: Object of type Decimal is not JSON serializable'
-   - DLP reports worked fine (numeric data less common)
-   - Web/Email queries return decimal/float columns that couldn't be JSON-encoded
-   - Error only occurred when query results contained Decimal, datetime, or date objects
-
-2. Root Causes
-   a) Server backend: Did not force correct database for Web/Email queries
-      - DLP queries forced to wbsn-data-security
-      - Web queries defaulted to caller-provided database (incorrect)
-      - Email queries defaulted to caller-provided database (incorrect)
-
-   b) Connector: Could not serialize SQL Server Decimal type to JSON
-      - execute_sql_query() converted rows to list but kept Decimal objects
-      - JSON.dumps() failed on non-JSON-serializable types
-
-3. Solutions Implemented
-   a) Server (index.mjs)
-      - Added WEB_DATABASE = 'wslogdb70' constant
-      - Added EMAIL_DATABASE = 'esglogdb76' constant
-      - Updated database selection to force correct database based on sqlKey prefix
-      - dlp_* queries → wbsn-data-security (DLP database)
-      - web_* queries → wslogdb70 (Web Security database)
-      - email_* queries → esglogdb76 (Email Security database)
-
-   b) Connector (main_v2.py)
-      - Added convert_sql_types() helper function
-      - Converts SQL types to JSON-serializable Python types:
-        * Decimal → float (preserve numeric precision)
-        * datetime → ISO 8601 string
-        * date → ISO 8601 string
-        * None → None (null)
-        * Others → as-is
-      - Applied to all query result rows before JSON serialization
-
-4. Impact
-   - Web Security reports now execute successfully via-connector
-   - Email reports now execute successfully via-connector
-   - All 13 Web reports (Risk Classes, Categories, Users, AI Detection, Bot Networks, etc.) work
-   - All 15 Email reports now functional
-   - DLP reports continue to work unchanged
-   - Results are properly JSON-serializable and frontend displays data correctly
-   - No more silent job failures on decimal data
-
-5. Files Changed
-   - server/index.mjs: Database forcing logic for Web/Email
-   - connector/main_v2.py: SQL type conversion in execute_sql_query()
-   - versioncheck.json: Version bumped to 2026.08.22.3
-
-Previous (2026.08.22.2):\n\nPOLICY AUDIT FEATURE: Never-Used Policies:\n\n1. Problem\n   - No visibility into enabled DLP policies that generate zero incidents\n   - Misconfigured or unnecessary policies go unnoticed\n   - CXO reports don't flag policy coverage gaps\n\n2. Solution: Policy Audit Block\n   - New 'Policy Audit: Never-Used' block in DLP Posture Dashboard\n   - Compares enabled policies vs policies that generated incidents\n   - Identifies unused policies in configurable time window (default 30 days)\n   - Includes policy names and recommendation\n\n3. Implementation\n   - Backend: /api/dlp/posture tracks usedPolicies set during incident aggregation\n   - Backend: Calculates neverUsedPolicies = enabledDlpPolicies - usedPolicies\n   - Frontend: New 'never_used_policies' block in REST API Data Selection picker\n   - Report: New amber-accented card showing unused policies with recommendation\n   - Dynamic window: Respects same windowDays parameter as other reports\n\n4. Response Fields\n   - enabledDlpPoliciesCount: total enabled DLP policies\n   - usedDlpPoliciesCount: policies that generated >= 1 incident in window\n   - neverUsedDlpPoliciesCount: enabled but unused policy count\n   - neverUsedDlpPoliciesList: full list of unused policy names\n   - neverUsedPoliciesWindowDays: analysis window in days\n\n5. Impact\n   - CXO reports now flag unused policies as audit findings\n   - SE can identify policy misconfigurations\n   - Customers see coverage gaps and redundant policies\n   - Drives policy tuning and operational efficiency\n   - Integrates seamlessly with existing posture blocks\n\nPrevious versions and detailed release history available in documentation."
+    "productName": "HC Studio",
+    "version": "2026.08.22.3",
+    "releasedAt": "2026-08-22T05:24:00Z",
+    "notes": "v2026.08.22.3: Fixed Web/Email/DLP SQL report column headers and Decimal serialization. Added convert_sql_types() for proper JSON encoding. Fixed database selection for Web (wslogdb70) and Email (esglogdb76) queries. Removed Allow/Block Policy Effectiveness report."
 }
