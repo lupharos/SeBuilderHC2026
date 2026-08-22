@@ -241,6 +241,8 @@ app.get('/api/sql/queries', (_req, res) => {
    wizard does NOT need to enter a DB name — the server pins it so that
    PA_EVENT_PARTITION_CATALOG / PA_EVENTS_<partition> resolve correctly. */
 const DLP_DATABASE = 'wbsn-data-security';
+const WEB_DATABASE = 'wslogdb70';
+const EMAIL_DATABASE = 'esglogdb76';
 
 app.post('/api/sql/query', async (req, res) => {
   const started = Date.now();
@@ -326,7 +328,24 @@ app.post('/api/sql/query', async (req, res) => {
     /* DLP queries are pinned to wbsn-data-security regardless of what the
        caller passed in — keeps the connection scoped to the only DB these
        templates know about. */
-    const cfg = buildSqlConfig({ ...connBody, database: sqlKey.startsWith('dlp_') ? DLP_DATABASE : connBody.database });
+    /* Force database based on query type (sqlKey prefix).
+       - dlp_*: force to wbsn-data-security (Data Security database)
+       - web_*: force to wslogdb70 (Web Security database)
+       - email_*: force to esglogdb76 (Email Security database)
+       This ensures each report runs against its correct database, regardless
+       of what the caller provided. */
+    let effectiveDb;
+    if (sqlKey.startsWith('dlp_')) {
+      effectiveDb = DLP_DATABASE;
+    } else if (sqlKey.startsWith('web_')) {
+      effectiveDb = WEB_DATABASE;
+    } else if (sqlKey.startsWith('email_')) {
+      effectiveDb = EMAIL_DATABASE;
+    } else {
+      /* Fallback to caller-provided database (for custom queries). */
+      effectiveDb = connBody.database;
+    }
+    const cfg = buildSqlConfig({ ...connBody, database: effectiveDb });
     pool = await sql.connect(cfg);
     const sqlText = template.sql({ days: effectiveDays, topN: effectiveTopN });
     const result = await pool.request().query(sqlText);
