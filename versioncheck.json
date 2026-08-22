@@ -1,6 +1,6 @@
 {
     "productName": "HC Studio",
-    "version": "2026.08.22.4",
-    "releasedAt": "2026-08-22T05:32:00Z",
-    "notes": "v2026.08.22.4: Added session cleanup on completion. When session marked done, connector token deregistered, jobs cleared, connections closed. Connector receives 401 on next heartbeat and should gracefully exit."
+    "version": "2026.08.22.5",
+    "releasedAt": "2026-08-22T05:35:00Z",
+    "notes": "v2026.08.22.5: Added 'Get Updates' button to replace 'New HC Session'. Fetches latest backup.json from GitHub repo and imports templates. Sessions page now supports syncing with latest updates."
 }
