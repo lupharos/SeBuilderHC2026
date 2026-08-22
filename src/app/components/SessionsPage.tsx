@@ -7,7 +7,7 @@ import {
 import type { HCSession } from './Dashboard';
 import { STEP_COLORS, STEP_LABELS, TOTAL_STEPS } from '../constants/steps';
 import {
-  downloadBackup, parseBackup, summarize, applyBackup,
+  downloadBackup, parseBackup, summarize, applyBackup, applyBackupPreservingSessions,
   type SystemBackup, type BackupSummary,
 } from '../utils/systemBackup';
 
@@ -33,9 +33,11 @@ export function SessionsPage({
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
   /* System backup state — Export downloads immediately; Import shows a
-     summary modal so the operator confirms before the destructive restore. */
+     summary modal so the operator confirms before the destructive restore.
+     preserveSessions flag is true when restoring from "Get Updates" (GitHub),
+     false for regular "Import Backup" (file upload). */
   const backupInputRef = useRef<HTMLInputElement>(null);
-  const [restorePreview, setRestorePreview] = useState<{ backup: SystemBackup; summary: BackupSummary; fileName: string } | null>(null);
+  const [restorePreview, setRestorePreview] = useState<{ backup: SystemBackup; summary: BackupSummary; fileName: string; preserveSessions?: boolean } | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
 
   function handleExportBackup() {
@@ -68,7 +70,13 @@ export function SessionsPage({
   function confirmRestore() {
     if (!restorePreview) return;
     try {
-      applyBackup(restorePreview.backup);
+      /* Apply backup with or without session preservation.
+         "Get Updates" from GitHub preserves sessions; file upload replaces everything. */
+      if (restorePreview.preserveSessions) {
+        applyBackupPreservingSessions(restorePreview.backup);
+      } else {
+        applyBackup(restorePreview.backup);
+      }
       /* React state mirrors localStorage via useLocalStorage hooks, which
          only read on mount. A page reload is the cleanest way to re-hydrate
          the whole tree from the restored payload. */
@@ -80,7 +88,8 @@ export function SessionsPage({
   }
 
   async function handleGetUpdates() {
-    /* Fetch backup.json from GitHub repo and import it */
+    /* Fetch backup.json from GitHub repo and import it.
+       Preserves existing HC sessions — only updates templates and catalogs. */
     try {
       setRestoreError(null);
       const url = 'https://raw.githubusercontent.com/lupharos/SeBuilderHC2026/main/template/backup.json';
@@ -90,7 +99,12 @@ export function SessionsPage({
       }
       const text = await response.text();
       const backup = parseBackup(text);
-      setRestorePreview({ backup, summary: summarize(backup), fileName: 'GitHub Template Updates' });
+      setRestorePreview({
+        backup,
+        summary: summarize(backup),
+        fileName: 'GitHub Template Updates',
+        preserveSessions: true, /* Keep existing HC sessions */
+      });
     } catch (err) {
       setRestoreError(`Failed to fetch updates from GitHub: ${(err as Error).message}`);
     }

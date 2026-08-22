@@ -153,3 +153,59 @@ export function applyBackup(backup: SystemBackup): void {
     }
   }
 }
+
+export function applyBackupPreservingSessions(backup: SystemBackup): void {
+  /* Apply backup update but PRESERVE existing HC sessions.
+     Used by "Get Updates" button — syncs templates/catalogs without
+     destroying active assessments.
+
+     Sessions are kept intact; everything else (templates, version data,
+     compliance frameworks, certificates, etc.) is updated from the backup. */
+  if (!backup || !backup.keys) {
+    throw new Error('Cannot apply empty backup.');
+  }
+
+  /* Preserve existing sessions before wiping */
+  const sessionsRaw = localStorage.getItem('hc_sessions');
+  let existingSessions: unknown = null;
+  if (sessionsRaw) {
+    try {
+      existingSessions = JSON.parse(sessionsRaw);
+    } catch {
+      existingSessions = sessionsRaw;
+    }
+  }
+
+  /* Wipe all hc_* keys except sessions */
+  const existing: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith(HC_KEY_PREFIX) && k !== 'hc_sessions') {
+      existing.push(k);
+    }
+  }
+  for (const k of existing) localStorage.removeItem(k);
+
+  /* Restore backup (everything except sessions) */
+  for (const [k, v] of Object.entries(backup.keys)) {
+    if (!k.startsWith(HC_KEY_PREFIX) || k === 'hc_sessions') continue;
+    try {
+      const serialized = typeof v === 'string' ? v : JSON.stringify(v);
+      localStorage.setItem(k, serialized);
+    } catch (err) {
+      console.error(`Failed to restore key "${k}":`, err);
+    }
+  }
+
+  /* Restore preserved sessions */
+  if (existingSessions !== null) {
+    try {
+      const serialized = typeof existingSessions === 'string'
+        ? existingSessions
+        : JSON.stringify(existingSessions);
+      localStorage.setItem('hc_sessions', serialized);
+    } catch (err) {
+      console.error('Failed to restore preserved sessions:', err);
+    }
+  }
+}
