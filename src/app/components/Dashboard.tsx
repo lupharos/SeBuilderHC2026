@@ -537,11 +537,26 @@ export function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentStep]);
 
-  const handleComplete = () => {
+  const handleComplete = async () => {
     /* Save with the complete flag, then nudge the operator to the Sessions
        list where the new "COMPLETED" badge is visible. We don't wipe the
        wizard state — the operator can still reopen the session and tweak
        anything; clicking Done is a soft signal, not a hard close. */
+
+    /* Clean up connector and SQL resources before marking complete */
+    if (customerConnector.token) {
+      try {
+        await fetch('/api/session/cleanup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ connectorToken: customerConnector.token }),
+        });
+      } catch (err) {
+        console.warn('Session cleanup failed (non-fatal):', err);
+        /* Continue with session completion even if cleanup fails */
+      }
+    }
+
     handleSave({ complete: true });
     setTimeout(() => setActiveView('sessions'), 1100);
   };

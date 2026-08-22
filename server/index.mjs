@@ -1437,6 +1437,61 @@ app.post('/api/connector/deregister', (req, res) => {
   });
 });
 
+/* POST /api/session/cleanup
+   Body: { connectorToken?: string }
+   Called when a wizard session is marked complete or archived.
+   Cleans up all resources associated with the session:
+   - Deregisters the connector token (stops heartbeats)
+   - Clears pending jobs and state
+   - Connector receives 401 on next heartbeat and should gracefully exit
+   - All SQL connections are dropped (implicit - no persistent pools)
+
+   This is a best-effort cleanup; the connector may continue running
+   but will be unable to receive new jobs. SE should manually stop
+   the deployed connector process if needed. */
+app.post('/api/session/cleanup', (req, res) => {
+  const { connectorToken } = req.body ?? {};
+
+  const results = {
+    ok: true,
+    cleaned: {
+      connectorDeregistered: false,
+      jobsCleared: 0,
+      waitersInterrupted: 0,
+    },
+  };
+
+  if (connectorToken && typeof connectorToken === 'string') {
+    /* Deregister the connector token - this is the key cleanup action.
+       On next heartbeat, connector gets 401 "Token not registered" and
+       should recognize it's been revoked. Graceful shutdown is up to
+       the connector implementation. */
+    const hadState     = connectorState.delete(connectorToken);
+    const hadAllowlist = connectorAllowlist.delete(connectorToken);
+
+    /* Also clear all via-connector state */
+    connectorKeys.delete(connectorToken);
+    const pendingCount = (pendingJobs.get(connectorToken) || []).length;
+    pendingJobs.delete(connectorToken);
+
+    /* Interrupt any long-poll waiters so connector doesn't hang */
+    const waiters = jobWaiters.get(connectorToken);
+    if (waiters && waiters.length > 0) {
+      for (const w of waiters) {
+        clearTimeout(w.timer);
+        w.resolve(null);
+      }
+      jobWaiters.delete(connectorToken);
+    }
+
+    results.cleaned.connectorDeregistered = hadState || hadAllowlist;
+    results.cleaned.jobsCleared = pendingCount;
+    results.cleaned.waitersInterrupted = waiters ? waiters.length : 0;
+  }
+
+  res.json(results);
+});
+
 /* POST /api/connector/heartbeat
    Body: { token: string, version?: string, encrypted?: string }
    Connector calls this every 30s. Validates in this order:
