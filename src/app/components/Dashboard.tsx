@@ -308,6 +308,7 @@ export function Dashboard() {
   /* Per-report time-window override; persisted alongside selection so a
      reopened session remembers "give me last-7-days for these reports". */
   const [reportWindows, setReportWindows] = useLocalStorage<Record<string, number>>('hc_report_windows', {});
+  const [reportTopN, setReportTopN] = useLocalStorage<Record<string, number>>('hc_report_topn', {});
   /* Runtime results of executed report queries — explicitly NOT persisted.
      Held in plain useState so they survive between wizard steps but vanish
      on refresh (matches the user's "runtime only" requirement). */
@@ -782,6 +783,8 @@ export function Dashboard() {
               setSelectedReports={setSelectedReports}
               reportWindows={reportWindows}
               setReportWindows={setReportWindows}
+              reportTopN={reportTopN}
+              setReportTopN={setReportTopN}
               reportRuns={reportRuns}
               setReportRuns={setReportRuns}
               dlpBundles={dlpBundles}

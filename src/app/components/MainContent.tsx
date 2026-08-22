@@ -68,6 +68,8 @@ interface MainContentProps {
   setSelectedReports: React.Dispatch<React.SetStateAction<string[]>>;
   reportWindows: Record<string, number>;
   setReportWindows: React.Dispatch<React.SetStateAction<Record<string, number>>>;
+  reportTopN: Record<string, number>;
+  setReportTopN: React.Dispatch<React.SetStateAction<Record<string, number>>>;
   reportRuns: Record<string, ReportRunResult>;
   setReportRuns: React.Dispatch<React.SetStateAction<Record<string, ReportRunResult>>>;
   dlpBundles: DlpServerBundle[];
@@ -136,6 +138,7 @@ export function MainContent({
   apiConnectors, setApiConnectors,
   selectedReports, setSelectedReports,
   reportWindows, setReportWindows,
+  reportTopN, setReportTopN,
   reportRuns, setReportRuns,
   dlpBundles, setDlpBundles,
   certificates, setCertificates,
@@ -170,7 +173,7 @@ export function MainContent({
         <div className="px-8 py-6 pb-10 w-full">
           {currentStep === 1  && <Step1CustomerInfo sessionData={sessionData} updateSessionData={updateSessionData} versionData={versionData} complianceFrameworks={complianceFrameworks} setComplianceFrameworks={setComplianceFrameworks} />}
           {currentStep === 2  && <Step2ProductScope selectedProducts={selectedProducts} setSelectedProducts={setSelectedProducts} />}
-          {currentStep === 3  && <Step3DataCollectors sqlConfig={sqlConfig} setSqlConfig={setSqlConfig} apiConnectors={apiConnectors} setApiConnectors={setApiConnectors} selectedReports={selectedReports} setSelectedReports={setSelectedReports} reportWindows={reportWindows} setReportWindows={setReportWindows} reportRuns={reportRuns} setReportRuns={setReportRuns} selectedProducts={selectedProducts} dlpBundles={dlpBundles} setDlpBundles={setDlpBundles} dlpDashboardSummary={dlpDashboardSummary} setDlpDashboardSummary={setDlpDashboardSummary} dlpPostureSummary={dlpPostureSummary} setDlpPostureSummary={setDlpPostureSummary} dlpPostureSections={dlpPostureSections} setDlpPostureSections={setDlpPostureSections} destinationPatterns={destinationPatterns} customerConnector={customerConnector} setCustomerConnector={setCustomerConnector} dlpAllLogReport={dlpAllLogReport} setDlpAllLogReport={setDlpAllLogReport} auditLogReport={auditLogReport} setAuditLogReport={setAuditLogReport} serviceLogsReport={serviceLogsReport} setServiceLogsReport={setServiceLogsReport} starredLogIssues={starredLogIssues} setStarredLogIssues={setStarredLogIssues} dismissedLogIssues={dismissedLogIssues} setDismissedLogIssues={setDismissedLogIssues} onStarLogIssue={onStarLogIssue} />}
+          {currentStep === 3  && <Step3DataCollectors sqlConfig={sqlConfig} setSqlConfig={setSqlConfig} apiConnectors={apiConnectors} setApiConnectors={setApiConnectors} selectedReports={selectedReports} setSelectedReports={setSelectedReports} reportWindows={reportWindows} setReportWindows={setReportWindows} reportTopN={reportTopN} setReportTopN={setReportTopN} reportRuns={reportRuns} setReportRuns={setReportRuns} selectedProducts={selectedProducts} dlpBundles={dlpBundles} setDlpBundles={setDlpBundles} dlpDashboardSummary={dlpDashboardSummary} setDlpDashboardSummary={setDlpDashboardSummary} dlpPostureSummary={dlpPostureSummary} setDlpPostureSummary={setDlpPostureSummary} dlpPostureSections={dlpPostureSections} setDlpPostureSections={setDlpPostureSections} destinationPatterns={destinationPatterns} customerConnector={customerConnector} setCustomerConnector={setCustomerConnector} dlpAllLogReport={dlpAllLogReport} setDlpAllLogReport={setDlpAllLogReport} auditLogReport={auditLogReport} setAuditLogReport={setAuditLogReport} serviceLogsReport={serviceLogsReport} setServiceLogsReport={setServiceLogsReport} starredLogIssues={starredLogIssues} setStarredLogIssues={setStarredLogIssues} dismissedLogIssues={dismissedLogIssues} setDismissedLogIssues={setDismissedLogIssues} onStarLogIssue={onStarLogIssue} />}
           {currentStep === 4  && <Step4VersionCheck selectedProducts={selectedProducts} versionData={versionData} versionEntries={versionEntries} onVersionEntriesChange={onVersionEntriesChange} dlpBundles={dlpBundles} />}
           {currentStep === 5  && <StepServerDetails servers={serverDetails} setServers={setServerDetails} dlpBundles={dlpBundles} selectedProducts={selectedProducts} />}
           {currentStep === 6  && <StepEndpointAgents summary={endpointAgentSummary} setSummary={setEndpointAgentSummary} fdcSummary={fdcAgentSummary} setFdcSummary={setFdcAgentSummary} selectedProducts={selectedProducts} />}

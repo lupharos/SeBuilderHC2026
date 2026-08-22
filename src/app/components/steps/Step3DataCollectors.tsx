@@ -127,6 +127,9 @@ interface Props {
   /* Per-report time-window override (persisted). */
   reportWindows: Record<string, number>;
   setReportWindows: React.Dispatch<React.SetStateAction<Record<string, number>>>;
+  /* Per-report TOP N override (persisted) — default from reportDefinitions.defaultTopN. */
+  reportTopN: Record<string, number>;
+  setReportTopN: React.Dispatch<React.SetStateAction<Record<string, number>>>;
   /* Runtime results of executed report queries (NOT persisted). */
   reportRuns: Record<string, ReportRunResult>;
   setReportRuns: React.Dispatch<React.SetStateAction<Record<string, ReportRunResult>>>;
@@ -1227,6 +1230,7 @@ export function Step3DataCollectors({
   apiConnectors, setApiConnectors,
   selectedReports, setSelectedReports,
   reportWindows, setReportWindows,
+  reportTopN, setReportTopN,
   reportRuns, setReportRuns,
   selectedProducts,
   dlpBundles, setDlpBundles,
@@ -3453,8 +3457,10 @@ export function Step3DataCollectors({
                   <div style={{ borderTop: `1px solid ${inScope ? group.border : '#E2E8F0'}` }}>
                     {group.reports.map((report, idx) => {
                       const sel = selectedReports.includes(report.id);
-                      const defaultDays = report.defaultWindowDays ?? 30;
+                      const defaultDays = report.defaultWindowDays ?? 7;
                       const days = reportWindows[report.id] ?? defaultDays;
+                      const defaultTopN = report.defaultTopN ?? 5;
+                      const topN = reportTopN[report.id] ?? defaultTopN;
                       const run = reportRuns[report.id];
                       const isLast = idx === group.reports.length - 1;
                       return (
@@ -3463,12 +3469,14 @@ export function Step3DataCollectors({
                           group={group}
                           selected={sel}
                           windowDays={days}
+                          topN={topN}
                           runResult={run}
                           isLast={isLast}
                           sqlReady={sqlBackendReady}
                           onToggle={() => toggleReport(report.id)}
                           onChangeWindow={(d) => setReportWindows((prev) => ({ ...prev, [report.id]: d }))}
-                          onRun={() => runReport(report.sqlKey, days)}
+                          onChangeTopN={(n) => setReportTopN((prev) => ({ ...prev, [report.id]: n }))}
+                          onRun={() => runReport(report.sqlKey, days, topN)}
                           onClear={() => setReportRuns((prev) => {
                             const next = { ...prev }; delete next[report.id]; return next;
                           })}
@@ -3736,13 +3744,14 @@ export function Step3DataCollectors({
 const WINDOW_OPTIONS: number[] = [7, 14, 30, 60, 90, 100, 180, 365];
 
 function ReportRow({
-  report, group, selected, windowDays, runResult, isLast, sqlReady,
-  onToggle, onChangeWindow, onRun, onClear,
+  report, group, selected, windowDays, topN, runResult, isLast, sqlReady,
+  onToggle, onChangeWindow, onChangeTopN, onRun, onClear,
 }: {
   report: ReportDef;
   group: { color: string };
   selected: boolean;
   windowDays: number;
+  topN: number;
   runResult: ReportRunResult | undefined;
   isLast: boolean;
   /* True only when the SQL Server connector is enabled AND has a non-empty
@@ -3752,6 +3761,7 @@ function ReportRow({
   sqlReady: boolean;
   onToggle: () => void;
   onChangeWindow: (days: number) => void;
+  onChangeTopN: (topN: number) => void;
   onRun: () => void;
   onClear: () => void;
 }) {
@@ -3775,14 +3785,22 @@ function ReportRow({
 
         {/* Window selector — hidden for fixed-window analyses */}
         {!report.fixedWindow && (
-          <div className="flex items-center gap-1 flex-shrink-0">
-            <Clock size={11} style={{ color: '#94A3B8' }} />
-            <select value={windowDays} onChange={(e) => onChangeWindow(parseInt(e.target.value, 10))}
-              style={{ fontSize: '10.5px', fontWeight: 600, color: '#475569', background: '#fff', border: '1px solid #E2E8F0', borderRadius: 4, padding: '2px 5px', cursor: 'pointer' }}>
-              {WINDOW_OPTIONS.map((d) => (
-                <option key={d} value={d}>Last {d} days</option>
-              ))}
-            </select>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <div className="flex items-center gap-1">
+              <Clock size={11} style={{ color: '#94A3B8' }} />
+              <select value={windowDays} onChange={(e) => onChangeWindow(parseInt(e.target.value, 10))}
+                style={{ fontSize: '10.5px', fontWeight: 600, color: '#475569', background: '#fff', border: '1px solid #E2E8F0', borderRadius: 4, padding: '2px 5px', cursor: 'pointer' }}>
+                {WINDOW_OPTIONS.map((d) => (
+                  <option key={d} value={d}>Last {d} days</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-center gap-1">
+              <span style={{ fontSize: '10px', color: '#94A3B8', fontWeight: 600 }}>Top</span>
+              <input type="number" min="1" max="10000" value={topN} onChange={(e) => onChangeTopN(Math.max(1, parseInt(e.target.value, 10) || 5))}
+                style={{ fontSize: '10.5px', fontWeight: 600, color: '#475569', background: '#fff', border: '1px solid #E2E8F0', borderRadius: 4, padding: '2px 5px', width: '45px', cursor: 'pointer' }} />
+            </div>
           </div>
         )}
         {report.fixedWindow && (
