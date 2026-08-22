@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import {
   FolderOpen, Folder, Trash2, ArrowUpRight, Search, Clock,
   CheckCircle2, ChevronRight, BarChart2, Layers, Plus,
-  Download, Upload, AlertCircle, X, ShieldCheck,
+  Download, Upload, AlertCircle, X, ShieldCheck, RefreshCw,
 } from 'lucide-react';
 import type { HCSession } from './Dashboard';
 import { STEP_COLORS, STEP_LABELS, TOTAL_STEPS } from '../constants/steps';
@@ -79,6 +79,23 @@ export function SessionsPage({
     }
   }
 
+  async function handleGetUpdates() {
+    /* Fetch backup.json from GitHub repo and import it */
+    try {
+      setRestoreError(null);
+      const url = 'https://raw.githubusercontent.com/lupharos/SeBuilderHC2026/main/template/backup.json';
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`GitHub returned ${response.status}: ${response.statusText}`);
+      }
+      const text = await response.text();
+      const backup = parseBackup(text);
+      setRestorePreview({ backup, summary: summarize(backup), fileName: 'GitHub Template Updates' });
+    } catch (err) {
+      setRestoreError(`Failed to fetch updates from GitHub: ${(err as Error).message}`);
+    }
+  }
+
   const filtered = sessions.filter(
     (s) =>
       s.customerName.toLowerCase().includes(search.toLowerCase()) ||
@@ -150,16 +167,17 @@ export function SessionsPage({
             Import Backup
           </button>
           <button
-            onClick={onNewSession}
+            onClick={handleGetUpdates}
             className="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-white transition-all hover:scale-[1.02]"
             style={{
               fontSize: '12.5px',
-              background: 'linear-gradient(135deg, #2563EB, #7C3AED)',
-              boxShadow: '0 4px 14px rgba(37,99,235,0.35)',
+              background: 'linear-gradient(135deg, #059669, #10B981)',
+              boxShadow: '0 4px 14px rgba(5,150,105,0.35)',
             }}
+            title="Fetch latest template updates from GitHub repository"
           >
-            <Plus size={14} strokeWidth={2.5} />
-            New HC Session
+            <RefreshCw size={14} strokeWidth={2.5} />
+            Get Updates
           </button>
 
           <div className="relative">
