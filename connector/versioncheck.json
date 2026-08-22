@@ -1,6 +1,6 @@
 {
     "productName": "HC Studio",
-    "version": "2026.08.22.3",
-    "releasedAt": "2026-08-22T05:24:00Z",
-    "notes": "v2026.08.22.3: Fixed Web/Email/DLP SQL report column headers and Decimal serialization. Added convert_sql_types() for proper JSON encoding. Fixed database selection for Web (wslogdb70) and Email (esglogdb76) queries. Removed Allow/Block Policy Effectiveness report."
+    "version": "2026.08.22.4",
+    "releasedAt": "2026-08-22T05:32:00Z",
+    "notes": "v2026.08.22.4: Added session cleanup on completion. When session marked done, connector token deregistered, jobs cleared, connections closed. Connector receives 401 on next heartbeat and should gracefully exit."
 }
