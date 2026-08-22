@@ -1,6 +1,6 @@
 {
     "productName": "HC Studio",
-    "version": "2026.08.22.6",
-    "releasedAt": "2026-08-22T05:38:00Z",
-    "notes": "v2026.08.22.6: Fixed 'Get Updates' to preserve HC sessions. GitHub template sync now keeps existing assessments intact. Sessions stay safe while templates/catalogs update."
+    "version": "2026.08.22.7",
+    "releasedAt": "2026-08-22T05:42:00Z",
+    "notes": "v2026.08.22.7: Smart update detection for Get Updates button. Only enabled when backup.json changes (via ETag comparison). Shows 'Up to Date' when no updates available. Reduces unnecessary import prompts."
 }
