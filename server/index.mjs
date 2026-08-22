@@ -354,6 +354,29 @@ app.post('/api/sql/query', async (req, res) => {
        single SELECT runs inside the dynamic block; mssql's `recordset`
        sometimes collapses it. Use whichever holds rows. */
     const rows = (Array.isArray(result.recordsets) && result.recordsets[0]) || result.recordset || [];
+
+    /* Fix: Ensure rows are objects with column names, not arrays.
+       When EXEC is used, mssql sometimes returns rows as arrays without
+       column metadata. Extract column names from result.columns if needed. */
+    let normalizedRows = rows;
+    if (rows.length > 0 && Array.isArray(rows[0])) {
+      /* Rows are arrays - try to get column names from result metadata */
+      const columnNames = result.columns ? Object.keys(result.columns) :
+                         (result.recordsets && result.recordsets.columns ?
+                          Object.keys(result.recordsets.columns) : []);
+
+      if (columnNames.length > 0) {
+        /* Convert arrays to objects using column names */
+        normalizedRows = rows.map(row => {
+          const obj = {};
+          for (let i = 0; i < columnNames.length && i < row.length; i++) {
+            obj[columnNames[i]] = row[i];
+          }
+          return obj;
+        });
+      }
+    }
+
     res.json({
       ok: true,
       sqlKey,
@@ -361,9 +384,9 @@ app.post('/api/sql/query', async (req, res) => {
       description: template.description,
       windowDays: effectiveDays,
       topN: effectiveTopN,
-      rowCount: rows.length,
+      rowCount: normalizedRows.length,
       latencyMs: ms,
-      rows,
+      rows: normalizedRows,
     });
   } catch (err) {
     res.status(400).json({

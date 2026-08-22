@@ -63,14 +63,14 @@ WHERE STATUS='ONLINE_ACTIVE'
 
 DECLARE @SQL NVARCHAR(MAX) = '
 SELECT ${topClause(topN)}
-    usr.LOGIN_NAME,
-    usr.EMAIL,
-    COUNT(*) AS TOTAL_VIOLATIONS
+    usr.LOGIN_NAME AS [User],
+    usr.EMAIL AS [Email],
+    COUNT(*) AS [Total Violations]
 FROM PA_EVENTS_' + @partitionName + ' ev
 JOIN PA_MNG_USERS usr ON ev.SOURCE_ID = usr.ID
 WHERE ev.INSERT_DATE >= DATEADD(DAY,-${sanitiseDays(days, 30)},GETDATE())
 GROUP BY usr.LOGIN_NAME, usr.EMAIL
-ORDER BY TOTAL_VIOLATIONS DESC
+ORDER BY [Total Violations] DESC
 '
 EXEC(@SQL)`,
   },
