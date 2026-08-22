@@ -854,6 +854,25 @@ def execute_sql_query(config: Config, host: str, port: int, db: str, query: str,
     Raises: Exception on connection/execution failure
     """
     import pyodbc
+    from decimal import Decimal
+    from datetime import datetime, date
+
+    def convert_sql_types(val):
+        """Convert SQL data types to JSON-serializable Python types.
+        - Decimal → float
+        - datetime/date → ISO string
+        - None → None
+        - others → as-is (str, int, bool, etc)
+        """
+        if val is None:
+            return None
+        if isinstance(val, Decimal):
+            return float(val)
+        if isinstance(val, datetime):
+            return val.isoformat()
+        if isinstance(val, date):
+            return val.isoformat()
+        return val
 
     conn_str, _ = build_sql_connection(config, host, port, db)
 
@@ -868,7 +887,7 @@ def execute_sql_query(config: Config, host: str, port: int, db: str, query: str,
         cur.execute(query)
         rows = cur.fetchall()
         return {
-            "rows": [list(row) for row in rows],
+            "rows": [[convert_sql_types(v) for v in row] for row in rows],
             "count": len(rows),
         }
     finally:
