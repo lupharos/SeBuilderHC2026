@@ -1866,9 +1866,9 @@ export function Step3DataCollectors({
      SQL service using a shared (windowDays, topN) tuple. Sequential to avoid
      stampeding the SQL connection pool (server caps pool.max at 1). Each
      report's per-row window is overridden to match the bulk window so the
-     UI stays consistent. */
-  const [bulkTopN, setBulkTopN] = useState<number>(10);
-  const [bulkDays, setBulkDays] = useState<number>(30);
+     UI stays consistent. Defaults match report defaults (7 days, Top 5). */
+  const [bulkTopN, setBulkTopN] = useState<number>(5);
+  const [bulkDays, setBulkDays] = useState<number>(7);
   const [bulkRunning, setBulkRunning] = useState<{ active: boolean; current: number; total: number }>({ active: false, current: 0, total: 0 });
   const runAllSelected = async () => {
     /* Build the run list from currently-VISIBLE selected reports — so a
@@ -1886,11 +1886,12 @@ export function Step3DataCollectors({
     setBulkRunning({ active: true, current: 0, total: targets.length });
     for (let i = 0; i < targets.length; i++) {
       const t = targets[i];
-      /* Persist the chosen window per row so the wizard reflects what was
+      /* Persist the chosen window + topN per row so the wizard reflects what was
          actually run; fixed-window reports keep their intrinsic window. */
       const effectiveDays = t.fixedWindow ? (reportWindows[t.id] ?? bulkDays) : bulkDays;
       if (!t.fixedWindow) {
         setReportWindows((prev) => ({ ...prev, [t.id]: bulkDays }));
+        setReportTopN((prev) => ({ ...prev, [t.id]: bulkTopN }));
       }
       setBulkRunning({ active: true, current: i + 1, total: targets.length });
       await runReport(t.sqlKey, effectiveDays, bulkTopN);
