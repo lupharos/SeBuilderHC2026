@@ -26,24 +26,7 @@ export interface ReportDef {
 }
 
 export const WEB_REPORTS: ReportDef[] = [
-  /* Existing pre-built reports */
-  { id: 'web_high_risk_sites',        title: 'Top 5 Users Accessing High-Risk Websites',                               product: 'web', sqlKey: 'web_high_risk_sites' },
-  { id: 'web_malware_phishing',       title: 'Top 5 Users Triggering Malware or Phishing Alerts',                     product: 'web', sqlKey: 'web_malware_phishing' },
-  { id: 'web_risky_categories',       title: 'Users Allowed to Access Risky Web Categories',                          product: 'web', sqlKey: 'web_risky_categories' },
-  { id: 'web_block_recommendations',  title: 'Recommended Web Categories for Blocking',                               product: 'web', sqlKey: 'web_block_recommendations' },
-  { id: 'web_rbi_candidates',         title: 'Users Recommended for Remote Browser Isolation (RBI)',                  product: 'web', sqlKey: 'web_rbi_candidates' },
-  { id: 'web_cloud_upload',           title: 'Top 5 Users Uploading Data to Unsanctioned Cloud Applications',         product: 'web', sqlKey: 'web_cloud_upload' },
-  { id: 'web_policy_bypass',          title: 'Top 5 Users Bypassing Web Security Policies',                           product: 'web', sqlKey: 'web_policy_bypass' },
-  { id: 'web_high_risk_categories',   title: 'Most Accessed High-Risk Web Categories',                                product: 'web', sqlKey: 'web_high_risk_categories' },
-  { id: 'web_new_domains',            title: 'Top 5 Users Accessing Newly Registered or Uncategorized Domains',       product: 'web', sqlKey: 'web_new_domains' },
-  { id: 'web_excessive_incidents',    title: 'Top 5 Users Generating Excessive Web Security Incidents',               product: 'web', sqlKey: 'web_excessive_incidents' },
-  { id: 'web_c2_domains',             title: 'Top 5 Devices Communicating with Potential C2 Domains',                 product: 'web', sqlKey: 'web_c2_domains' },
-  { id: 'web_proxy_services',         title: 'Users Frequently Accessing Encrypted or Anonymous Proxy Services',      product: 'web', sqlKey: 'web_proxy_services' },
-  { id: 'web_suspicious_files',       title: 'Top 5 Users Downloading Executable or Suspicious Files',                product: 'web', sqlKey: 'web_suspicious_files' },
-  { id: 'web_phishing_targets',       title: 'Most Targeted Users by Phishing Attempts',                             product: 'web', sqlKey: 'web_phishing_targets' },
-  { id: 'web_ai_filesharing',         title: 'Top 5 Users Accessing Suspicious AI or File-Sharing Platforms',        product: 'web', sqlKey: 'web_ai_filesharing' },
-
-  /* New: Web Security Usage Analysis — Kemal's query pack (parametrized window + TOP N) */
+  /* Web Security Usage Analysis — Kemal's query pack (parametrized window + TOP N) */
   { id: 'web_top_value_classes',      title: 'Top Risk Classes (Value Classes)',                                      product: 'web', sqlKey: 'web_top_value_classes',      defaultWindowDays: 90 },
   { id: 'web_value_class_breakdown',  title: 'Risk Class → Category Breakdown',                                        product: 'web', sqlKey: 'web_value_class_breakdown',  defaultWindowDays: 90 },
   { id: 'web_disposition_analysis',   title: 'Allow/Block Policy Effectiveness',                                      product: 'web', sqlKey: 'web_disposition_analysis',   defaultWindowDays: 90 },
