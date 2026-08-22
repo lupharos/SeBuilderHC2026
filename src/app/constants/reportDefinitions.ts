@@ -26,6 +26,7 @@ export interface ReportDef {
 }
 
 export const WEB_REPORTS: ReportDef[] = [
+  /* Existing pre-built reports */
   { id: 'web_high_risk_sites',        title: 'Top 5 Users Accessing High-Risk Websites',                               product: 'web', sqlKey: 'web_high_risk_sites' },
   { id: 'web_malware_phishing',       title: 'Top 5 Users Triggering Malware or Phishing Alerts',                     product: 'web', sqlKey: 'web_malware_phishing' },
   { id: 'web_risky_categories',       title: 'Users Allowed to Access Risky Web Categories',                          product: 'web', sqlKey: 'web_risky_categories' },
@@ -41,6 +42,22 @@ export const WEB_REPORTS: ReportDef[] = [
   { id: 'web_suspicious_files',       title: 'Top 5 Users Downloading Executable or Suspicious Files',                product: 'web', sqlKey: 'web_suspicious_files' },
   { id: 'web_phishing_targets',       title: 'Most Targeted Users by Phishing Attempts',                             product: 'web', sqlKey: 'web_phishing_targets' },
   { id: 'web_ai_filesharing',         title: 'Top 5 Users Accessing Suspicious AI or File-Sharing Platforms',        product: 'web', sqlKey: 'web_ai_filesharing' },
+
+  /* New: Web Security Usage Analysis — Kemal's query pack (parametrized window + TOP N) */
+  { id: 'web_top_value_classes',      title: 'Top Risk Classes (Value Classes)',                                      product: 'web', sqlKey: 'web_top_value_classes',      defaultWindowDays: 90 },
+  { id: 'web_value_class_breakdown',  title: 'Risk Class → Category Breakdown',                                        product: 'web', sqlKey: 'web_value_class_breakdown',  defaultWindowDays: 90 },
+  { id: 'web_disposition_analysis',   title: 'Allow/Block Policy Effectiveness',                                      product: 'web', sqlKey: 'web_disposition_analysis',   defaultWindowDays: 90 },
+  { id: 'web_top_categories',         title: 'Top Categories Overall',                                                product: 'web', sqlKey: 'web_top_categories',         defaultWindowDays: 90 },
+  { id: 'web_user_time_analysis',     title: 'User Time Usage by Category',                                           product: 'web', sqlKey: 'web_user_time_analysis',     defaultWindowDays: 90 },
+  { id: 'web_top_users',              title: 'Top Users by Activity',                                                 product: 'web', sqlKey: 'web_top_users',              defaultWindowDays: 90 },
+  { id: 'web_ai_top_urls',            title: '🤖 Shadow AI Tools Detection',                                          product: 'web', sqlKey: 'web_ai_top_urls',            defaultWindowDays: 30 },
+  { id: 'web_ai_top_users',           title: '🤖 Top AI Tool Users',                                                  product: 'web', sqlKey: 'web_ai_top_users',           defaultWindowDays: 30 },
+
+  /* Advanced: Row-level log detail queries */
+  { id: 'web_bot_networks',           title: 'Bot Networks Activity (Detail)',                                         product: 'web', sqlKey: 'web_bot_networks',           defaultWindowDays: 60 },
+  { id: 'web_malicious_sites',        title: 'Malicious Web Sites (Detail)',                                           product: 'web', sqlKey: 'web_malicious_sites',        defaultWindowDays: 60 },
+  { id: 'web_security_category',      title: 'Security Category Access (Detail)',                                      product: 'web', sqlKey: 'web_security_category',      defaultWindowDays: 60 },
+  { id: 'web_amt_logs',               title: 'Advanced Malware Threat Logs',                                           product: 'web', sqlKey: 'web_amt_logs',               defaultWindowDays: 30 },
 ];
 
 /* Data Security report queries are partition-aware. Each one looks up the

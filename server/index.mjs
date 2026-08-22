@@ -20,7 +20,7 @@ import express from 'express';
 import cors from 'cors';
 import { Agent } from 'undici';
 import sql from 'mssql';
-import { DLP_QUERIES } from './queries.mjs';
+import { DLP_QUERIES, WEB_QUERIES } from './queries.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -212,7 +212,8 @@ app.post('/api/sql/test', async (req, res) => {
    wizard can discover what it's allowed to ask for.
 ───────────────────────────────────────────────────────────────── */
 app.get('/api/sql/queries', (_req, res) => {
-  const entries = Object.entries(DLP_QUERIES).map(([sqlKey, q]) => ({
+  const allQueries = { ...DLP_QUERIES, ...WEB_QUERIES };
+  const entries = Object.entries(allQueries).map(([sqlKey, q]) => ({
     sqlKey,
     title: q.title,
     description: q.description,
@@ -247,7 +248,7 @@ app.post('/api/sql/query', async (req, res) => {
   if (!sqlKey || typeof sqlKey !== 'string') {
     return res.status(400).json({ ok: false, message: 'Missing "sqlKey" in request body.' });
   }
-  const template = DLP_QUERIES[sqlKey];
+  const template = DLP_QUERIES[sqlKey] || WEB_QUERIES[sqlKey];
   if (!template) {
     return res.status(404).json({ ok: false, message: `Unknown sqlKey "${sqlKey}" — not in the registered template list.` });
   }
@@ -2536,9 +2537,9 @@ app.listen(PORT, HOST, () => {
   // eslint-disable-next-line no-console
   console.log('  POST /api/sql/test       — SQL connection test');
   // eslint-disable-next-line no-console
-  console.log('  POST /api/sql/query      — run a registered DLP report (sqlKey)');
+  console.log('  POST /api/sql/query      — run a registered DLP or Web Security report (sqlKey)');
   // eslint-disable-next-line no-console
-  console.log(`  GET  /api/sql/queries    — list ${Object.keys(DLP_QUERIES).length} registered templates`);
+  console.log(`  GET  /api/sql/queries    — list ${Object.keys(DLP_QUERIES).length} DLP + ${Object.keys(WEB_QUERIES).length} Web Security templates`);
   // eslint-disable-next-line no-console
   console.log('  POST /api/dlp/test       — DLP REST API connection test');
   // eslint-disable-next-line no-console

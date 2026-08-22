@@ -407,3 +407,368 @@ ORDER BY EVENTS DESC
 EXEC(@SQL)`,
   },
 };
+
+/* ═════════════════════════════════════════════════════════════════
+   FORCEPOINT WEB SECURITY — USAGE ANALYSIS QUERIES
+   Database: wslogdb70 (Web Security log database)
+   ═════════════════════════════════════════════════════════════════
+   Each report below targets the Forcepoint WSE log database with
+   parameterized day window and TOP N support. All queries use NOLOCK
+   hints to avoid locking live LogServer writes. */
+
+/** @type {Record<string, DlpQuery>} */
+export const WEB_QUERIES = {
+  /* 1) Top Risk Classes (Value Classes) — overall risk profile */
+  web_top_value_classes: {
+    title: 'Top Risk Classes (Value Classes)',
+    description: 'Risk classes (Security Risk, Productivity Loss, etc.) ranked by total hits.',
+    defaultWindowDays: 90,
+    sql: ({ days, topN }) => `
+SELECT ${topClause(topN)}
+    VC.Name as RiskClass,
+    SUM(CAST(d.hits AS NUMERIC)) as Hits
+FROM
+    SUMMARY_NOUSER d (NOLOCK),
+    VALUE_CLASS VC (NOLOCK),
+    VALUE_CLASS_CATEGORY_MAP vcmap (NOLOCK)
+WHERE
+    VC.value_id = vcmap.value_id
+    AND vcmap.category_id = d.category
+    AND d.date_time >= DATEADD(day, -${sanitiseDays(days, 90)}, CONVERT(smalldatetime, CONVERT(date, GETDATE())))
+    AND d.date_time < CONVERT(smalldatetime, CONVERT(date, GETDATE()))
+GROUP BY
+    vcmap.value_id, VC.NAME
+HAVING
+    SUM(CAST(d.hits AS NUMERIC)) > 0
+ORDER BY
+    SUM(CAST(d.hits AS NUMERIC)) DESC`,
+  },
+
+  /* 2) Value Class → Category Breakdown — drill-down by risk class */
+  web_value_class_breakdown: {
+    title: 'Risk Class → Category Breakdown',
+    description: 'Categories within a selected risk class, ranked by hit count.',
+    defaultWindowDays: 90,
+    sql: ({ days, topN }) => `
+SELECT ${topClause(topN)}
+    VC.NAME as RiskClass,
+    RTRIM(C.NAME) + ' ' + RTRIM(C.CHILD_NAME) as Category,
+    SUM(CAST(d.hits AS NUMERIC)) as Hits
+FROM
+    SUMMARY_NOUSER d (NOLOCK),
+    VALUE_CLASS VC (NOLOCK),
+    VALUE_CLASS_CATEGORY_MAP vcmap (NOLOCK),
+    CATEGORY C (NOLOCK)
+WHERE
+    vcmap.value_id = 4
+    AND VC.value_id = vcmap.value_id
+    AND vcmap.category_id = d.category
+    AND C.CATEGORY = d.category
+    AND d.date_time >= DATEADD(day, -${sanitiseDays(days, 90)}, CONVERT(smalldatetime, CONVERT(date, GETDATE())))
+    AND d.date_time < CONVERT(smalldatetime, CONVERT(date, GETDATE()))
+GROUP BY
+    vcmap.value_id, VC.NAME, d.category, RTRIM(C.NAME) + ' ' + RTRIM(C.CHILD_NAME)
+HAVING
+    SUM(CAST(d.hits AS NUMERIC)) > 0
+ORDER BY
+    SUM(CAST(d.hits AS NUMERIC)) DESC`,
+  },
+
+  /* 3) Disposition Analysis — Allow/Block/Quota breakdown for a risk class */
+  web_disposition_analysis: {
+    title: 'Allow/Block Policy Effectiveness',
+    description: 'Risk class traffic by disposition (Permitted, Blocked, Quota, etc.).',
+    defaultWindowDays: 90,
+    sql: ({ days, topN }) => `
+SELECT ${topClause(topN)}
+    VC.NAME as RiskClass,
+    D.DESCRIPTION as Action,
+    SUM(CAST(d.hits AS NUMERIC)) as Hits
+FROM
+    SUMMARY_NOUSER d (NOLOCK),
+    VALUE_CLASS VC (NOLOCK),
+    VALUE_CLASS_CATEGORY_MAP vcmap (NOLOCK),
+    DISPOSITION D (NOLOCK)
+WHERE
+    vcmap.value_id = 4
+    AND VC.value_id = vcmap.value_id
+    AND vcmap.category_id = d.category
+    AND D.DISPOSITION_CODE = d.disposition_code
+    AND d.date_time >= DATEADD(day, -${sanitiseDays(days, 90)}, CONVERT(smalldatetime, CONVERT(date, GETDATE())))
+    AND d.date_time < CONVERT(smalldatetime, CONVERT(date, GETDATE()))
+GROUP BY
+    vcmap.value_id, VC.NAME, d.disposition_code, D.DESCRIPTION
+HAVING
+    SUM(CAST(d.hits AS NUMERIC)) > 0
+ORDER BY
+    SUM(CAST(d.hits AS NUMERIC)) DESC`,
+  },
+
+  /* 4) Top Categories Overall — general usage profile */
+  web_top_categories: {
+    title: 'Top Categories Overall',
+    description: 'All categories ranked by hit count (no risk-class filter).',
+    defaultWindowDays: 90,
+    sql: ({ days, topN }) => `
+SELECT ${topClause(topN)}
+    RTRIM(C.NAME) + ' ' + RTRIM(C.CHILD_NAME) as Category,
+    SUM(CAST(d.hits AS NUMERIC)) as Hits
+FROM
+    SUMMARY_NOUSER d (NOLOCK),
+    CATEGORY C (NOLOCK)
+WHERE
+    C.CATEGORY = d.category
+    AND d.date_time >= DATEADD(day, -${sanitiseDays(days, 90)}, CONVERT(smalldatetime, CONVERT(date, GETDATE())))
+    AND d.date_time < CONVERT(smalldatetime, CONVERT(date, GETDATE()))
+GROUP BY
+    d.category, RTRIM(C.NAME) + ' ' + RTRIM(C.CHILD_NAME)
+HAVING
+    SUM(CAST(d.hits AS NUMERIC)) > 0
+ORDER BY
+    SUM(CAST(d.hits AS NUMERIC)) DESC`,
+  },
+
+  /* 5) User → Category → Time Analysis — per-user browse-time profile */
+  web_user_time_analysis: {
+    title: 'User Time Usage by Category',
+    description: 'Browse time (in minutes) each user spent in each category.',
+    defaultWindowDays: 90,
+    sql: ({ days, topN }) => `
+SELECT ${topClause(topN)}
+    CASE
+        WHEN UN.USER_FULL_NAME = UN.USER_LOGIN_NAME THEN LTRIM(UN.USER_FULL_NAME)
+        ELSE LTRIM(UN.USER_FULL_NAME + ' [' + UN.USER_LOGIN_NAME + ']')
+    END as [User],
+    RTRIM(C.NAME) + ' ' + RTRIM(C.CHILD_NAME) as Category,
+    ROUND(SUM(d.browse_time) / 60.0, 0) as Minutes
+FROM
+    SUMMARY d (NOLOCK),
+    USER_NAMES UN (NOLOCK),
+    CATEGORY C (NOLOCK)
+WHERE
+    UN.USER_ID = d.user_id
+    AND d.category = C.CATEGORY
+    AND d.date_time >= DATEADD(day, -${sanitiseDays(days, 90)}, CONVERT(smalldatetime, CONVERT(date, GETDATE())))
+    AND d.date_time < CONVERT(smalldatetime, CONVERT(date, GETDATE()))
+GROUP BY
+    d.user_id,
+    CASE
+        WHEN UN.USER_FULL_NAME = UN.USER_LOGIN_NAME THEN LTRIM(UN.USER_FULL_NAME)
+        ELSE LTRIM(UN.USER_FULL_NAME + ' [' + UN.USER_LOGIN_NAME + ']')
+    END,
+    d.category,
+    RTRIM(C.NAME) + ' ' + RTRIM(C.CHILD_NAME)
+HAVING
+    SUM(d.browse_time) > 0
+ORDER BY
+    d.user_id ASC, SUM(d.browse_time) DESC`,
+  },
+
+  /* 6) Top Users Overall — general activity profile */
+  web_top_users: {
+    title: 'Top Users by Activity',
+    description: 'Users ranked by total hit count across all categories.',
+    defaultWindowDays: 90,
+    sql: ({ days, topN }) => `
+SELECT ${topClause(topN)}
+    CASE
+        WHEN UN.USER_FULL_NAME = UN.USER_LOGIN_NAME THEN LTRIM(UN.USER_FULL_NAME)
+        ELSE LTRIM(UN.USER_FULL_NAME + ' [' + UN.USER_LOGIN_NAME + ']')
+    END as [User],
+    SUM(CAST(d.hits AS NUMERIC)) as Hits
+FROM
+    SUMMARY d (NOLOCK),
+    USER_NAMES UN (NOLOCK)
+WHERE
+    UN.USER_ID = d.user_id
+    AND d.date_time >= DATEADD(day, -${sanitiseDays(days, 90)}, CONVERT(smalldatetime, CONVERT(date, GETDATE())))
+    AND d.date_time < CONVERT(smalldatetime, CONVERT(date, GETDATE()))
+GROUP BY
+    d.user_id,
+    CASE
+        WHEN UN.USER_FULL_NAME = UN.USER_LOGIN_NAME THEN LTRIM(UN.USER_FULL_NAME)
+        ELSE LTRIM(UN.USER_FULL_NAME + ' [' + UN.USER_LOGIN_NAME + ']')
+    END
+HAVING
+    SUM(CAST(d.hits AS NUMERIC)) > 0
+ORDER BY
+    SUM(CAST(d.hits AS NUMERIC)) DESC`,
+  },
+
+  /* 7) Shadow AI Tools Detection — top AI sites visited */
+  web_ai_top_urls: {
+    title: '🤖 Shadow AI Tools Detection',
+    description: 'Top Generative AI sites (ChatGPT, Claude, Gemini, etc.) ranked by hit count.',
+    defaultWindowDays: 30,
+    sql: ({ days, topN }) => `
+SELECT ${topClause(topN)}
+    U.name as [AI Site],
+    SUM(CAST(d.hits AS NUMERIC)) as Hits
+FROM
+    SUMMARY_URL d (NOLOCK),
+    CATEGORY C (NOLOCK),
+    wse_urls U (NOLOCK)
+WHERE
+    d.category = 229
+    AND C.CATEGORY = d.category
+    AND U.wse_url_id = d.url_id
+    AND d.date_time >= DATEADD(day, -${sanitiseDays(days, 30)}, CONVERT(smalldatetime, CONVERT(date, GETDATE())))
+    AND d.date_time < CONVERT(smalldatetime, CONVERT(date, GETDATE()))
+GROUP BY
+    U.name
+HAVING
+    SUM(CAST(d.hits AS NUMERIC)) > 0
+ORDER BY
+    SUM(CAST(d.hits AS NUMERIC)) DESC`,
+  },
+
+  /* 8) Shadow AI Users Detection — who is using AI tools */
+  web_ai_top_users: {
+    title: '🤖 Top AI Tool Users',
+    description: 'Users with highest Generative AI tool usage (data-leakage risk assessment).',
+    defaultWindowDays: 30,
+    sql: ({ days, topN }) => `
+SELECT ${topClause(topN)}
+    RTRIM(C.NAME) + ' ' + RTRIM(C.CHILD_NAME) as Category,
+    CASE
+        WHEN UN.USER_FULL_NAME = UN.USER_LOGIN_NAME THEN LTRIM(UN.USER_FULL_NAME)
+        ELSE LTRIM(UN.USER_FULL_NAME + ' [' + UN.USER_LOGIN_NAME + ']')
+    END as [User],
+    SUM(CAST(d.hits AS NUMERIC)) as Hits
+FROM
+    SUMMARY d (NOLOCK),
+    CATEGORY C (NOLOCK),
+    USER_NAMES UN (NOLOCK)
+WHERE
+    d.category = 229
+    AND C.CATEGORY = d.category
+    AND UN.USER_ID = d.user_id
+    AND d.date_time >= DATEADD(day, -${sanitiseDays(days, 30)}, CONVERT(smalldatetime, CONVERT(date, GETDATE())))
+    AND d.date_time < CONVERT(smalldatetime, CONVERT(date, GETDATE()))
+GROUP BY
+    d.category, RTRIM(C.NAME) + ' ' + RTRIM(C.CHILD_NAME),
+    d.user_id,
+    CASE
+        WHEN UN.USER_FULL_NAME = UN.USER_LOGIN_NAME THEN LTRIM(UN.USER_FULL_NAME)
+        ELSE LTRIM(UN.USER_FULL_NAME + ' [' + UN.USER_LOGIN_NAME + ']')
+    END
+HAVING
+    SUM(CAST(d.hits AS NUMERIC)) > 0
+ORDER BY
+    SUM(CAST(d.hits AS NUMERIC)) DESC`,
+  },
+
+  /* ADVANCED: Bot Networks detail — user/IP/URL investigation */
+  web_bot_networks: {
+    title: 'Bot Networks Activity (Detail)',
+    description: 'Bot network visits with user, IP, timestamp, and full URL (row-level logs).',
+    defaultWindowDays: 60,
+    sql: ({ days, topN }) => `
+SELECT ${topClause(topN)}
+    U.user_login_name as [User],
+    CONVERT(VARCHAR(15), (WLOG.source_ip_int/16777216) & 255) + '.' +
+    CONVERT(VARCHAR(15), (WLOG.source_ip_int/65536) & 255) + '.' +
+    CONVERT(VARCHAR(15), (WLOG.source_ip_int/256) & 255) + '.' +
+    CONVERT(VARCHAR(15), WLOG.source_ip_int & 255) as IP_Address,
+    WLOG.date_time as [Date],
+    URL.name as [Domain],
+    WLOG.full_url as [Full URL],
+    C.name as [Parent Category],
+    C.child_name as [Child Category]
+FROM
+    log_details WLOG (NOLOCK)
+    JOIN users U (NOLOCK) ON WLOG.user_id = U.user_id
+    JOIN wse_urls URL (NOLOCK) ON WLOG.url_id = URL.wse_url_id
+    JOIN category C (NOLOCK) ON WLOG.category = C.category
+WHERE
+    C.child_name = 'Bot Networks'
+    AND WLOG.date_time >= DATEADD(day, -${sanitiseDays(days, 60)}, CONVERT(smalldatetime, CONVERT(date, GETDATE())))
+    AND WLOG.date_time < CONVERT(smalldatetime, CONVERT(date, GETDATE()))
+ORDER BY
+    U.user_login_name, WLOG.date_time, WLOG.full_url`,
+  },
+
+  /* ADVANCED: Malicious Web Sites detail */
+  web_malicious_sites: {
+    title: 'Malicious Web Sites (Detail)',
+    description: 'Malicious site access with user, IP, timestamp, and full URL.',
+    defaultWindowDays: 60,
+    sql: ({ days, topN }) => `
+SELECT ${topClause(topN)}
+    U.user_login_name as [User],
+    CONVERT(VARCHAR(15), (WLOG.source_ip_int/16777216) & 255) + '.' +
+    CONVERT(VARCHAR(15), (WLOG.source_ip_int/65536) & 255) + '.' +
+    CONVERT(VARCHAR(15), (WLOG.source_ip_int/256) & 255) + '.' +
+    CONVERT(VARCHAR(15), WLOG.source_ip_int & 255) as IP_Address,
+    WLOG.date_time as [Date],
+    URL.name as [Domain],
+    WLOG.full_url as [Full URL],
+    C.name as [Parent Category],
+    C.child_name as [Child Category]
+FROM
+    log_details WLOG (NOLOCK)
+    JOIN users U (NOLOCK) ON WLOG.user_id = U.user_id
+    JOIN wse_urls URL (NOLOCK) ON WLOG.url_id = URL.wse_url_id
+    JOIN category C (NOLOCK) ON WLOG.category = C.category
+WHERE
+    C.child_name = 'Malicious Web Sites'
+    AND WLOG.date_time >= DATEADD(day, -${sanitiseDays(days, 60)}, CONVERT(smalldatetime, CONVERT(date, GETDATE())))
+    AND WLOG.date_time < CONVERT(smalldatetime, CONVERT(date, GETDATE()))
+ORDER BY
+    U.user_login_name, WLOG.date_time, WLOG.full_url`,
+  },
+
+  /* ADVANCED: Security category detail */
+  web_security_category: {
+    title: 'Security Category Access (Detail)',
+    description: 'All Security category access with user, IP, timestamp, and URL.',
+    defaultWindowDays: 60,
+    sql: ({ days, topN }) => `
+SELECT ${topClause(topN)}
+    U.user_login_name as [User],
+    CONVERT(VARCHAR(15), (WLOG.source_ip_int/16777216) & 255) + '.' +
+    CONVERT(VARCHAR(15), (WLOG.source_ip_int/65536) & 255) + '.' +
+    CONVERT(VARCHAR(15), (WLOG.source_ip_int/256) & 255) + '.' +
+    CONVERT(VARCHAR(15), WLOG.source_ip_int & 255) as IP_Address,
+    WLOG.date_time as [Date],
+    URL.name as [Domain],
+    WLOG.full_url as [Full URL],
+    C.name as [Parent Category],
+    C.child_name as [Child Category]
+FROM
+    log_details WLOG (NOLOCK)
+    JOIN users U (NOLOCK) ON WLOG.user_id = U.user_id
+    JOIN wse_urls URL (NOLOCK) ON WLOG.url_id = URL.wse_url_id
+    JOIN category C (NOLOCK) ON WLOG.category = C.category
+WHERE
+    C.name = 'Security'
+    AND WLOG.date_time >= DATEADD(day, -${sanitiseDays(days, 60)}, CONVERT(smalldatetime, CONVERT(date, GETDATE())))
+    AND WLOG.date_time < CONVERT(smalldatetime, CONVERT(date, GETDATE()))
+ORDER BY
+    U.user_login_name, WLOG.date_time, WLOG.full_url`,
+  },
+
+  /* ADVANCED: AMT (Advanced Malware Threats) logs */
+  web_amt_logs: {
+    title: 'Advanced Malware Threat Logs',
+    description: 'Recent AMT detections with disposition, category, and threat details.',
+    defaultWindowDays: 30,
+    sql: ({ days, topN }) => `
+SELECT ${topClause(topN)}
+    date_time,
+    disposition_id,
+    category_id,
+    category_reason_id,
+    static_category_id,
+    static_category_reason_id,
+    port,
+    full_url
+FROM
+    amt_log_details (NOLOCK)
+WHERE
+    date_time >= DATEADD(day, -${sanitiseDays(days, 30)}, CONVERT(smalldatetime, CONVERT(date, GETDATE())))
+    AND date_time < CONVERT(smalldatetime, CONVERT(date, GETDATE()))
+ORDER BY
+    date_time DESC`,
+  },
+};
