@@ -229,7 +229,11 @@ export function HelpGuidePage() {
               <H2>Why each one matters</H2>
               <ul style={listStyle}>
                 <li><strong>HC Sessions</strong> — every customer is saved as a separate session.
-                  Export Backup before destructive ops; Import Backup restores the whole estate.</li>
+                  Export Backup before destructive ops; Import Backup restores the whole estate.
+                  <strong> Get Updates</strong> fetches the latest curated <Code>template/backup.json</Code>
+                  from the repo and refreshes only the catalogue keys (checklist templates, version
+                  data, endpoint matrix, etc.) — your saved sessions are always preserved. The button
+                  is disabled ("Up to Date") until GitHub's copy actually changes.</li>
                 <li><strong>HC Rule Engine</strong> — the checklist is the spine of the Per-Product
                   Security Assessment. Customise per industry vertical here.</li>
                 <li><strong>Product Lifecycle</strong> — Step 4's "EoS — replace immediately"
@@ -266,6 +270,15 @@ export function HelpGuidePage() {
                 <strong> Transport</strong> toggle (where applicable) selects Direct vs Via
                 Connector. <strong>Star ★</strong> on log findings auto-spawns Urgent Actions
                 and includes them in the report.
+                <br /><br />
+                Every SQL report (Data Security + Web Security) has a per-row <strong>Last X
+                days</strong> window and <strong>Top Y rows</strong> selector — default 7 days /
+                Top 5. The bulk <strong>Run all selected</strong> button applies one shared
+                (days, topN) pair across every ticked report in one pass; each row remembers its
+                own override afterwards. The DLP REST API posture picker also has a
+                <strong> Policy Audit: Never-Used</strong> block — flags enabled DLP policies
+                that generated zero incidents inside the chosen window (misconfiguration /
+                coverage-gap signal for the report).
               </StepCard>
               <StepCard num="4" color="#F59E0B" title="Version & EoS Analysis">
                 For each Forcepoint product in scope: installed version vs latest vs EoS / EoM dates.
@@ -341,26 +354,40 @@ export function HelpGuidePage() {
                 FSM environment. It:
               </p>
               <ol style={listStyle}>
-                <li><strong>Phones home</strong> every 30s with a heartbeat (presence + selftest results).</li>
-                <li><strong>Long-polls</strong> for jobs — the HC server queues encrypted work; the connector
-                  picks them up and executes locally.</li>
-                <li><strong>Encrypts every result</strong> with AES-256-GCM using the symmetric key from
-                  <Code>connector.json</Code> — even the HC server only sees ciphertext on the wire.</li>
+                <li><strong>Phones home</strong> every 30s with a heartbeat (presence + selftest results + its own version string).</li>
+                <li><strong>Long-polls</strong> for jobs — the HC server queues work (<Code>sql.test</Code>,
+                  <Code>sql.query</Code>, <Code>dlp.test</Code>, <Code>dlp.fetch</Code>); the connector picks
+                  them up and executes locally against the customer's SQL Server / DLP REST API.</li>
+                <li><strong>Posts results back</strong> over the same outbound HTTPS channel — <strong>token-only
+                  security</strong> (no separate encryption key). Nothing is exposed inbound; the customer
+                  network never accepts a connection from the HC host.</li>
               </ol>
-              <H2>Three artifacts you hand the customer</H2>
+              <H2>One artifact — no JSON files</H2>
+              <p>
+                Connector v2 is <strong>fully interactive</strong> — there's nothing to hand-edit or leak.
+                Enable the card, the wizard generates a random 256-bit token, and the customer downloads
+                a single file:
+              </p>
               <Table headers={['File', 'Origin', 'Contents']} rows={[
-                ['connector.json', 'SE generates in wizard', 'HC endpoint, random token, AES-256 key, allowed source IP'],
-                ['connector-secrets.json', 'Customer admin fills (or verifies pre-fill)', '3 SQL blocks (sql_Data / sql_Web / sql_Email) + 1 DLP REST API block'],
-                ['forcepoint-hc-connector.exe', 'Built from the repo, served by the HC server', 'Single-file Python binary, ~25 MB'],
+                ['forcepoint-hc-connector.exe', 'Built from the repo (ConnectorAgent/), served by the HC server', 'Single-file PyInstaller binary, ~11-12 MB. No config files — everything is asked at runtime.'],
               ]} />
               <p>
-                Customer puts all three in one folder, runs the .exe, sees a console banner.
-                The wizard's ONLINE pill turns green within 30s.
+                Customer runs the .exe from any folder. It asks a short series of prompts — HC
+                endpoint + token, optional proxy, TLS settings, which SQL databases to configure
+                (Data / Web / Email, any combination), optional DLP REST API credentials — testing
+                each section immediately before moving on. Passwords are masked on input. Once all
+                enabled sections pass, it starts the heartbeat + job-poll loops and the wizard's
+                status pill turns <strong>ONLINE</strong> within ~30s.
               </p>
+              <Note>
+                The token is the <strong>only</strong> credential exchanged with the wizard. Customer
+                SQL/DLP credentials are typed directly into the .exe's console prompts on the
+                customer's own host and never transmitted to or stored by the HC server.
+              </Note>
               <H2>Direct vs Via Connector — when to use which</H2>
               <Table headers={['Mode', 'Best when…', 'Picture']} rows={[
                 ['Direct', 'The SE has network reach to the customer FSM (POC / lab / open network).', 'Wizard → System API → customer FSM, all over the SE network.'],
-                ['Via Connector', "The customer's firewall blocks inbound. The SE can ONLY reach the connector's outbound heartbeat.", 'Wizard → System API → enqueue job → connector pulls job → connector hits FSM → encrypted result.'],
+                ['Via Connector', "The customer's firewall blocks inbound. The SE can ONLY reach the connector's outbound heartbeat.", 'Wizard → System API → enqueue job → connector pulls job → connector hits SQL/FSM → result posted back.'],
               ]} />
               <Warn>
                 Direct fallback is <strong>never automatic</strong>. If you pick Via Connector but
@@ -373,15 +400,32 @@ export function HelpGuidePage() {
                 what the connector itself is reporting:
               </p>
               <ul style={listStyle}>
-                <li><strong>SQL · DLP</strong> — connector tested its <Code>sql_Data</Code> block</li>
-                <li><strong>SQL · Web</strong> — connector tested its <Code>sql_Web</Code> block</li>
-                <li><strong>SQL · Email</strong> — connector tested its <Code>sql_Email</Code> block</li>
-                <li><strong>DLP REST API</strong> — connector tested its <Code>dlpApi</Code> block</li>
+                <li><strong>SQL · Data</strong> — connector tested the Data Security database (<Code>wbsn-data-security</Code>)</li>
+                <li><strong>SQL · Web</strong> — connector tested the Web Security database (<Code>wslogdb70</Code>)</li>
+                <li><strong>SQL · Email</strong> — connector tested the Email Security database (<Code>esglogdb76</Code>)</li>
+                <li><strong>DLP REST API</strong> — connector tested its DLP credentials against <Code>/deploy/status</Code></li>
               </ul>
               <p>
                 Each row is <strong>PASS / FAIL</strong> with latency. Refreshed every 5 minutes
                 automatically. If PASS for the product you're about to query, Via Connector
-                queries for that product will succeed.
+                queries for that product will succeed. Only sections the customer actually enabled
+                during setup show a row — the wizard doesn't render "FAIL — not configured" noise.
+              </p>
+              <H2>Regenerating the token</H2>
+              <p>
+                Click <strong>Regenerate</strong> on the Customer Connector card to rotate the token —
+                the old one is deregistered server-side immediately, so a customer still running the
+                previous .exe starts failing heartbeats. Re-download and hand over the new .exe (it
+                bakes the fresh token in during its interactive setup) to bring them back online.
+              </p>
+              <H2>Session cleanup on completion</H2>
+              <p>
+                Clicking <strong>Done</strong> on Step 18 (marking the session complete) also
+                deregisters that session's connector token server-side — pending jobs are cleared
+                and the token stops being accepted. The customer's .exe will start seeing
+                <Code>401 Token not registered</Code> on its next heartbeat and should be stopped on
+                their host. This keeps a wrapped-up engagement from silently holding a connection
+                open or interfering with a different session that reuses the same customer.
               </p>
             </Section>
 
@@ -414,6 +458,36 @@ export function HelpGuidePage() {
 
             {/* ── 6. REPORTS ──────────────────────────────────────── */}
             <Section id="reports" title="6. Reports">
+              <H2>SQL report catalogue (Step 3)</H2>
+              <p>
+                Every SQL report — Data Security (DLP) and Web Security — runs through the same
+                parametrized pipeline: a template keyed by <Code>sqlKey</Code>, a <strong>Last X
+                days</strong> window, and a <strong>Top Y rows</strong> cap. Defaults are <strong>7
+                days / Top 5</strong> across the board; override per-row or use the bulk <strong>Run
+                all selected</strong> control to apply one (days, topN) pair to every ticked report.
+              </p>
+              <ul style={listStyle}>
+                <li><strong>Data Security (12 reports)</strong> — top violators, most-violated policies,
+                  sensitive-data categories, repeated exfiltration, cloud-upload destinations, critical
+                  users, user risk profile, 7-vs-100-day anomaly spike (fixed window), domain cluster,
+                  AI/GenAI usage, GenAI leak counts, false-positive signal engine.</li>
+                <li><strong>Web Security (12 reports)</strong> — top risk classes, risk-class → category
+                  breakdown, top categories, user time usage, top users, Shadow AI tool/user detection,
+                  bot networks, malicious sites, security-category access, AMT threat logs.</li>
+              </ul>
+              <p>
+                Results render with real column headers (not numeric indices) regardless of whether
+                the query ran Direct or Via Connector — SQL types (Decimal, datetime) are normalised
+                on the way back so every report is immediately readable.
+              </p>
+              <H2>DLP REST API posture (Step 3 → Fetch posture data)</H2>
+              <p>
+                Separate from the SQL catalogue — pulls deploy status, policy list, and incidents
+                directly from the DLP REST API (Direct or Via Connector). Includes a <strong>Policy
+                Audit: Never-Used</strong> block: compares every enabled DLP policy against the set
+                that actually generated incidents inside the chosen window and lists the ones that
+                never fired — a fast way to flag misconfigured or dead policies in the report.
+              </p>
               <H2>Generation</H2>
               <p>
                 Step 18 → click <strong>Generate Executive Risk Briefing</strong> OR <strong>Generate Health Check Report</strong>.
@@ -498,11 +572,16 @@ Closing`}
             <Section id="troubleshoot" title="8. Troubleshooting">
               <Table headers={['Symptom', 'Most likely cause', 'Fix']} rows={[
                 ['System API health pill RED', 'System API service down on deploy host', 'sudo systemctl status sebuilderhc-companion then restart'],
-                ['Customer Connector OFFLINE despite running', 'Token mismatch (rotation) OR allowlist IP mismatch', 'Compare wizard token with the one in connector.json on customer host'],
-                ['Test Connection (Direct SQL) says "Local SQL System API not running"', 'nginx → System API proxy chain broken', 'curl http://127.0.0.1:3001/health on deploy host'],
+                ['Customer Connector OFFLINE despite running', 'Token was regenerated on the wizard side, or the .exe was closed', 'Confirm the token shown in the wizard matches what the customer typed into the .exe; re-download + re-run if rotated'],
+                ['Connector heartbeat returns 401 "Token not registered"', 'Session was marked Done (auto-deregisters the token) OR token was regenerated', 'Expected after Done — customer should stop the .exe. If session is still active, click Regenerate and redeploy the new .exe'],
+                ['"Local SQL System API not reachable" on Run/Test Connection', 'Companion (server/index.mjs, port 3001) isn\'t running, or nginx → System API proxy is broken', 'On the deploy host: curl http://127.0.0.1:3001/health · sudo systemctl status sebuilderhc-companion. In local dev: cd server && npm start'],
+                ['Web Security / Email report fails, DLP reports work fine', 'Wrong database was targeted for the query (fixed — server now forces wslogdb70 / esglogdb76 by sqlKey prefix)', 'Pull latest + redeploy if still on a build before 2026.08.22.3'],
+                ['Via-Connector SQL query fails with "Object of type Decimal is not JSON serializable"', 'Old connector build — SQL Decimal/datetime values weren\'t normalised before JSON encoding (fixed in 2026.08.22.3+)', 'Re-download forcepoint-hc-connector.exe from the wizard and re-run on the customer host'],
+                ['Report table headers show 0, 1, 2… instead of field names', 'Old connector/server build returned array rows instead of column-keyed objects (fixed in 2026.08.22.4+)', 'Redeploy latest server build + have the customer re-download the connector'],
                 ['Run buttons grayed out', 'SQL Server card not enabled OR (Via Connector mode) connector not ONLINE', 'Enable the card; for Via Connector, wait until ONLINE pill'],
                 ['Posture fetch times out', 'FSM REST API busy OR creds wrong', 'Test Connection first; if Test passes, raise the timeout'],
-                ['Show JSON button empty in via-connector mode', 'customerConnector state not flushed', 'Hard reload (Ctrl+Shift+R)'],
+                ['"Get Updates" stays disabled ("Up to Date")', 'The ETag of template/backup.json on GitHub hasn\'t changed since your last sync', 'Nothing to do — it only enables when the repo copy actually changes'],
+                ['Version Check fails with "Bad control character in string literal"', 'versioncheck.json notes field had raw newlines instead of escaped JSON strings', 'Keep release notes single-line when hand-editing versioncheck.json (fixed as of 2026.08.22.3)'],
                 ['Executive Report missing Section 3 Licensing', 'No licenses captured AND no support level set', 'Step 1 manually adds licenses OR re-import SF JSON'],
                 ['Report shows stale section numbers', 'Browser cached old build', 'Hard reload'],
               ]} />
@@ -524,26 +603,43 @@ curl -s http://127.0.0.1:3001/api/connector/status?token=<token-prefix>`}
               </pre>
 
               <H2>Customer-side diagnostic</H2>
-              <p>When the customer admin runs the connector, the console shows:</p>
+              <p>
+                When the customer admin runs <Code>forcepoint-hc-connector.exe</Code>, it walks
+                through interactive setup (proxy → TLS → HC endpoint/token → SQL databases → DLP
+                REST API), testing each section immediately, then starts the two background loops:
+              </p>
               <pre style={preStyle}>
-{`+----------------------------------------------------------+
-|  Forcepoint HC -- Customer Connector  v0.1.0             |
-+----------------------------------------------------------+
-  HC endpoint:        https://hc.forcepoint-se.com
-  Token (masked):     ab12cd34...
-  ...
-[selftest] Validating local credentials before starting heartbeat loop...
-  OK    SQL DLP     wbsn-data-security authenticated (3 ms)
-  OK    DLP REST API authenticated — DLP v10.3.0 (251 ms)
+{`+──────────────────────────────────────────────────────────────+
+|  Forcepoint HC — Customer Connector  v2026.08.25.1            |
++──────────────────────────────────────────────────────────────+
+📦 Agent Version: 2026.08.25.1
+🕐 Started: 2026-08-25 09:12:03
+📂 Working Directory: C:\\Users\\Administrator\\Desktop\\Connector
+📝 Logs: C:\\Users\\Administrator\\Desktop\\Connector\\connector.log
 
-[start] Phoning home to https://hc.forcepoint-se.com/api/connector/heartbeat
-[job-poll] active. Long-polling https://hc.forcepoint-se.com/api/connector/job/next...
-[14:32:01] OK    heartbeat #1  (84ms)`}
+============================================================
+STEP 2: HC COMPANION ENDPOINT
+============================================================
+HC API IP address or hostname (without http://): 51.178.254.255
+HC API port [80]: 8085
+HC Connector token (from wizard): ab12cd34...
+
+[TEST] HC Endpoint:
+  ✓ Connected: hc-companion
+    Latency: 42ms
+
+CONFIGURATION COMPLETE
+✓ All connections tested and verified
+✓ Starting heartbeat loop...
+[09:12:41] OK    heartbeat #1  (44ms)`}
               </pre>
               <p>
-                If <Code>[job-poll] active</Code> is missing, the binary was built without the
-                <Code>cryptography</Code> library or the <Code>encryptionKeyHex</Code> in <Code>connector.json</Code>
-                is wrong — rebuild + re-deploy.
+                Every heartbeat and job is also written to <Code>connector.log</Code> in the
+                working directory (plus a timestamped archive under <Code>logs/</Code>) — that's
+                the file to tail (<Code>Get-Content connector.log -Wait</Code> in PowerShell) when
+                diagnosing a customer-side issue remotely. A <Code>401 Token not registered</Code>
+                on heartbeat means the wizard deregistered that token (session marked Done, or
+                Regenerate was clicked) — the customer should close the .exe.
               </p>
             </Section>
 
@@ -553,8 +649,10 @@ curl -s http://127.0.0.1:3001/api/connector/status?token=<token-prefix>`}
                 ['Resume the active session', 'Click the wizard step number in the sidebar'],
                 ['Save the session manually', 'Bottom panel "Save" button — auto-saves on every step transition too'],
                 ['Export full estate backup', 'HC Sessions page → Export Backup'],
-                ['Import estate backup', 'HC Sessions page → Import Backup (destructive)'],
-                ['Show JSON preview', 'Customer Connector card → eye icon next to each Download button'],
+                ['Import estate backup (destructive — replaces everything)', 'HC Sessions page → Import Backup'],
+                ['Sync latest templates without losing sessions', 'HC Sessions page → Get Updates (only enabled when the repo copy has changed)'],
+                ['Set a report\'s window / row cap', 'Step 3 → report row → Last X days / Top Y inputs, or the bulk Run-all control above the list'],
+                ['Regenerate the connector token', 'Step 3 → Customer Connector card → Regenerate'],
                 ['Generate the Claude prompt', 'Step 1 → SF EXPORT section → (?) How to generate'],
                 ['See build version', 'Bottom of left nav rail — short SHA chip, hover for full info'],
                 ['Toggle this Help Guide', 'Left nav rail — Help Guide button'],
@@ -586,8 +684,15 @@ bash statuscheck.sh`}
                   <li>Edit a session's JSON in localStorage by hand — corrupts the state machine.</li>
                   <li>Type the customer name in cleartext when capturing screenshots — use Salesforce import.</li>
                   <li>Push connector binaries with <Code>-dirty</Code> build tag to customers.</li>
-                  <li>Run the connector .exe with <Code>--insecure</Code> against a production customer (dev only).</li>
-                  <li>Hand the customer the <Code>connector-secrets.json</Code> from a different customer engagement — leaks data.</li>
+                  <li>Answer "Accept self-signed certificates" during connector setup against a production
+                    FSM unless the customer explicitly confirmed that's expected — it disables TLS
+                    verification for that connection.</li>
+                  <li>Reuse the same connector token across two different customer engagements —
+                    regenerate a fresh one per customer.</li>
+                  <li>Share a customer's <Code>connector.log</Code> outside the engagement — it can
+                    contain hostnames, IPs, and query text from that customer's environment.</li>
+                  <li>Forget to click <strong>Done</strong> when wrapping up — it's what deregisters the
+                    connector token and tells the customer's .exe to stop.</li>
                 </ul>
               </div>
             </Section>
@@ -818,7 +923,7 @@ function Table({ headers, rows }: { headers: string[]; rows: string[][] }) {
 function NavTable() {
   const rows: string[][] = [
     ['Health Check Wizard', 'Starts a new session OR resumes the active session. The 18-step assessment.'],
-    ['HC Sessions', 'List of every saved session. Customer name, last-saved date, completion state, health score. Right toolbar: Export/Import Backup of the whole estate.'],
+    ['HC Sessions', 'List of every saved session. Customer name, last-saved date, completion state, health score. Right toolbar: Export/Import Backup (full estate) and Get Updates (syncs the curated template catalogue from GitHub — sessions are never touched).'],
     ['HC Rule Engine', 'Edit the checklist templates (DLP / Web / Email). Per-product questions, severity weights, remediation text. Changes apply to future sessions.'],
     ['Product Lifecycle', 'Catalogue of Forcepoint product versions + EoS / EoM dates. Auto-pulled into Step 4. Update when Forcepoint publishes new EoS notices.'],
     ['OS / Browser Support Matrix', 'Endpoint agent compatibility matrix (Windows / macOS / browsers). Drives Step 7. Update when new platforms ship.'],
