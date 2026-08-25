@@ -1,6 +1,6 @@
 {
     "productName": "HC Studio",
-    "version": "2026.08.22.7",
-    "releasedAt": "2026-08-22T05:42:00Z",
-    "notes": "v2026.08.22.7: Smart update detection for Get Updates button. Only enabled when backup.json changes (via ETag comparison). Shows 'Up to Date' when no updates available. Reduces unnecessary import prompts."
+    "version": "2026.08.25.1",
+    "releasedAt": "2026-08-25T00:00:00Z",
+    "notes": "v2026.08.25.1: Baseline seed regenerated from template/backup.json. Every fresh install now boots with the latest curated templates and catalogs. Existing installs get catalog-only refresh; HC sessions are never touched."
 }
