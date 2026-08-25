@@ -1,7 +1,7 @@
 {
   "_format": "forcepoint-hc-system-backup",
   "_version": 1,
-  "_exportedAt": "2026-06-26T10:05:47.244Z",
+  "_exportedAt": "2026-08-17T20:36:39.935Z",
   "_seedSanitisedFrom": "template.json",
   "keys": {
     "hc_version_upgrades": [],
@@ -34,6 +34,7 @@
     "hc_action_items": [],
     "hc_log_starred": {},
     "hc_endpoint_agents": null,
+    "hc_fdc_endpoint_agents": null,
     "hc_api_connectors": {
       "dlpApi": {
         "enabled": false,
@@ -70,7 +71,9 @@
       "osEnvironment": [],
       "serverOSes": [],
       "browsers": [],
-      "vdiPlatforms": []
+      "vdiPlatforms": [],
+      "fdcOSEnvironment": [],
+      "fdcOfficeVersions": []
     },
     "hc_endpoint_support_matrix": {
       "lastUpdated": "",
@@ -79,18 +82,18 @@
         {
           "id": "windows-1779018427264-l35ow",
           "platform": "Windows 11 (24H2, 25H2)",
-          "supportedFrom": "S 26.02.5749 S 25.02.5708+ S 24.06.5685+",
+          "supportedFrom": "24.06.5685+",
           "status": "current",
           "coverage": [
             "dlp",
-            "direct",
-            "proxy"
+            "proxy",
+            "direct"
           ]
         },
         {
           "id": "windows-1779018427264-k0huw",
           "platform": "Windows 10 (21H1, 21H2, 22H2) with or without Secure Boot Mode",
-          "supportedFrom": "S 26.02.5749 S 25.02.5708+ S 24.06.5685+",
+          "supportedFrom": "24.06.5685+",
           "status": "current",
           "coverage": [
             "dlp",
@@ -101,7 +104,7 @@
         {
           "id": "windows-1779018427264-vlu07",
           "platform": "Windows Server 2022",
-          "supportedFrom": "S 26.02.5749 S 25.02.5708+ S 24.06.5685+",
+          "supportedFrom": "24.06.5685+",
           "status": "current",
           "coverage": [
             "dlp",
@@ -112,7 +115,7 @@
         {
           "id": "windows-1779018427264-qaguf",
           "platform": "Windows Server 2019",
-          "supportedFrom": "S 26.02.5749 S 25.02.5708+ S 24.06.5685+",
+          "supportedFrom": "24.06.5685+",
           "status": "current",
           "coverage": [
             "dlp",
@@ -123,7 +126,7 @@
         {
           "id": "windows-1779018427265-wvwh4",
           "platform": "Windows 11 (21H2, 22H2, 23H2)",
-          "supportedFrom": "C 23.04.5642+ C 22.01.5526+ C 21.07.5168+",
+          "supportedFrom": "21.07.5168+",
           "status": "current",
           "coverage": [
             "direct",
@@ -134,7 +137,7 @@
         {
           "id": "windows-1779021036676-p6a1p",
           "platform": "Windows Server 2016",
-          "supportedFrom": "S 22.01.5526+** S 21.03.5060+",
+          "supportedFrom": "21.03.5060+",
           "status": "current",
           "coverage": [
             "dlp",
@@ -145,7 +148,7 @@
         {
           "id": "windows-1779021091944-zm369",
           "platform": "Windows 10 October 2018 Update (1809) LTSC",
-          "supportedFrom": "S 21.03.5060+** C 20.02.4499+ C 19.05.890+",
+          "supportedFrom": "19.05.890+",
           "status": "current",
           "coverage": [
             "direct",
@@ -159,7 +162,7 @@
         {
           "id": "macos-1779018427264-ta0sv",
           "platform": "macOS Tahoe 26.x*",
-          "supportedFrom": "S 26.02.5016 S 25.03.0452+^",
+          "supportedFrom": "24.06.5685+",
           "status": "current",
           "coverage": [
             "dlp",
@@ -170,7 +173,7 @@
         {
           "id": "macos-1779018427264-j11z8",
           "platform": "macOS Sequoia 15.x*",
-          "supportedFrom": "S 26.02.5016 S 25.03.0452+^ C 24.11.0488",
+          "supportedFrom": "24.11.0488+",
           "status": "current",
           "coverage": [
             "dlp",
@@ -181,7 +184,7 @@
         {
           "id": "macos-1779018427264-jrnno",
           "platform": "macOS Sonoma14.x*",
-          "supportedFrom": "S 26.02.5016 S 25.03.0452+^ S 24.06.0438+",
+          "supportedFrom": "24.06.0438+",
           "status": "current",
           "coverage": [
             "dlp",
@@ -195,85 +198,85 @@
         {
           "id": "vdi-1779018427264-5y4d8",
           "platform": "Citrix Virtual Apps and Desktops 7 2402",
-          "supportedFrom": "S 26.02.5749 S 25.02.5708+ S 24.06.5685+",
+          "supportedFrom": "24.06.5685+",
           "status": "current"
         },
         {
           "id": "vdi-1779018427264-wn1jy",
           "platform": "Citrix Virtual Apps and Desktops 7 2311",
-          "supportedFrom": "S 26.02.5749 S 25.02.5708+ S 24.06.5685+",
+          "supportedFrom": "24.06.5685+",
           "status": "current"
         },
         {
           "id": "vdi-1779018427264-f5dv7",
           "platform": "Citrix Virtual Apps and Desktops 7 2308",
-          "supportedFrom": "S 26.02.5749 S 25.02.5708+ S 24.06.5685+",
+          "supportedFrom": "24.06.5685+",
           "status": "current"
         },
         {
           "id": "vdi-1779018427264-4cvxj",
           "platform": "Citrix Virtual Apps and Desktops 7 2305",
-          "supportedFrom": "S 26.02.5749 S 25.02.5708+ S 24.06.5685+",
+          "supportedFrom": "24.06.5685+",
           "status": "current"
         },
         {
           "id": "vdi-1779018427264-wcn3s",
           "platform": "Citrix Virtual Apps and Desktops 7 2303",
-          "supportedFrom": "S 26.02.5749 S 25.02.5708+ S 24.06.5685+",
+          "supportedFrom": "24.06.5685+",
           "status": "current"
         },
         {
           "id": "vdi-1779018427264-lo5bc",
           "platform": "Citrix Virtual Apps and Desktops 7 2212",
-          "supportedFrom": "S 26.02.5749 S 25.02.5708+ S 24.06.5685+",
+          "supportedFrom": "24.06.5685+",
           "status": "current"
         },
         {
           "id": "vdi-1779018427264-o9prn",
           "platform": "VMWare Horizon 8 2312 Application Pool & Desktop",
-          "supportedFrom": "S 26.02.5749 S 25.02.5708+ S 24.06.5685+",
+          "supportedFrom": "24.06.5685+",
           "status": "current"
         },
         {
           "id": "vdi-1779018427264-n8odi",
           "platform": "VMWare Horizon 8 2309 Application Pool & Desktop",
-          "supportedFrom": "S 26.02.5749 S 25.02.5708+ S 24.06.5685+",
+          "supportedFrom": "24.06.5685+",
           "status": "current"
         },
         {
           "id": "vdi-1779018427264-ulfxd",
           "platform": "VMWare Horizon 8 2306 Application Pool & Desktop",
-          "supportedFrom": "S 26.02.5749 S 25.02.5708+ S 24.06.5685+",
+          "supportedFrom": "24.06.5685+",
           "status": "current"
         },
         {
           "id": "vdi-1779018427264-64fe8",
           "platform": "VMWare Horizon 8 2303 Application Pool & Desktop",
-          "supportedFrom": "S 26.02.5749 S 25.02.5708+ S 24.06.5685+",
+          "supportedFrom": "24.06.5685+",
           "status": "current"
         },
         {
           "id": "vdi-1779018427264-d7wv2",
           "platform": "VMWare Horizon 8 2212 Application Pool & Desktop",
-          "supportedFrom": "S 26.02.5749 S 25.02.5708+ S 24.06.5685+",
+          "supportedFrom": "24.06.5685+",
           "status": "current"
         },
         {
           "id": "vdi-1779018427264-egc4w",
           "platform": "Windows Virtual Desktop Client using Windows 11 Enterprise multi-session OS",
-          "supportedFrom": "S 26.02.5749 S 25.02.5708+ S 24.06.5685+",
+          "supportedFrom": "24.06.5685+",
           "status": "current"
         },
         {
           "id": "vdi-1779018427264-o7yl9",
           "platform": "Windows Virtual Desktop Client using Windows 10 Enterprise multi-session OS",
-          "supportedFrom": "S 26.02.5749 S 25.02.5708+ S 24.06.5685+",
+          "supportedFrom": "24.06.5685+",
           "status": "current"
         },
         {
           "id": "vdi-1779018427264-mxdsb",
           "platform": "AWS WorkSpace version 3",
-          "supportedFrom": "S 26.02.5749 S 25.02.5708+ S 24.06.5685+",
+          "supportedFrom": "24.06.5685+",
           "status": "current"
         }
       ],
@@ -283,7 +286,7 @@
           "browser": "137 - 147 (Edge Chromium)",
           "platform": "Windows",
           "versions": "137 - 147",
-          "minAgent": "S 26.02.5749 S 25.02.5708+ S 24.06.5685+",
+          "minAgent": "24.06.5685+",
           "coverage": [
             "dlp",
             "direct",
@@ -295,7 +298,7 @@
           "browser": "Google Chrome (Windows)",
           "platform": "Windows",
           "versions": "137- 147",
-          "minAgent": "S 26.02.5016 S 25.03.0452+ S 24.06.0438+",
+          "minAgent": "24.06.5685+",
           "coverage": [
             "dlp",
             "direct",
@@ -307,7 +310,7 @@
           "browser": "Google Chrome (macOS)",
           "platform": "macOS",
           "versions": "137- 147",
-          "minAgent": "S 26.02.5749 S 25.02.5708+ S 24.06.5685+",
+          "minAgent": "24.06.5685+",
           "coverage": [
             "proxy",
             "direct",
@@ -319,7 +322,7 @@
           "browser": "Mozilla Firefox (Windows)",
           "platform": "Windows",
           "versions": "135 - 145",
-          "minAgent": "S 26.02.5016 S 25.03.0452+ S 24.06.0438+",
+          "minAgent": "24.06.5685+",
           "coverage": [
             "dlp",
             "direct",
@@ -331,7 +334,7 @@
           "browser": "Mozilla Firefox (macOS)",
           "platform": "macOS",
           "versions": "140.0 - 140.5",
-          "minAgent": "S 26.02.5749 S 25.02.5708+ S 24.06.5685+",
+          "minAgent": "24.06.5685+",
           "coverage": [
             "proxy",
             "direct",
@@ -343,7 +346,7 @@
           "browser": "Mozilla Firefox ESR Support (Windows)",
           "platform": "Windows",
           "versions": "140,0 - 140.5",
-          "minAgent": "S 26.02.5016 S 25.03.0452+ S 24.06.0438+",
+          "minAgent": "24.06.5685+",
           "coverage": [
             "dlp",
             "direct",
@@ -355,7 +358,7 @@
           "browser": "Mozilla Firefox ESR Support (macOS)",
           "platform": "macOS",
           "versions": "140,0 - 140.5",
-          "minAgent": "S 26.02.5016  S 25.03.0452+  S 24.06.0438+",
+          "minAgent": "24.06.5685+",
           "coverage": [
             "proxy",
             "direct",
@@ -367,7 +370,7 @@
           "browser": "Apple Safari (macOS Only)",
           "platform": "macOS",
           "versions": "26.1 - 26.2 (26.x, 15.x, 14.x)",
-          "minAgent": "S 26.02.5016  S 25.03.0452+  S 24.06.0438+",
+          "minAgent": "24.06.5685+",
           "coverage": [
             "dlp",
             "direct",
@@ -375,7 +378,136 @@
           ]
         }
       ],
-      "criticalNotes": []
+      "criticalNotes": [],
+      "fdc": {
+        "windows": [
+          {
+            "id": "fwin-1782501562146-9m9wj",
+            "platform": "Windows 11",
+            "supportedFrom": "4.7+",
+            "status": "current"
+          },
+          {
+            "id": "fwin-1782501562146-a1b2c",
+            "platform": "Windows 10",
+            "supportedFrom": "4.7+",
+            "status": "limited"
+          }
+        ],
+        "windowsNotes": [],
+        "macos": [
+          {
+            "id": "fmac-1782501560054-ia9dz",
+            "platform": "macOS Tahoe 26.x",
+            "supportedFrom": "5.1+",
+            "status": "limited"
+          },
+          {
+            "id": "fmac-1782502173217-agc9u",
+            "platform": "macOS Sonoma 15.x",
+            "supportedFrom": "4.7+",
+            "status": "current"
+          },
+          {
+            "id": "fmac-1782502185137-9pnid",
+            "platform": "macOS Ventura 14.x",
+            "supportedFrom": "4.7+",
+            "status": "current"
+          }
+        ],
+        "macosNotes": [],
+        "vdi": [
+          {
+            "id": "fvdi-1782501557259-j7k8l",
+            "platform": "Citrix Virtual Apps and Desktops",
+            "supportedFrom": "5.1+",
+            "status": "limited"
+          },
+          {
+            "id": "fvdi-1782501557259-m9n0o",
+            "platform": "VMware Horizon",
+            "supportedFrom": "5.1+",
+            "status": "limited"
+          },
+          {
+            "id": "fvdi-1782501557259-p1q2r",
+            "platform": "Azure Virtual Desktop (AVD) / Windows Virtual Desktop",
+            "supportedFrom": "5.1+",
+            "status": "limited"
+          },
+          {
+            "id": "fvdi-1782501557259-s3t4u",
+            "platform": "AWS WorkSpaces",
+            "supportedFrom": "5.1+",
+            "status": "limited"
+          },
+          {
+            "id": "fvdi-1782501557259-v5w6x",
+            "platform": "Windows RDS (Remote Desktop Services)",
+            "supportedFrom": "5.1+",
+            "status": "limited"
+          }
+        ],
+        "officeVersions": [
+          {
+            "id": "fofc-1782501551933-9v0jk",
+            "product": "Office 365",
+            "versions": "Microsoft 365 (Cloud)",
+            "minAgent": "4.7+",
+            "status": "current"
+          },
+          {
+            "id": "fofc-1782501551933-e4f5g",
+            "product": "Office 2024",
+            "versions": "On-Prem",
+            "minAgent": "5.2+",
+            "status": "current"
+          },
+          {
+            "id": "fofc-1782501551933-h6i7j",
+            "product": "Office 2021",
+            "versions": "On-Prem",
+            "minAgent": "5.2+",
+            "status": "current"
+          },
+          {
+            "id": "fofc-1782501551933-k8l9m",
+            "product": "Office 2019",
+            "versions": "On-Prem",
+            "minAgent": "5.2+",
+            "status": "current"
+          },
+          {
+            "id": "fofc-1782501551933-q2r3s",
+            "product": "New Outlook (Windows)",
+            "versions": "Microsoft 365 (Cloud)",
+            "minAgent": "5.1+",
+            "status": "limited"
+          },
+          {
+            "id": "fofc-1782501551933-t4u5v",
+            "product": "OWA Outlook on the Web",
+            "versions": "Microsoft 365 (Cloud)",
+            "minAgent": "5.2+",
+            "status": "limited"
+          },
+          {
+            "id": "fofc-1782501551933-w6x7y",
+            "product": "OWA Outlook Web (On-prem Exchange)",
+            "versions": "On-Prem",
+            "minAgent": "5.2+",
+            "status": "not-supported"
+          },
+          {
+            "id": "fofc-1782501551933-z8a9b",
+            "product": "On-prem Exchange (Classic Outlook only)",
+            "versions": "On-Prem",
+            "minAgent": "5.2+",
+            "status": "limited"
+          }
+        ],
+        "criticalNotes": []
+      }
     },
     "hc_customer_connector": {
       "enabled": false,
@@ -387,7 +519,7 @@
     "hc_enhancements": [],
     "hc_sessions": [],
     "hc_log_dismissed": {},
-    "hc_last_activity": 1782468343978,
+    "hc_last_activity": 1786998997239,
     "hc_service_logs_report": null,
     "hc_endpoint_compat_assessment": null,
     "hc_report_windows": {
@@ -615,15 +747,6 @@
             "remediation": "Review NIC configuration using ethtool for ring buffer sizes, interrupt coalescing settings, and offload capabilities (TSO, GRO, LRO). For high-throughput deployments, tune ring buffer sizes and consider increasing CPU interrupt affinities. Benchmark throughput against the appliance's rated capacity.\n\nForcepoint KB: Refer to the Forcepoint Appliance Performance Tuning Guide. Engage TAC for NIC-specific tuning recommendations."
           },
           {
-            "id": "q21",
-            "text": "Are performance baselines documented?",
-            "section": "Performance",
-            "severity": "MEDIUM",
-            "triggerOn": "no",
-            "description": "Without documented performance baselines, it is impossible to determine whether current appliance performance metrics represent normal operation or degradation. Baselines are essential for capacity planning, detecting slow performance regressions, and justifying hardware refresh decisions to management.",
-            "remediation": "Establish performance baselines by recording CPU, memory, disk I/O, network throughput, and key application metrics during a representative business day. Store baselines in a monitoring system or operations runbook. Review baselines quarterly and after any significant configuration change.\n\nForcepoint KB: Engage Forcepoint Professional Services to establish performance baselines as part of a Health Check engagement."
-          },
-          {
             "id": "q22",
             "text": "Is load balancing configured and working?",
             "section": "Performance",
@@ -640,15 +763,6 @@
             "triggerOn": "no",
             "description": "Without configured performance alerts, appliance resource saturation (CPU, memory, disk, network) goes undetected until it causes a service outage. Proactive alerting enables the operations team to address resource pressure before it impacts users or causes security events to be missed.",
             "remediation": "Configure SNMP traps or syslog-based alerting for key performance thresholds: CPU >75%, memory >80%, disk >75%, and interface error rate above baseline. Integrate alerts into the NOC monitoring platform (Zabbix, PRTG, Nagios, or SIEM). Test alert delivery by simulating threshold breaches.\n\nForcepoint KB: Refer to the Forcepoint Appliance SNMP MIB documentation for available OIDs to monitor."
-          },
-          {
-            "id": "q24",
-            "text": "Is connection pooling optimized?",
-            "section": "Performance",
-            "severity": "MEDIUM",
-            "triggerOn": "no",
-            "description": "Unoptimised connection pooling in Forcepoint proxy and database-connected services leads to excessive connection establishment overhead, database connection exhaustion, and suboptimal resource utilisation. In high-transaction environments, connection pool sizing directly affects throughput and latency.",
-            "remediation": "Review connection pool configuration for the applicable Forcepoint service (Content Gateway database connections, Log Server database pool, DLP manager connections). Adjust pool sizes based on observed peak concurrent connection counts. Ensure idle connection timeout settings prevent pool exhaustion from stale connections.\n\nForcepoint KB: Engage Forcepoint TAC for product-specific connection pool tuning guidance."
           },
           {
             "id": "q25",
@@ -705,24 +819,6 @@
             "remediation": "Review all running services on the appliance using systemctl list-units --type=service --state=running. Identify services not required for the appliance's operational role. Disable and mask unnecessary services. Document the approved service list and verify against it during maintenance reviews.\n\nForcepoint KB: Refer to the Forcepoint Appliance Security Hardening Guide for the approved service configuration. Do not disable services without confirming with Forcepoint TAC that they are not required for product functionality."
           },
           {
-            "id": "q31",
-            "text": "Is SNMP v3 configured (not v1/v2)?",
-            "section": "Security",
-            "severity": "HIGH",
-            "triggerOn": "no",
-            "description": "SNMP v1 and v2c use community strings transmitted in cleartext, making them vulnerable to network sniffing attacks. An attacker who obtains the SNMP community string can query sensitive device information and in some configurations make configuration changes. SNMP v3 provides authentication and encryption and should be the only enabled version.",
-            "remediation": "Disable SNMP v1 and v2c on the appliance. Configure SNMP v3 with authentication (SHA-256 minimum) and encryption (AES-128 minimum). Use unique, complex credentials for the SNMP v3 user. Restrict SNMP access to monitoring server IP addresses using access control lists or firewall rules.\n\nForcepoint KB: Refer to the Forcepoint Appliance Network Management Guide for SNMP v3 configuration."
-          },
-          {
-            "id": "q32",
-            "text": "Are firewall rules restrictive and documented?",
-            "section": "Security",
-            "severity": "HIGH",
-            "triggerOn": "no",
-            "description": "Overly permissive or undocumented host-based firewall rules on the appliance allow unnecessary network services to be accessible from untrusted networks. This is particularly risky for management and monitoring interfaces that should only be reachable from dedicated management networks.",
-            "remediation": "Review appliance host-based firewall rules (iptables -L -n -v or nftables list ruleset). Verify that only required services are permitted. Ensure a default-deny policy is in place for all other inbound traffic. Document each firewall rule with a business justification and implement through change management.\n\nForcepoint KB: Refer to the Forcepoint Appliance Security Hardening Guide for host firewall configuration. Engage Forcepoint TAC before modifying product-related firewall rules."
-          },
-          {
             "id": "q33",
             "text": "Is configuration backup scheduled and automated?",
             "section": "Backup",
@@ -748,33 +844,6 @@
             "triggerOn": "no",
             "description": "A backup that has never been tested is an assumption, not a recovery capability. Backup files can become corrupted, incomplete, or incompatible with a new appliance version without the failure being detected. The first test of a backup cannot be during an actual disaster recovery event.",
             "remediation": "Schedule quarterly backup restoration tests in a non-production environment. For each test, restore the most recent backup to a test appliance and verify that all critical configurations, policies, and integrations are correctly restored. Document test results including restoration time and any errors encountered.\n\nForcepoint KB: Refer to the Forcepoint Appliance Backup and Recovery Guide for restoration procedures. Include backup restoration tests in the annual disaster recovery exercise programme."
-          },
-          {
-            "id": "q36",
-            "text": "Is backup retention policy defined?",
-            "section": "Backup",
-            "severity": "HIGH",
-            "triggerOn": "no",
-            "description": "Without a defined backup retention policy, old backups accumulate consuming storage, or conversely backups are overwritten before they become useful for rollback or forensic purposes. Compliance frameworks (PCI-DSS, ISO 27001) require defined retention periods for configuration backups of security infrastructure.",
-            "remediation": "Define a backup retention policy specifying the number of backup generations to retain (minimum 7 daily, 4 weekly, 12 monthly). Implement automated retention enforcement. Ensure retention periods meet regulatory and internal audit requirements.\n\nForcepoint KB: Align backup retention with the organisation's data retention policy and applicable regulatory requirements."
-          },
-          {
-            "id": "q37",
-            "text": "Are backup logs reviewed regularly?",
-            "section": "Backup",
-            "severity": "MEDIUM",
-            "triggerOn": "no",
-            "description": "Backup jobs that complete with errors or that silently stop running go undetected without regular log review. A backup job that has not run for two weeks provides no protection for changes made during that period. Backup failures caused by storage quota exhaustion or credential expiry are common and often silent.",
-            "remediation": "Configure backup job alerting to notify the operations team on backup failure or if no backup has been completed within the expected window. Review backup logs weekly to verify successful completion. Integrate backup job status into the NOC monitoring dashboard.\n\nForcepoint KB: Implement backup monitoring through the backup solution's notification features or integrate backup job status events into the SIEM."
-          },
-          {
-            "id": "q38",
-            "text": "Is backup encryption enabled?",
-            "section": "Backup",
-            "severity": "HIGH",
-            "triggerOn": "no",
-            "description": "Unencrypted backup files containing appliance configuration data expose sensitive information including administrator credentials, integration credentials (LDAP bind passwords, API keys), network architecture details, and security policy configurations. If backup files are stored on accessible storage or transmitted unencrypted, this data can be exfiltrated.",
-            "remediation": "Enable encryption for all configuration backup files using AES-256 or equivalent. Store encryption keys separately from the backup files. For backups transmitted over the network, use SFTP, HTTPS, or encrypted storage protocols. Verify that backup files at rest on the storage destination are also encrypted.\n\nForcepoint KB: Refer to the organisation's data protection policy for backup encryption requirements."
           },
           {
             "id": "q39",
@@ -804,15 +873,6 @@
             "remediation": "Configure syslog forwarding from the appliance to the centralised syslog server or SIEM using syslog-ng or rsyslog. Implement TLS-encrypted syslog (RFC 5425) on port 6514 where the SIEM supports it. Verify that all relevant facility/severity combinations are forwarded. Confirm log receipt in the SIEM.\n\nForcepoint KB: Refer to the Forcepoint Appliance Logging Configuration Guide and the Forcepoint SIEM Integration Guide for syslog format specifications."
           },
           {
-            "id": "q42",
-            "text": "Is health monitoring integrated with NOC?",
-            "section": "Monitoring",
-            "severity": "HIGH",
-            "triggerOn": "no",
-            "description": "Without NOC integration, the operations centre cannot proactively respond to appliance health events. Security appliances not actively monitored by operations staff can fail silently, with degradation only discovered when users report issues or during scheduled audits — by which time significant security events may have been missed.",
-            "remediation": "Integrate appliance health monitoring into the NOC's primary monitoring dashboard. Configure escalation workflows so that critical health alerts (service down, resource exhaustion, hardware fault) page the on-call team. Establish a regular health review cadence (daily/weekly) where appliance status is reviewed by the operations team.\n\nForcepoint KB: Engage the NOC tooling team to integrate Forcepoint appliance SNMP/syslog data into the operations dashboard."
-          },
-          {
             "id": "q43",
             "text": "Are critical alerts configured and tested?",
             "section": "Monitoring",
@@ -831,15 +891,6 @@
             "remediation": "Implement uptime monitoring for the appliance using the monitoring platform's availability tracking features. Configure synthetic health checks (ICMP ping, TCP port checks on management and product service ports) to measure availability continuously. Generate monthly uptime reports and compare against the SLA target (typically 99.9%).\n\nForcepoint KB: Integrate uptime monitoring into the NOC monitoring platform alongside health metrics."
           },
           {
-            "id": "q45",
-            "text": "Are performance metrics being collected?",
-            "section": "Monitoring",
-            "severity": "HIGH",
-            "triggerOn": "no",
-            "description": "Without continuous collection of performance metrics (CPU, memory, disk I/O, network throughput), it is impossible to establish trends, predict capacity exhaustion, or diagnose performance regressions before they impact users. Performance metric gaps make post-incident root cause analysis significantly more difficult.",
-            "remediation": "Configure continuous performance metric collection for all key resources using the monitoring platform. Store metrics with at minimum 90-day retention for trend analysis. Generate weekly performance trend reports for the operations team. Configure capacity threshold alerts based on trend analysis.\n\nForcepoint KB: Refer to the Forcepoint Appliance SNMP MIB for product-specific performance OIDs. Use a time-series monitoring system (Prometheus, Grafana, Zabbix) for efficient metric storage."
-          },
-          {
             "id": "q46",
             "text": "Is monitoring dashboard accessible to operations?",
             "section": "Monitoring",
@@ -847,24 +898,6 @@
             "triggerOn": "no",
             "description": "If the monitoring dashboard for the appliance is not accessible to the operations team — due to access restrictions, lack of training, or tooling gaps — health issues will not be observed in real time. A monitoring dashboard that is not regularly reviewed provides no operational value.",
             "remediation": "Verify that all operations staff responsible for the appliance have access to the monitoring dashboard and are trained on interpreting the displayed metrics. Conduct a quarterly review of dashboard access to remove departed staff and add new team members.\n\nForcepoint KB: Engage the monitoring platform team to create a dedicated Forcepoint appliance health dashboard view for the NOC."
-          },
-          {
-            "id": "q47",
-            "text": "Are monitoring agents up to date?",
-            "section": "Monitoring",
-            "severity": "HIGH",
-            "triggerOn": "no",
-            "description": "Outdated monitoring agents on the appliance may not correctly monitor newer software versions, may have known bugs causing false or missed alerts, or may be missing support for newer metric types. Stale monitoring agents are a common cause of monitoring coverage gaps that only become apparent during an actual incident.",
-            "remediation": "Review the version of all monitoring agents deployed on the appliance (SNMP agent, syslog forwarding agent, metric collection agent). Compare against current versions from the monitoring platform vendor. Update agents during scheduled maintenance windows. Verify that monitoring continues to function correctly after each agent update.\n\nForcepoint KB: Include monitoring agent version review in the quarterly appliance health check."
-          },
-          {
-            "id": "q48",
-            "text": "Is monitoring data retained per compliance requirements?",
-            "section": "Monitoring",
-            "severity": "HIGH",
-            "triggerOn": "no",
-            "description": "Monitoring data not retained for a sufficient period cannot support post-incident analysis occurring weeks or months after the triggering event. Many security incidents are only discovered long after they began; without historical monitoring data, the timeline and scope cannot be reconstructed. Compliance frameworks often require specific retention periods.",
-            "remediation": "Define the monitoring data retention period based on regulatory requirements and incident investigation timelines (minimum 90 days for operational monitoring, 1 year for compliance-related metrics). Configure the monitoring platform to retain data for the required period, archiving older data to cold storage. Verify retention settings and test data retrieval.\n\nForcepoint KB: Align monitoring data retention with the organisation's data retention policy and applicable regulatory requirements."
           }
         ]
       },
@@ -1056,15 +1089,6 @@
             "remediation": "Review Content Gateway performance metrics including transaction rate (requests/sec), average response time, and connection queue depth. Compare against baseline measurements taken at initial deployment. Investigate resource bottlenecks (CPU, memory, disk I/O, network). Consider scaling the proxy (additional nodes in a cluster) or tuning cache and connection pool settings if performance has degraded.\n\nForcepoint KB: 'Content Gateway performance tuning and troubleshooting guide' (Article ID: 000013421). Review metrics in Content Gateway Manager > Monitor > Performance Statistics and correlate with OS-level resource monitoring."
           },
           {
-            "id": "q30",
-            "text": "Are connection limits configured appropriately?",
-            "section": "Performance",
-            "severity": "HIGH",
-            "triggerOn": "no",
-            "description": "Default or misconfigured connection limits in Content Gateway can result in connection exhaustion under high load, causing proxy failures or request rejections. Conversely, excessively high connection limits can allow resource exhaustion attacks or degrade performance by overwhelming backend servers.",
-            "remediation": "Review the max_connections and client_connection parameters in the Content Gateway records.config file. Set limits appropriate to the number of concurrent users and available system resources (RAM, file descriptors). Ensure operating system file descriptor limits (ulimit) are increased to match the configured connection limits. Monitor active connections during peak hours.\n\nForcepoint KB: 'Tuning Content Gateway connection limits and file descriptor settings' (Article ID: 000011634). Refer to /opt/WCG/config/records.config for connection-related parameters and the Content Gateway Performance Tuning Guide."
-          },
-          {
             "id": "q31",
             "text": "Is caching enabled and optimized?",
             "section": "Performance",
@@ -1180,15 +1204,6 @@
             "triggerOn": "no",
             "description": "If PAC (Proxy Auto-Configuration) file downloads are slow or fail, endpoints fall back to direct internet access, bypassing the proxy entirely. Complex or large PAC files with many conditional rules can also cause significant browser startup delay as the file is parsed and executed for each new connection.",
             "remediation": "Host the PAC file on a highly available, fast internal web server (not the proxy itself). Minimise PAC file complexity by consolidating rules and removing redundant conditions. Use WPAD (Web Proxy Auto-Discovery) where possible to distribute PAC file configuration. Monitor PAC file download times from representative client locations and test fallback behaviour.\n\nForcepoint KB: 'Best practices for PAC file configuration and hosting in Forcepoint Web Security deployments' — refer to the Forcepoint Web Security Deployment Guide > Client Configuration > PAC Files. Validate PAC file syntax using the pac-validator tool or browser-based validators."
-          },
-          {
-            "id": "web_qmopukhotnd2",
-            "text": "Are there any DNS timeout or retry events observed?",
-            "section": "Performance",
-            "severity": "HIGH",
-            "triggerOn": "yes",
-            "description": "DNS timeout events in Content Gateway logs indicate that the configured DNS resolvers are unreliable or overloaded. Each DNS timeout forces a retry, doubling or tripling the effective DNS lookup time for affected requests. At high transaction rates, DNS timeouts can cascade into widespread proxy latency and user-visible errors.",
-            "remediation": "Review Content Gateway logs (/opt/WCG/logs/squid.log) for DNS_MISS and DNS timeout patterns. Cross-reference with DNS server performance metrics. Add a secondary or tertiary DNS resolver to the Content Gateway configuration for redundancy. Consider deploying a local DNS caching resolver (e.g., Unbound or dnsmasq) on the Content Gateway host to reduce round-trip time and provide local caching.\n\nForcepoint KB: 'Resolving DNS timeout issues in Content Gateway' (Article ID: 000012214). Review records.config dns_resolvers and dns_lookup_timeout parameters and tune as needed for the environment."
           },
           {
             "id": "web_qmopunapa97h",
@@ -1351,6 +1366,40 @@
             "triggerOn": "no",
             "description": "Risky Generative AI applications are not currently monitored or controlled. This may increase the risk of sensitive data exposure through AI platforms.",
             "remediation": "It is recommended to implement security controls for GenAI apps and categories, including monitoring, user warning, browser isolation, and upload/download restrictions based on organizational risk requirements."
+          },
+          {
+            "id": "web_qms0tbhlrnc5",
+            "text": "Are there excessive SSL certificate chain or validation errors on the proxy?",
+            "section": "SSL Inspection",
+            "severity": "CRITICAL",
+            "triggerOn": "yes",
+            "description": "The Content Gateway is generating a high volume of \"VERIFYDENY: depth=2, CA explicitly denied\" errors for multiple unrelated domains (including casalemedia.com subdomains, algolia.net, and others). The widespread nature of these failures indicates a systemic SSL trust validation issue rather than isolated website certificate problems. This commonly occurs when the trusted root/intermediate CA store is outdated, contains stale or incorrect entries, or when multiple SSL inspection devices in the traffic path do not share the same trusted CA hierarchy. Left unresolved, this may cause website access failures, inconsistent SSL inspection behavior, unnecessary exception creation, and increased operational overhead.",
+            "remediation": "Perform a comprehensive review of the Content Gateway SSL trust store and remove obsolete or unnecessary CA certificates. Update the trusted root and intermediate CA bundle to ensure it reflects the organization's approved trust baseline. Review all existing SSL verification exceptions and remove entries that were added to compensate for trust store inconsistencies rather than legitimate business requirements.  If SSL inspection is performed by additional security devices (such as a firewall, NGFW, load balancer, or another proxy) before or after the Forcepoint Content Gateway, verify that the same trusted CA hierarchy is configured consistently across all inspection points. Map the complete SSL inspection path (Client → Forcepoint Proxy → Intermediate Inspection Device(s) → Internet) and confirm that certificate re-signing and trust validation are aligned at every stage.  After the cleanup is completed, re-test the previously affected domains and confirm that the \"CA explicitly denied\" verification errors are no longer generated. Establish the validated trust store configuration as the operational baseline and periodically review it to prevent future certificate validation issues."
+          },
+          {
+            "id": "web_qms0te5yi5ak",
+            "text": "Are HTTP connection timeout values configured according to Forcepoint best practices?",
+            "section": "Performance",
+            "severity": "CRITICAL",
+            "triggerOn": "no",
+            "description": "The Content Gateway HTTP connection timeout values are significantly higher than the Forcepoint recommended defaults. Current settings (such as Keep-Alive Client, Keep-Alive Origin, Inactivity Client/Origin, and Active Origin Response timeouts) are configured between 2.5 and 4 times above the default values. Excessively long timeout settings increase the number of concurrent open connections, resulting in higher memory consumption, larger connection tables, and unnecessary resource utilization. While these values may have been increased to accommodate slow applications or high-latency network links, they should not be used unless a documented business or technical requirement exists.",
+            "remediation": "Review all business-critical applications, branch offices, and backend services to determine whether they rely on HTTP transactions exceeding the Forcepoint default timeout values. If no such dependency exists, restore the HTTP timeout settings to the vendor-recommended defaults to optimize Content Gateway performance and resource utilization.  After implementing the changes, monitor the environment for 1–2 weeks to identify any unexpected connection resets, timeout events, or application issues. If specific applications legitimately require extended timeout values, document the business justification, retain only the necessary exceptions, and periodically review them to ensure they remain valid."
+          },
+          {
+            "id": "web_qms0tic6685r",
+            "text": "Are DNS lookup failures within acceptable levels on the proxy?",
+            "section": "Performance",
+            "severity": "HIGH",
+            "triggerOn": "yes"
+          },
+          {
+            "id": "web_qms0tob0w40u",
+            "text": "Is the current proxy deployment architecture appropriate for the organization's performance and scalability requirements?",
+            "section": "Deployment",
+            "severity": "CRITICAL",
+            "triggerOn": "no",
+            "description": "The current Web Security deployment is hosted on virtual appliances where CPU, memory, and network resources are shared with other virtual machines. Virtualized environments may introduce resource contention, network virtualization overhead, and inconsistent performance under heavy workloads. For environments with high connection volumes, SSL inspection, user authentication, and business-critical web traffic, the existing deployment architecture may not provide the required performance, scalability, and operational predictability.",
+            "remediation": "Review the current deployment architecture against the organization's performance, scalability, and availability requirements. Assess whether the existing virtual infrastructure can consistently provide dedicated compute, memory, and network resources under peak load. For high-volume or mission-critical deployments, evaluate a dedicated hardware appliance or an equivalent architecture that eliminates hypervisor resource contention and provides predictable performance. Validate the proposed architecture through sizing exercises and performance testing before migration, and document the selected platform as the supported production baseline."
           }
         ]
       },
@@ -1751,7 +1800,7 @@
             "id": "q1",
             "text": "Are DLP policies aligned with data classification?",
             "section": "Policies",
-            "severity": "CRITICAL",
+            "severity": "MEDIUM",
             "triggerOn": "no",
             "description": "DLP policies that are not aligned with the organisation's data classification schema will either fail to protect classified data or generate excessive false positives that erode user and administrator trust. Misaligned policies are the most common cause of DLP programme underperformance and eventual abandonment.",
             "remediation": "Map all active DLP policies against the organisation's data classification levels (Public, Internal, Confidential, Restricted). For each classification level, verify that corresponding DLP policies exist, are enforced on appropriate channels, and that action severity matches the classification level. Involve data owners and the data protection officer in the policy alignment review.\n\nForcepoint KB: Refer to the Forcepoint DLP Policy Configuration Guide and the Forcepoint Data Classification Guide for policy alignment best practices. Engage Forcepoint Professional Services for a DLP policy review workshop."
@@ -1760,7 +1809,7 @@
             "id": "q2",
             "text": "Is policy coverage comprehensive across channels?",
             "section": "Policies",
-            "severity": "CRITICAL",
+            "severity": "HIGH",
             "triggerOn": "no",
             "description": "If DLP policy coverage is limited to only some channels (e.g., only email but not web or endpoint), sensitive data can be exfiltrated through unmonitored channels. Attackers and malicious insiders specifically target channels that they know are not monitored. Comprehensive channel coverage is a foundational DLP requirement.",
             "remediation": "Audit DLP policy coverage across all data channels: email (inbound/outbound), web/HTTP/HTTPS uploads, endpoint (USB, print, clipboard, cloud sync), network (FTP, SFTP), and cloud applications (CASB). Identify any channels where DLP policies are absent or where inspection is not occurring. Prioritise closing coverage gaps based on data exfiltration risk.\n\nForcepoint KB: Refer to the Forcepoint DLP Administrator Guide > Channel Coverage for channel-specific policy configuration."
@@ -2092,7 +2141,7 @@
             "id": "dlp_qmp2ilekr9v3",
             "text": "Is Endpoint Agent tamper protection enabled?",
             "section": "Deployment",
-            "severity": "CRITICAL",
+            "severity": "HIGH",
             "triggerOn": "no",
             "description": "Without tamper protection, users with local privileges may disable, modify, or stop the Endpoint DLP agent, leading to loss of visibility and enforcement gaps.",
             "remediation": "Enable tamper protection via Forcepoint Endpoint policy and restrict local administrative privileges on endpoints."
@@ -2101,14 +2150,14 @@
             "id": "dlp_qmp2imkrvnn2",
             "text": "Is OCR enabled for image-based content detection?",
             "section": "Deployment",
-            "severity": "CRITICAL",
+            "severity": "HIGH",
             "triggerOn": "no"
           },
           {
             "id": "dlp_qmp2intzpv2i",
             "text": "Is SIEM integration configured?",
             "section": "Deployment",
-            "severity": "HIGH",
+            "severity": "MEDIUM",
             "triggerOn": "no"
           },
           {
@@ -2131,7 +2180,7 @@
             "id": "dlp_qmp6qztmra47",
             "text": "Is the Incident Risk Rank feature operational?",
             "section": "Deployment",
-            "severity": "HIGH",
+            "severity": "MEDIUM",
             "description": "Incident Risk Rank is a core prioritisation capability within Forcepoint DLP that scores incidents based on severity, user behaviour, and data sensitivity. If Risk Rank is non-functional, security analysts lose the ability to triage the incident queue by risk level and must review all incidents manually or rely on basic severity filters. In a high-volume DLP deployment , this significantly increases analyst workload and the probability that high-severity incidents are missed or delayed.",
             "remediation": "Check the Forcepoint Management Server services (particularly the Risk Engine service) to confirm they are running. Review system logs for Risk Rank engine errors. Verify that the Risk Rank configuration is complete — it requires sufficient historical incident data and correct user directory integration. If the feature has never been fully operational, re-run the Risk Rank configuration wizard. Open a support case with Forcepoint if the issue cannot be resolved internally. Forcepoint KB: \"Incident Risk Rank configuration and troubleshooting\" — Forcepoint DLP Administrator Guide."
           },
@@ -2139,7 +2188,7 @@
             "id": "dlp_qmp6r2gofi7g",
             "text": "Is Syslog integration enabled for DLP system and error events?",
             "section": "Deployment",
-            "severity": "HIGH",
+            "severity": "LOW",
             "description": "Syslog integration is currently disabled, meaning that Forcepoint DLP system errors, service failures, and health events are not being forwarded to the SIEM platform. Without Syslog integration, the security operations team has no centralised visibility into DLP infrastructure health. System errors may go unnoticed for extended periods, increasing the risk of undetected outages or degraded DLP inspection coverage.",
             "remediation": "Enable Syslog integration in the Forcepoint DLP Management Server (Settings → General → SIEM Integration). Configure the correct Syslog server address, port, and protocol (UDP/TCP/TLS) matching the organisation's SIEM. Define the event types to forward — at minimum, include system errors, policy engine failures, and service health events. Validate delivery by triggering a test event and confirming receipt in the SIEM. Review and assign an alert rule in the SIEM for critical DLP system events. Forcepoint KB: \"Configuring SIEM integration for Forcepoint DLP\" — Forcepoint DLP Administrator Guide."
           },
@@ -2147,7 +2196,7 @@
             "id": "dlp_qmp6r55qrrzz",
             "text": "Is data being exfiltrated to AI applications (ChatGPT, Copilot, Gemini, etc.) monitored and controlled?",
             "section": "Policies",
-            "severity": "CRITICAL",
+            "severity": "MEDIUM",
             "triggerOn": "no",
             "description": "Employees may be submitting sensitive corporate data — customer records, financial information, source code, internal documents — to public AI applications via HTTP POST requests. Without a specific DLP policy covering AI application channels, this data movement is undetected and unblocked. This represents an emerging and rapidly growing data exfiltration risk vector that is not addressed by traditional DLP channel coverage.",
             "remediation": "Define a dedicated DLP policy targeting HTTP/HTTPS POST traffic to known AI application domains (openai.com, bing.com/chat, gemini.google.com, claude.ai, etc.). Configure the policy to inspect POST body content for sensitive data classifiers. Coordinate with the Web Security / Proxy team to categorise AI applications and enforce block or monitor-with-justification actions. Review and update this domain list quarterly as new AI services emerge. Consider enabling Forcepoint RBI (Remote Browser Isolation) for AI application access as an additional control layer. Forcepoint KB: \"Configuring Forcepoint DLP for web channel inspection\" — Forcepoint DLP Administrator Guide. Reference Forcepoint AI security use case documentation for AI application control strategy."
@@ -2201,7 +2250,7 @@
             "id": "dlp_qmqajiljh03x",
             "text": "Have all required Endpoint DLP agents been successfully deployed?",
             "section": "Deployment",
-            "severity": "CRITICAL",
+            "severity": "HIGH",
             "triggerOn": "no",
             "description": "Systems without an Endpoint DLP agent are not monitored or protected, creating potential gaps in data loss prevention coverage",
             "remediation": "Identify unmanaged endpoints and complete agent deployment across all in-scope systems."
@@ -2210,7 +2259,7 @@
             "id": "dlp_qmqajkjvnco2",
             "text": "Is a regular backup schedule configured for the Forcepoint DLP database?",
             "section": "Deployment",
-            "severity": "CRITICAL",
+            "severity": "MEDIUM",
             "triggerOn": "no",
             "description": "Without regular database backups, a database failure may result in the complete loss of DLP incidents, policies, and system configuration.",
             "remediation": "Configure scheduled full, differential, and transaction log backups and store them on a separate location."
@@ -2293,6 +2342,15 @@
             "triggerOn": "no",
             "description": "Without IWA or NTLM authentication, user identity cannot be resolved and incidents will show IP addresses instead of usernames, reducing visibility and weakening incident investigation capability.",
             "remediation": "Enable IWA or NTLM authentication on Content Gateway and validate integration with Active Directory for user identification."
+          },
+          {
+            "id": "dlp_qmqwiom00ecn",
+            "text": "Is antivirus exclusion rules configured for the Endpoint Agent?",
+            "section": "Deployment",
+            "severity": "CRITICAL",
+            "triggerOn": "no",
+            "description": "Antivirus, EDR, XDR, or endpoint protection solutions may scan, block, quarantine, or lock Forcepoint Endpoint files, processes, drivers, and localhost communications. This can cause performance degradation, policy enforcement failures, endpoint instability, communication issues, and incomplete DLP monitoring. Security software interference may also require reinstallation of the Forcepoint Endpoint agent.",
+            "remediation": "Configure antivirus and endpoint security solutions to exclude the Forcepoint Endpoint installation directories, processes, drivers, DLL files, and localhost communications as recommended by Forcepoint. Verify that real-time scanning, behavioral analysis, and application control mechanisms do not interfere with Endpoint Agent operations. If security software has already impacted the agent functionality, reconfigure the exclusions and reinstall the Endpoint Agent where necessary. https://support.forcepoint.com/s/article/v8-0-Excluding-Websense-Endpoints-from-Antivirus-Scanning"
           }
         ]
       },
@@ -3522,7 +3580,8 @@
           "Labels",
           "DLP Integration",
           "User Training",
-          "Reporting"
+          "Reporting",
+          "Deployment"
         ],
         "questions": [
           {
@@ -3911,6 +3970,15 @@
             "triggerOn": "no",
             "description": "Without data coverage reporting showing the percentage of the organisation's data estate that has been classified, the programme team cannot quantify the scope of classified vs. unclassified data. Unknown classification coverage means that the DLP enforcement perimeter based on labels is unknown in scope, creating hidden data protection gaps.",
             "remediation": "Configure data coverage reporting in Forcepoint FDC to show: the total volume of documents in the monitored data estate (from agent telemetry and DSPM integration), the percentage that have a classification label, and the distribution of unclassified documents by location, owner, and file type. Set a target of >90% of sensitive documents classified within 12 months of programme rollout.\n\nForcepoint KB: Refer to the Forcepoint FDC Reporting Guide > Data Coverage Reporting for coverage metric configuration."
+          },
+          {
+            "id": "classification_qmqwiuvw8275",
+            "text": "Is antivirus exclusion rules configured for the Endpoint Classification Agent?",
+            "section": "Deployment",
+            "severity": "CRITICAL",
+            "triggerOn": "no",
+            "description": "If antivirus or endpoint protection software scans, blocks, or quarantines Endpoint Agent files and processes, the agent may experience performance issues, communication failures, policy enforcement problems, or unexpected service interruptions.",
+            "remediation": "Configure the antivirus solution to exclude the recommended GVClient directories and add the required Endpoint Agent executables to the trusted applications list. Ensure that all agent-related processes, plugins, and services are excluded from real-time scanning and behavioral protection mechanisms. https://help.forcepoint.com/dspm/fdc/en-us/onlinehelp/guid-12c4def5-00ad-4a63-a587-1063bea5e7ed.html"
           }
         ]
       }
@@ -3993,6 +4061,32 @@
         "bugFixes": "ESG-17994: smtpd memory overflow causing inbound email delivery failure. ESG-17452: random messages dropped to exception queue. ESG-17453: filter crash on non-decodable or oversized URLs. ESG-17990: duplicate recipient names in ESG Filter daemon. ESG-17997: multiple users gaining super admin access simultaneously. ESG-18097: domain groups/IPs not listed in FSM. ESG-17702: FSM appliance limit increased to 42. ESG-18383: improper authorization on encrypted email.",
         "knownIssues": "ESG-18434: Resume Processing for quarantined messages is non-functional. ESG-18120: incorrectly encoded emails may be decoded using default charset. ESG-18435: alerts not generated with stripped-down license. FIPS mode is not supported and will be disabled after upgrade.",
         "deploymentNotes": "Direct upgrade supported only from 8.5.5 (requires Hotfix 302, or Hotfix 303 for Azure). Upgrading from 8.5.6 requires Appliance Hotfix 300 and Hotfix 1. Virtual appliance upgrade requires adding a 26 GB virtual hard disk.\nThis version adds support for:\nMicrosoft SQL Server 2022\nVMware ESXi 8.0\nVMware ESXi 7.0\nMicrosoft AD 2022\nThis version ends support for:\nMicrosoft Windows Server 2016 (all versions)",
+        "priority": "high"
+      },
+      {
+        "id": "vu-cat-1785012738504-vk6il-6",
+        "product": "Data Classification Agent",
+        "fromVersion": "",
+        "toVersion": "5.3.0_BETA",
+        "releaseDate": "2026-06-30",
+        "releaseNotesUrl": "",
+        "whatsNew": "Forcepoint Data Classification (FDC) 5.3.0 delivers a highly anticipated capability for enterprise administrators: fully configurable custom messages for end-user policy dialogs, putting organisations in control of how data classification policies are communicated to their users. This release also extends Microsoft Purview (MIP) integration to enforce encryption and rights management policies directly on endpoint files. Alongside these new features, 5.3.0 includes a significant wave of bug fixes improving classification reliability across Outlook, Excel, Word, PowerPoint, and macOS — addressing both internally identified issues and active customer escalations.\n\nNew Features & Enhancements\n\nCustom Agent Messages (DEL-2052)\nCustom Agent Messages is one of the most impactful admin-facing features in FDC 5.3.0, giving administrators full control over every message end users see when a data classification policy is triggered. Previously, all dialog messages — from block notifications and justification prompts to print warnings and recipient limit alerts — were hardcoded with no way for organisations to contextualise them.\nAdministrators can now view, edit, and manage the full library of agent messages directly from the FDC dashboard under System → Custom Messages. Changes take effect without any agent reinstall or system restart, the system falls back to built-in defaults if no override is set, and existing configurations from prior versions are automatically migrated.\n\nMicrosoft Purview (MIP) Policy Integration (DEL-2049)\nFDC Agent 5.3.0 extends existing Microsoft Purview sensitivity label support to enforce Purview policies — including encryption and RMS-based protection — directly on endpoint files. Administrators configure MIP credentials and label mappings from the Endpoint module in the FDC dashboard, and any previously applied MIP label is correctly cleared when switching to a tag with no mapping.\n",
+        "bugFixes": "🖥️ Desktop\nDEL-2563: [Classic Outlook] Justification text box doesn't appear when lowering classification with a Distribution level\nDEL-2549: [PPT/Excel/Word] Whitelisted tagset appears greyed out for users whose email is added to the whitelist\nDEL-2547: Excel classification applies to entire workbook instead of selected range\nDEL-2473: Auto-classification not retained on email reply and forward\nDEL-2462: Application theme issues causing inconsistent UI appearance\nDEL-2399: Exception thrown on \"Action Forcepoint Classification\" click on macOS instead of showing suggestions\nDEL-2393: Empty classification ribbon button displayed after CLI classification\nDEL-2384: ML/Pattern Matching suggestions not retrieved for Excel\nDEL-2372: Justification action not present on Endpoint/Overview/Activity\nDEL-2356: Force/Warn popups not showing\nDEL-2355: Whitelist not working when email/domain is set\nDEL-2342: Agent UI not displayed when whitelist contains a deleted Taxonomy tag\nDEL-2313: [Excel] FDC header/footer overwrites third-party header/footer when applied only to first page\nDEL-2305: [Outlook] Auto-classification not applied while printing — manual classify popup shown instead\nDEL-2286: macOS build showing \"Classify with Synergy\" option when using right-click\nDEL-2087: Configuration popup: Save/Dismiss buttons misaligned and partially cut off\nDEL-2559: [Agent] macOS 26+ doesn't spin up AgentEngine due to deprecated commands\nDEL-2466: [Mac - Outlook] Agent UI is not working\nDEL-2145: Diagnostics > Read file metadata — Metadata context is null\nDEL-2491: Custom Messages Search doesn't work correctly\nDEL-2484: [Word] Tooltips missing on Visual Label Options dialog\nDEL-2483: [PowerPoint] Threshold tooltip is missing on Visual Label Options dialog\nDEL-2476: [Outlook] {0} is displayed on Maximum number of recipient popup\nDEL-2470: Pagination not working on Custom Message Dashboard\nDEL-2458: Clean up unused Outlook messages and fix default wording in Outlook_HelpSuggestionsInfo\nDEL-2447: Custom Message changes not immediately reflected (approx. 12 min delay)\nDEL-2433: Custom message for \"Other tag\" section heading not updating on manual classification panel\nDEL-2424: Custom Message dialog button text truncated due to 16-character length restriction\nDEL-2422: [Dashboard] Whitespace-only custom message for Server Address field is not rejected\nDEL-2427: [MIP] MIP label is not removed when switching to tag without mapping (new tagging logic)\nDEL-2402: [Outlook] MIP label is not removed when switching to tag without mapping (old logic)\nDEL-2285: [MIP] Right-click classification issue for empty files in Word/Excel/PPT\n\n🌐 Web\nDEL-2323: [Outlook/Web] User able to apply different tags from suggested ones without any popup after reclassifying\nDEL-2321: [Outlook/Web] Whitelist not working correctly for a specific email\n\nCustomer Issues:\nAll tickets with an EI escalation reference linked to this release.\n✅ Fixed\nDEL-2450: [EI-42523] Email attachments not being classified automatically in Agent 5.2\nDEL-2586: [EI-42859] Right-click classification doesn't respect Agent language\nDEL-2580: [EI-42740] Uploaded logo appears in DSPM Dashboard but not in Agent\nDEL-2540: [EI-42559][EI-42556] Feature request — disable Outlook print\nDEL-2492: [EI-42683] Agent 5.1.2 uninstall and reinstall — classification not working after reinstall\n",
+        "knownIssues": "🔴 Open\nDEL-2490: [EI-42641] Auto Classify feature not working in expected manner\n\nKnown Issues:\nDEL-2588: [Offline Mode][Excel][macOS] Unable to classify Excel file when Agent is offline\nDEL-2539: [Agent - macOS] Confirmation popup isn't displayed when header exists ",
+        "deploymentNotes": "Platform prerequisite: DSPM 4.1\nEnsure DSPM is on version 4.1 or later for full feature compatibility with Agent 5.3.0.\nSSL certificate requirement\nA valid SSL certificate is required for public network deployments. Optional for private network deployments. Refer to the appropriate SSL/TLS Certificate Deployment Procedure for your CA type before upgrading.\nExisting configurations\nCustom message configurations from prior agent versions are automatically migrated — no manual action required.\n",
+        "priority": "high"
+      },
+      {
+        "id": "vu-cat-1785012738504-3dw1p-7",
+        "product": "Data Classification Agent",
+        "fromVersion": "",
+        "toVersion": "5.2.2",
+        "releaseDate": "2026-05-12",
+        "releaseNotesUrl": "https://help.forcepoint.com/dspm/fdc/en-us/onlinehelp/guid-14c989c5-140b-47f6-83e4-24333cfc8ec3.html",
+        "whatsNew": "Forcepoint Data Classification (FDC) 5.2.0 focuses on stability, branding consistency, and improved administrator experience. Organizations can now display their own logo across all platforms including Web, agent diagnostics have been enhanced with AV checks, and log visibility has been consolidated into a single view for faster troubleshooting. This release also confirms full compatibility with Microsoft Office 2019, 2021, and 2024, and includes a wide range of bug fixes across Outlook, Word, PowerPoint, Excel plugins for both Desktop and Web experience.\n\nLogging Improvements\nTwo enhancements have been made to improve log visibility and diagnostics across the FDC platform. GRPC logging is now enabled for Office Add-ins (Word, Excel, PowerPoint, Outlook on Web), giving support and engineering teams deeper visibility into classification issues in browser-based environments. Additionally, the Agent UI now consolidates all log sources into a single, searchable table, making it faster to investigate and troubleshoot agent behavior. Please review the video below\n\nCustom Logo Upload (DEL-2074, DEL-2048)\nAdministrators can now upload their organisation's logo from the company Settings option, which will appear in the agent UI, giving users a familiar, branded experience. Available on both Windows desktop and Web.\nLogo can be uploaded from both pages:\nMy profile > Company Settings\nAnalytics > Export PDF > Configure export\n\nAV Diagnostics Enhancement\nAdministrators can now verify Antivirus (AV) exclusion paths and check AV service status directly from the FDC Agent Diagnostics panel, reducing time spent on configuration troubleshooting and support escalations.\nCompatibility & Platform Support\n\nMicrosoft Office 2019, 2021, and 2024\nFDC Agent 5.2.0 has been validated for full compatibility with Microsoft Office 2019, 2021, and 2024 across Word, Excel, PowerPoint, and Outlook. All classification workflows, visual labels, and agent interactions have been verified to work as expected.",
+        "bugFixes": "DEL-2301: [Outlook] Popup to classify an email before sending is shown twice and requires multiple clicks to send\nDEL-2281: [Endpoint > System] Failed to update registry for UninstallationPassword\nDEL-2280: [Word/PPT] Headers/Footers are duplicated after reclassifying a document with a specific theme\nDEL-2270: \"Apply to First Page\" applies tag to odd pages instead of first page\nDEL-2267: PPT - Footer visual tag is not applied to specific PPT file\nDEL-2265: GVClient.AgentUI folder should be removed after uninstalling the agent\nDEL-2250: Visual tags - Changing type from floating to fixed is not working properly\nDEL-2239: [IFTAS] Justification Prompt Not Triggered for Certain Classification Changes\nDEL-2235: [AgentUI] Agent Logs opens slowly if there are lots of logs stored\nDEL-2233: [Desktop] Agent crashes when user clicks ribbon twice\nDEL-2227: Wrong activities displayed on dashboard after right-click classification\nDEL-2225: [PowerPoint Windows] Visual labels not shown correctly after reclassifying labels\nDEL-2181: [Office 2024 MS Outlook] Email send is blocked even though no user email or domain matches the policy\nDEL-2167: Server address isn't prefilled after restarting AgentEngine\nDEL-2157: Agent UI is showing with delay\nDEL-2118: [Outlook Windows] Visual labels are not shown correctly after reclassifying labels\nDEL-2116: [Outlook Windows] The subject is removed if it's added after clicking the ribbon\nDEL-2038: Microsoft Word repeatedly switches to the classification screen when users interact with certain elements\nDEL-2026: Outlook - Lower Justification doesn't work for Outlook meetings\nDEL-2015: Outlook Classic - Inconsistent classification when formatting email from plain text\nDEL-2009: Fonts not updated in all text elements within popup windows\nDEL-1996: [PPT] Web styles are not applied after classification\nDEL-1994: Unable to classify Excel document when a distribution other than Test A is selected\nDEL-1961: [Justification] Incorrect Justification field behavior with Force/Warn enabled\nDEL-1960: Justification field appears when the tag is added to Whitelist\nDEL-1952: PowerPoint Windows - Manual Classification Force - Document Save Stuck in Loop\nDEL-1942: Outlook Classic - Attachment more sensitive than email not working\nDEL-1929: [IFTAS] Outlook email classification added in header instead of footer\nDEL-1922: [Agent] Meetings - Outlook 'You have changed important details' appears unexpectedly\n\n🌐 Web\nDEL-2234: [Web] Agent UI popup appears multiple times after repeated ribbon clicks\nDEL-2141: Web - Agent UI popup is displayed instead of the Suggested popup\nDEL-1499: [Office Addins - PPT] Suggestion not working on web browser\n\nAgent 5.2.2 (12-Jun-26):-\nFixed critical Outlook (New Outlook/Web) issues blocking email send and meeting/event dispatch\nResolved MacOS agent uninstallation error and improved macOS stability\nFixed hard tagging failures on supported file formats (DOCX/XLSX)\nAgent UI logo display corrected — logo no longer shown when not configured\nResolved Office application compatibility issues on Desktop\nEndpoint Discovery scan results now correctly published to the dashboard\n\nBug Fixes\nDEL-2475: [Web/New Outlook] Meeting/Event is not sending\nDEL-2472: [New Outlook] Mail sending blocked by Forcepoint Classification add-in after classification\nDEL-2457: [AgentUI] MacOS uninstallation error\nDEL-2334: [Desktop] Issues in Office applications with agent v5.1.2\nDEL-2303: [AgentUI] Logo image incorrectly displayed when no logo is configured\nDEL-2299: [Endpoint Discovery] Scan results not published to dashboard\nDEL-2165: [Tagging] Hard tags — error tagging supported format files (DOCX/XLSX)\n\nAgent 5.2.1 (12-May-26):-\nFully refactored VSTO plugin architecture and rebuilt document caching system for Word, Excel, and PowerPoint to resolve longstanding OLE conflicts\nRemoved static DI container; migrated from grpcwebproxy to built-in .NET gRPC-Web\nPerformance and logging improvements — faster plugin startup, reduced log noise, removed unnecessary null checks\nBuild/CI hardening — refactored build process, resolved NuGet conflicts, improved CI/CD pre-checks.\n\nBug Fixes\nDEL-2008: [GvClient] GetConfiguration request works slowly (especially Outlook)\nDEL-2186: [AgentEngine] RND OLE vs VSTO object release solution\nDEL-2321: [Outlook/Web] Whitelist isn't working correctly for a specific email\nDEL-2348: [Bug] MacOS agent fails to start — IMipService DI resolution error\nDEL-2393: Empty classification ribbon button after CLI classification\nDEL-2293:  [CI/CD] Update build pipeline to re-sign VSTO manifests and include signing of GVClient.AgentUI.exe\nDEL-2351: Classification is not present when re-open the doc\nDEL-2355: White list is not working when email/domain is set\nDEL-2372: Justification action is not present on Endpoint/Overview/Activity\n\n\n",
+        "knownIssues": "DEL-2324: [Outlook/Web] Alignment is not applied in visual tags and classifying removes some body styles\nDEL-2323: [Outlook/Web] User is able to apply different tags from suggested ones without any popup after reclassifying\nDEL-2322: [Outlook/Web & Desktop] Popup blocks sending even when default email policy is set to Ignore\nDEL-2321: [Outlook/Web] Whitelist isn't working correctly for a specific email\nDEL-2313: [Excel] GV header/footer overwrites third-party header/footer when 'Apply to First Page' is used with 'Different Odd & Even Pages' enabled\nDEL-2307: [Excel] Third-party header/footer is removed after reclassifying the document (Append mode)\nDEL-2305: [Outlook] Auto classification is not applied in Outlook while printing — manual classify popup shown instead\nDEL-2166: [WEB] PPT - Classification tag is set but then resets after a short delay\nDEL-2331: Confirmation pop-up incorrectly appears when reclassifying Excel desktop application without header/footer edits\nDEL-2332: Classification tag not visible when using right-click classification option also 'Set Suggested' button is disabled.\nDEL-2356: Force/Warn popups are not showing\n",
+        "deploymentNotes": "For optimal performance of Agent v5.2.1 features, the following minimum versions are required: (Same as v5.2)\nAgent Edge: 2.348.6 | Platform: 4.0.28 | Dashboard: v3.634.1 |",
         "priority": "high"
       }
     ],
@@ -4138,6 +4232,61 @@
           "End Of Support": "2025-08-01"
         }
       ],
+      "Forcepoint DSPM": [
+        {
+          "Version": "4.0",
+          "General Availability": "2026-06-06",
+          "End of Sale": null,
+          "End Of Maintenance": null,
+          "End Of Support": null
+        }
+      ],
+      "Forcepoint Data Classification (FDC)": [
+        {
+          "Version": "4.0",
+          "General Availability": "2026-06-01",
+          "End of Sale": null,
+          "End Of Maintenance": null,
+          "End Of Support": null
+        }
+      ],
+      "FDC + DSPM Agent": [
+        {
+          "Version": "5.3.1",
+          "General Availability": "2026-06-01",
+          "End of Sale": null,
+          "End Of Maintenance": null,
+          "End Of Support": null
+        },
+        {
+          "Version": "5.2.2",
+          "General Availability": "2026-04-01",
+          "End of Sale": null,
+          "End Of Maintenance": null,
+          "End Of Support": null
+        },
+        {
+          "Version": "5.1",
+          "General Availability": "2026-03-01",
+          "End of Sale": null,
+          "End Of Maintenance": null,
+          "End Of Support": null
+        },
+        {
+          "Version": "5.0",
+          "General Availability": "2026-01-01",
+          "End of Sale": null,
+          "End Of Maintenance": null,
+          "End Of Support": null
+        },
+        {
+          "Version": "4.7",
+          "General Availability": "2025-01-01",
+          "End of Sale": null,
+          "End Of Maintenance": null,
+          "End Of Support": null
+        }
+      ],
       "DLP + Web Endpoint Agent": [
         {
           "Version": "26.04",
@@ -4145,6 +4294,11 @@
           "End of Sale": null,
           "End Of Maintenance": null,
           "End Of Support": "2028-12-01"
+        },
+        {
+          "Version": "26.02",
+          "General Availability": "2026-02-12",
+          "End Of Support": "2027-12-01"
         },
         {
           "Version": "25.11",
@@ -4229,11 +4383,6 @@
           "End of Sale": null,
           "End Of Maintenance": null,
           "End Of Support": "2026-06-01"
-        },
-        {
-          "Version": "26.02",
-          "General Availability": "2026-02-12",
-          "End Of Support": "2027-12-01"
         }
       ],
       "AMDP": [
@@ -4289,17 +4438,7 @@
       ],
       "V Series Appliances": [
         {
-          "Model/Version": "V10000 G4 R2",
-          "General Availability": "2018-02-28",
-          "End of Sale": "2024-10-28",
-          "Last Supported Release": null,
-          "End Of Maintenance": "2027-10-28",
-          "Last Date for Warranty Extension": null,
-          "End of Life": "2029-10-28",
-          "Migration Path": "V10000 G5"
-        },
-        {
-          "Model/Version": "V10000 G5",
+          "Model/Version": "V20000 G5",
           "General Availability": "2024-10-28",
           "End of Sale": null,
           "Last Supported Release": null,
@@ -4307,26 +4446,6 @@
           "Last Date for Warranty Extension": null,
           "End of Life": null,
           "Migration Path": null
-        },
-        {
-          "Model/Version": "V10000 G3 R2",
-          "General Availability": "2014-06-30",
-          "End of Sale": "2015-07-31",
-          "Last Supported Release": "8.5.3",
-          "End Of Maintenance": "2018-07-31",
-          "Last Date for Warranty Extension": "2019-07-31",
-          "End of Life": "2020-07-31",
-          "Migration Path": "V10000 G4 R2"
-        },
-        {
-          "Model/Version": "V10000 G4",
-          "General Availability": "2015-07-31",
-          "End of Sale": "2018-03-31",
-          "Last Supported Release": null,
-          "End Of Maintenance": "2021-03-31",
-          "Last Date for Warranty Extension": "2022-03-31",
-          "End of Life": "2023-03-31",
-          "Migration Path": "V10000 G4 R2"
         },
         {
           "Model/Version": "V20000 G1",
@@ -4339,7 +4458,7 @@
           "Migration Path": null
         },
         {
-          "Model/Version": "V20000 G5",
+          "Model/Version": "V10000 G5",
           "General Availability": "2024-10-28",
           "End of Sale": null,
           "Last Supported Release": null,
@@ -4347,6 +4466,26 @@
           "Last Date for Warranty Extension": null,
           "End of Life": null,
           "Migration Path": null
+        },
+        {
+          "Model/Version": "V10000 G4 R2",
+          "General Availability": "2018-02-28",
+          "End of Sale": "2024-10-28",
+          "Last Supported Release": null,
+          "End Of Maintenance": "2027-10-28",
+          "Last Date for Warranty Extension": null,
+          "End of Life": "2029-10-28",
+          "Migration Path": "V10000 G5"
+        },
+        {
+          "Model/Version": "V10000 G4",
+          "General Availability": "2015-07-31",
+          "End of Sale": "2018-03-31",
+          "Last Supported Release": null,
+          "End Of Maintenance": "2021-03-31",
+          "Last Date for Warranty Extension": "2022-03-31",
+          "End of Life": "2023-03-31",
+          "Migration Path": "V10000 G4 R2"
         },
         {
           "Model/Version": "V5000 G5",
@@ -4377,6 +4516,16 @@
           "Last Date for Warranty Extension": "2023-12-31",
           "End of Life": "2024-12-31",
           "Migration Path": "V5000 G4 R2"
+        },
+        {
+          "Model/Version": "V10000 G3 R2",
+          "General Availability": "2014-06-30",
+          "End of Sale": "2015-07-31",
+          "Last Supported Release": "8.5.3",
+          "End Of Maintenance": "2018-07-31",
+          "Last Date for Warranty Extension": "2019-07-31",
+          "End of Life": "2020-07-31",
+          "Migration Path": "V10000 G4 R2"
         },
         {
           "Model/Version": "V10000 G3",
@@ -5072,6 +5221,30 @@
       {
         "id": "ngfw-default",
         "type": "ngfw",
+        "hostname": "",
+        "applicable": false,
+        "drives": [],
+        "ramTotalGB": 0,
+        "ramUsedGB": 0,
+        "cpuCores": 0,
+        "cpuUsagePercent": 0,
+        "notes": ""
+      },
+      {
+        "id": "dspm-default",
+        "type": "dspm",
+        "hostname": "",
+        "applicable": false,
+        "drives": [],
+        "ramTotalGB": 0,
+        "ramUsedGB": 0,
+        "cpuCores": 0,
+        "cpuUsagePercent": 0,
+        "notes": ""
+      },
+      {
+        "id": "classification-default",
+        "type": "classification",
         "hostname": "",
         "applicable": false,
         "drives": [],
