@@ -5848,6 +5848,8 @@ export function Step11Summary({ sessionData, templates, selectedProducts, checkl
   const hsc = scoreColor(healthScore);
   const criticalCount = allFindings.filter(f => f.severity === 'CRITICAL').length;
   const highCount     = allFindings.filter(f => f.severity === 'HIGH').length;
+  const mediumCount   = allFindings.filter(f => f.severity === 'MEDIUM').length;
+  const lowCount      = allFindings.filter(f => f.severity === 'LOW').length;
   const date = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
 
   const handleExport = (variant: 'executive' | 'healthcheck' | 'powerpoint' = 'healthcheck') => {
@@ -5855,30 +5857,103 @@ export function Step11Summary({ sessionData, templates, selectedProducts, checkl
     setExportDone(false);
 
     if (variant === 'powerpoint') {
-      /* PowerPoint export: POST report data to server, download .pptx file */
+      /* PowerPoint export — mirrors the Executive Risk Briefing's six sections
+         (Risk Posture, Compliance Exposure, Current Licensing Posture,
+         Information Security Posture Dashboard, Recommended License
+         Extension, Recommended Enhancements) so the deck and the HTML
+         briefing never drift apart in content, only in format. */
       setTimeout(async () => {
         try {
           const topRisks = allFindings
-            .filter(f => f.severity === 'critical' || f.severity === 'high')
-            .slice(0, 5)
+            .filter(f => f.severity === 'CRITICAL' || f.severity === 'HIGH')
+            .slice(0, 6)
             .map(f => ({
               severity: f.severity,
               title: f.text,
               description: f.note || f.description,
             }));
 
-          const topRecs = recommendations
-            .filter(r => r.priority === 'critical' || r.priority === 'high')
-            .slice(0, 5)
-            .map(r => ({
-              priority: r.priority,
-              title: r.title,
-              description: r.description,
-            }));
-
           const productList = Object.keys(selectedProducts)
             .filter(k => selectedProducts[k])
             .map(k => k.charAt(0).toUpperCase() + k.slice(1));
+
+          /* Section 1 — Risk Posture & Executive Summary. Same verdict logic
+             and "Executive Position" phrasing as buildReportHTML's Section 1
+             (stripped of HTML markup for the slide). */
+          let verdictLabel = 'Good Health';
+          if (criticalCount > 0) verdictLabel = 'Critical Attention Required';
+          else if (highCount > 0) verdictLabel = 'Action Required';
+          const custName = sessionData.customerName || 'The customer';
+          const executiveSummary = (criticalCount === 0 && highCount === 0)
+            ? `${custName}'s Forcepoint estate shows no critical or high-severity exposure across version, infrastructure, checklist, or configuration dimensions. The roadmap that follows is enhancement-focused rather than remediation-focused.`
+            : `${custName}'s Forcepoint estate carries ${criticalCount} critical and ${highCount} high-severity exposure${criticalCount + highCount === 1 ? '' : 's'} across version, infrastructure, checklist and configuration dimensions. Top findings are summarized below; full evidence is in the Health Check &amp; Maturity Assessment.`
+              .replace('&amp;', '&');
+
+          /* Section 2 — Compliance Exposure: only frameworks the analyst
+             has enabled for this engagement (same filter buildReportHTML uses). */
+          const complianceExposure = (complianceFrameworks ?? [])
+            .filter(f => f.enabled && f.code.trim())
+            .map(f => ({ code: f.code, name: f.name, pillar: f.pillar, status: f.complianceStatus || 'unassessed' }));
+
+          /* Section 3 — Current Licensing Posture: bucket by lifecycle state,
+             same rule as buildReportHTML (expired > expiring-90d > active). */
+          const lics = sessionData.licenses ?? [];
+          const now = Date.now();
+          const ninetyDays = 90 * 24 * 3600 * 1000;
+          const bucketOf = (l: typeof lics[0]): 'expired' | 'expiring' | 'active' | 'pending' | 'unknown' => {
+            if ((l.status || '').toUpperCase() === 'PENDING') return 'pending';
+            const exp = l.expiry ? new Date(l.expiry) : null;
+            if (!exp || Number.isNaN(exp.getTime())) return ((l.status || '').toUpperCase() === 'ACTIVE') ? 'active' : 'unknown';
+            if (exp.getTime() < now) return 'expired';
+            if (exp.getTime() - now <= ninetyDays) return 'expiring';
+            return 'active';
+          };
+          const licenseCounts = { active: 0, expiring: 0, expired: 0, pending: 0 };
+          const bucketRank: Record<string, number> = { expired: 0, expiring: 1, pending: 2, active: 3, unknown: 4 };
+          const licensesSorted = [...lics].sort((a, b) => bucketRank[bucketOf(a)] - bucketRank[bucketOf(b)]);
+          for (const l of lics) {
+            const b = bucketOf(l);
+            if (b === 'active' || b === 'expiring' || b === 'expired' || b === 'pending') licenseCounts[b]++;
+          }
+          const licenseRows = licensesSorted.slice(0, 8).map(l => ({
+            product: l.product || '—', quantity: l.quantity || '—', expiry: l.expiry || '—', bucket: bucketOf(l),
+          }));
+
+          /* Section 4 — Information Security Posture Dashboard: DLP REST API
+             telemetry, only included when the operator fetched posture AND
+             at least one posture block is toggled on for the report. */
+          const postureActive = !!dlpPostureSummary && Object.values(dlpPostureSections).some(Boolean);
+          const dlpPosture = postureActive ? {
+            deploymentStatus: dlpPostureSummary!.deploymentStatus,
+            dlpVersion: dlpPostureSummary!.dlpVersion,
+            enabledDlpPolicies: dlpPostureSummary!.enabledDlpPolicies,
+            enabledDiscoveryPolicies: dlpPostureSummary!.enabledDiscoveryPolicies,
+            totalIncidents: dlpPostureSummary!.totalIncidents,
+            bySeverity: dlpPostureSummary!.bySeverity,
+            topPolicies: (dlpPostureSummary!.topPolicies ?? []).slice(0, 5),
+            neverUsedDlpPoliciesCount: dlpPostureSummary!.neverUsedDlpPoliciesCount,
+            windowDays: dlpPostureSummary!.windowDays,
+          } : null;
+
+          /* Section 5 — Recommended License Extension. */
+          const licenseExtension = licenseGaps.map(g => ({
+            product: g.product,
+            currentQuantity: g.currentQuantity,
+            recommendedAdditional: g.recommendedAdditional,
+            priority: g.priority || 'medium',
+            rationale: g.rationale,
+          }));
+
+          /* Section 6 — Recommended Enhancements (strategic catalogue pitches,
+             NOT the freeform Recommendations list — that one only feeds the
+             Section 1 severity roll-up, it has no standalone exec-briefing
+             section of its own). */
+          const enhancementsList = ENHANCEMENTS
+            .filter(e => selectedEnhancements.includes(e.id))
+            .map(eBase => {
+              const e = mergeEnhancement(eBase, enhancementOverrides?.[eBase.id]);
+              return { name: e.name, category: e.category, tagline: e.tagline };
+            });
 
           /* Relative URL — nginx proxies /api/* to the companion on 127.0.0.1:3001
              (see vite.config.ts dev proxy + prod nginx config). Hitting the port
@@ -5891,8 +5966,18 @@ export function Step11Summary({ sessionData, templates, selectedProducts, checkl
             body: JSON.stringify({
               customerName: sessionData.customerName || 'Health Check Assessment',
               healthScore: healthScore ?? 0,
+              verdictLabel,
+              executiveSummary,
+              severityCounts: { critical: criticalCount, high: highCount, medium: mediumCount, low: lowCount },
               riskSummary: topRisks,
-              recommendations: topRecs,
+              complianceExposure,
+              licenseCounts,
+              licenseRows,
+              supportLevel: sessionData.supportLevel || '',
+              recommendedSupportLevel: sessionData.recommendedSupportLevel || '',
+              dlpPosture,
+              licenseExtension,
+              enhancements: enhancementsList,
               productList,
               generatedAt: new Date().toISOString(),
             }),

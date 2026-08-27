@@ -2461,15 +2461,31 @@ app.get('/api/admin/upgrade/log', (req, res) => {
 });
 
 /* PowerPoint executive summary report generation.
-   Accepts report data (health score, risks, recommendations) and
-   generates a downloadable .pptx file with formatted slides. */
+   Mirrors the Executive Risk Briefing's six sections (Risk Posture,
+   Compliance Exposure, Current Licensing Posture, Information Security
+   Posture Dashboard, Recommended License Extension, Recommended
+   Enhancements) — one slide (or slide group) per section, built only
+   when that section actually has data, exactly like the HTML briefing
+   skips empty sections. Content payload is assembled client-side in
+   Step11Summary.tsx's handleExport('powerpoint') from the same props
+   that feed buildReportHTML(). */
 app.post('/api/report/export-ppt', async (req, res) => {
   try {
     const {
       customerName = 'Assessment',
       healthScore = 0,
+      verdictLabel = 'Good Health',
+      executiveSummary = '',
+      severityCounts = { critical: 0, high: 0, medium: 0, low: 0 },
       riskSummary = [],
-      recommendations = [],
+      complianceExposure = [],
+      licenseCounts = { active: 0, expiring: 0, expired: 0, pending: 0 },
+      licenseRows = [],
+      supportLevel = '',
+      recommendedSupportLevel = '',
+      dlpPosture = null,
+      licenseExtension = [],
+      enhancements = [],
       productList = [],
       generatedAt = new Date().toISOString(),
     } = req.body ?? {};
@@ -2477,127 +2493,230 @@ app.post('/api/report/export-ppt', async (req, res) => {
     const prs = new PptxGenJs();
     prs.defineLayout({ name: 'BLANK', width: 10, height: 7.5 });
 
-    /* Slide 1: Title & Health Score */
-    const slide1 = prs.addSlide();
-    slide1.background = { color: '1F2937' };
-    slide1.addText(`Forcepoint Health Check`, {
-      x: 0.5, y: 0.5, w: 9, h: 0.6,
-      fontSize: 36, bold: true, color: 'FFFFFF', align: 'left',
-    });
-    slide1.addText(`Executive Summary`, {
-      x: 0.5, y: 1.2, w: 9, h: 0.4,
-      fontSize: 20, color: 'E5E7EB', align: 'left',
-    });
-    slide1.addText(`${customerName}`, {
-      x: 0.5, y: 1.8, w: 9, h: 0.4,
-      fontSize: 16, color: 'D1D5DB', align: 'left',
-    });
-    slide1.addText(`Assessment Date: ${new Date(generatedAt).toLocaleDateString()}`, {
-      x: 0.5, y: 2.3, w: 9, h: 0.3,
-      fontSize: 12, color: 'B4B5B6', align: 'left',
-    });
+    const NAVY = '1F2937';
+    const sevColor = (sev) => {
+      const s = String(sev || '').toUpperCase();
+      return s === 'CRITICAL' ? 'A30080' : s === 'HIGH' ? 'DC2626' : s === 'MEDIUM' ? 'B58800' : '0284C7';
+    };
+    const addSectionHeader = (slide, eyebrow, title) => {
+      slide.addText(eyebrow, {
+        x: 0.5, y: 0.35, w: 9, h: 0.3,
+        fontSize: 10, bold: true, color: '023E8A', charSpacing: 1,
+      });
+      slide.addText(title, {
+        x: 0.5, y: 0.65, w: 9, h: 0.55,
+        fontSize: 26, bold: true, color: NAVY,
+      });
+    };
 
-    slide1.addText(`${healthScore}`, {
-      x: 0.5, y: 3.2, w: 4, h: 1.5,
-      fontSize: 72, bold: true, color: healthScore >= 75 ? '10B981' : healthScore >= 50 ? 'F59E0B' : 'EF4444',
+    /* ── Cover: Title & Health Score (mirrors the report cover) ── */
+    const cover = prs.addSlide();
+    cover.background = { color: NAVY };
+    cover.addText('Forcepoint Health Check', {
+      x: 0.5, y: 0.5, w: 9, h: 0.6, fontSize: 36, bold: true, color: 'FFFFFF',
+    });
+    cover.addText('Executive Risk Briefing', {
+      x: 0.5, y: 1.2, w: 9, h: 0.4, fontSize: 20, color: 'E5E7EB',
+    });
+    cover.addText(`${customerName}`, {
+      x: 0.5, y: 1.8, w: 9, h: 0.4, fontSize: 16, color: 'D1D5DB',
+    });
+    cover.addText(`Assessment Date: ${new Date(generatedAt).toLocaleDateString()}`, {
+      x: 0.5, y: 2.3, w: 9, h: 0.3, fontSize: 12, color: 'B4B5B6',
+    });
+    cover.addText(`${healthScore}`, {
+      x: 0.5, y: 3.2, w: 4, h: 1.5, fontSize: 72, bold: true,
+      color: healthScore >= 75 ? '10B981' : healthScore >= 50 ? 'F59E0B' : 'EF4444',
       align: 'center', valign: 'middle',
     });
-    slide1.addText('Health Score', {
-      x: 0.5, y: 4.8, w: 4, h: 0.3,
-      fontSize: 14, color: 'D1D5DB', align: 'center',
+    cover.addText('Health Score', {
+      x: 0.5, y: 4.8, w: 4, h: 0.3, fontSize: 14, color: 'D1D5DB', align: 'center',
     });
-
-    if (productList && productList.length > 0) {
-      slide1.addText('Products Assessed', {
-        x: 5.2, y: 3.2, w: 4.3, h: 0.4,
-        fontSize: 14, bold: true, color: 'E5E7EB',
+    cover.addText(verdictLabel, {
+      x: 0.5, y: 5.2, w: 4, h: 0.4, fontSize: 13, bold: true, color: 'E5E7EB', align: 'center',
+    });
+    if (productList.length > 0) {
+      cover.addText('Products Assessed', {
+        x: 5.2, y: 3.2, w: 4.3, h: 0.4, fontSize: 14, bold: true, color: 'E5E7EB',
       });
-      const products = productList.slice(0, 6).map(p => `• ${p}`).join('\n');
-      slide1.addText(products, {
-        x: 5.2, y: 3.7, w: 4.3, h: 1.8,
-        fontSize: 12, color: 'D1D5DB', valign: 'top',
-      });
-    }
-
-    /* Slide 2: Top Risks */
-    if (riskSummary && riskSummary.length > 0) {
-      const slide2 = prs.addSlide();
-      slide2.background = { color: 'F9FAFB' };
-      slide2.addText('Critical Findings', {
-        x: 0.5, y: 0.5, w: 9, h: 0.5,
-        fontSize: 28, bold: true, color: '1F2937',
-      });
-
-      let yPos = 1.2;
-      riskSummary.slice(0, 5).forEach((risk, idx) => {
-        const icon = risk.severity === 'critical' ? '🔴' : risk.severity === 'high' ? '🟠' : '🟡';
-        slide2.addText(icon, {
-          x: 0.5, y: yPos, w: 0.4, h: 0.4,
-          fontSize: 16, align: 'center',
-        });
-        slide2.addText(risk.title || `Finding ${idx + 1}`, {
-          x: 1.1, y: yPos, w: 8.4, h: 0.4,
-          fontSize: 12, bold: true, color: '1F2937',
-        });
-        if (risk.description) {
-          yPos += 0.4;
-          slide2.addText(risk.description, {
-            x: 1.1, y: yPos, w: 8.4, h: 0.5,
-            fontSize: 10, color: '4B5563',
-          });
-        }
-        yPos += 0.8;
+      cover.addText(productList.slice(0, 6).map(p => `• ${p}`).join('\n'), {
+        x: 5.2, y: 3.7, w: 4.3, h: 1.8, fontSize: 12, color: 'D1D5DB', valign: 'top',
       });
     }
 
-    /* Slide 3: Top Recommendations */
-    if (recommendations && recommendations.length > 0) {
-      const slide3 = prs.addSlide();
-      slide3.background = { color: 'F9FAFB' };
-      slide3.addText('Recommended Actions', {
-        x: 0.5, y: 0.5, w: 9, h: 0.5,
-        fontSize: 28, bold: true, color: '1F2937',
-      });
-
-      let yPos = 1.2;
-      recommendations.slice(0, 5).forEach((rec, idx) => {
-        const priorityColor = rec.priority === 'critical' ? 'DC2626' : rec.priority === 'high' ? 'F59E0B' : '6366F1';
-        slide3.addShape('rect', {
-          x: 0.5, y: yPos, w: 0.05, h: 0.35,
-          fill: { color: priorityColor },
-          line: { type: 'none' },
-        });
-        slide3.addText(rec.title || `Action ${idx + 1}`, {
-          x: 0.7, y: yPos, w: 8.8, h: 0.35,
-          fontSize: 12, bold: true, color: '1F2937', valign: 'middle',
-        });
+    /* ── Section 1: Risk Posture & Executive Summary ── */
+    const s1 = prs.addSlide();
+    s1.background = { color: 'FFFFFF' };
+    addSectionHeader(s1, 'SECTION 1 · PART 1 · RISK POSTURE', 'Risk Posture & Executive Summary');
+    s1.addText(executiveSummary, {
+      x: 0.5, y: 1.35, w: 9, h: 0.9, fontSize: 12, color: '475569', valign: 'top',
+    });
+    const sevTiles = [
+      { label: 'CRITICAL', value: severityCounts.critical, color: 'A30080' },
+      { label: 'HIGH',     value: severityCounts.high,     color: 'DC2626' },
+      { label: 'MEDIUM',   value: severityCounts.medium,   color: 'B58800' },
+      { label: 'LOW',      value: severityCounts.low,      color: '0284C7' },
+    ];
+    sevTiles.forEach((t, i) => {
+      const x = 0.5 + i * 2.25;
+      s1.addShape('rect', { x, y: 2.4, w: 2.05, h: 1.1, fill: { color: 'F8FAFC' }, line: { color: t.color, width: 1 } });
+      s1.addText(`${t.value}`, { x, y: 2.5, w: 2.05, h: 0.6, fontSize: 30, bold: true, color: t.color, align: 'center' });
+      s1.addText(t.label, { x, y: 3.1, w: 2.05, h: 0.35, fontSize: 10, bold: true, color: '64748B', align: 'center' });
+    });
+    if (riskSummary.length > 0) {
+      s1.addText('Top Findings', { x: 0.5, y: 3.8, w: 9, h: 0.35, fontSize: 13, bold: true, color: NAVY });
+      let yPos = 4.2;
+      riskSummary.slice(0, 4).forEach((risk) => {
+        const icon = String(risk.severity).toUpperCase() === 'CRITICAL' ? '🔴' : '🟠';
+        s1.addText(icon, { x: 0.5, y: yPos, w: 0.4, h: 0.35, fontSize: 13, align: 'center' });
+        s1.addText(risk.title || 'Finding', { x: 1.0, y: yPos, w: 8.5, h: 0.35, fontSize: 11, bold: true, color: NAVY });
         yPos += 0.5;
       });
     }
 
-    /* Slide 4: Next Steps */
-    const slide4 = prs.addSlide();
-    slide4.background = { color: '1F2937' };
-    slide4.addText('Next Steps', {
-      x: 0.5, y: 1.5, w: 9, h: 0.6,
-      fontSize: 32, bold: true, color: 'FFFFFF', align: 'center',
-    });
+    /* ── Section 2: Compliance Exposure ── */
+    if (complianceExposure.length > 0) {
+      const s2 = prs.addSlide();
+      s2.background = { color: 'FFFFFF' };
+      addSectionHeader(s2, 'SECTION 2 · PART 1 · COMPLIANCE LENS', 'Compliance Exposure');
+      const rows = [[
+        { text: 'Framework', options: { bold: true, color: 'FFFFFF', fill: { color: NAVY } } },
+        { text: 'Pillar', options: { bold: true, color: 'FFFFFF', fill: { color: NAVY } } },
+        { text: 'Status', options: { bold: true, color: 'FFFFFF', fill: { color: NAVY } } },
+      ]];
+      complianceExposure.slice(0, 10).forEach((f) => {
+        const statusColor = f.status === 'compliant' ? '15803D' : f.status === 'non_compliant' ? 'DC2626' : f.status === 'partial' ? 'B58800' : '64748B';
+        rows.push([
+          { text: `${f.code} — ${f.name}`, options: { fontSize: 11, color: '1F2937' } },
+          { text: f.pillar || '—', options: { fontSize: 10, color: '64748B' } },
+          { text: (f.status || 'unassessed').replace('_', ' '), options: { fontSize: 10, bold: true, color: statusColor } },
+        ]);
+      });
+      s2.addTable(rows, { x: 0.5, y: 1.4, w: 9, colW: [5.5, 2, 1.5], fontSize: 11, autoPage: false });
+    }
 
-    const actionItems = [
+    /* ── Section 3: Current Licensing Posture ── */
+    if (licenseRows.length > 0) {
+      const s3 = prs.addSlide();
+      s3.background = { color: 'FFFFFF' };
+      addSectionHeader(s3, 'SECTION 3 · PART 1 · LICENSING', 'Current Licensing Posture');
+      const licTiles = [
+        { label: 'ACTIVE', value: licenseCounts.active, color: '15803D' },
+        { label: 'EXPIRING ≤90D', value: licenseCounts.expiring, color: '92400E' },
+        { label: 'EXPIRED', value: licenseCounts.expired, color: '991B1B' },
+      ];
+      licTiles.forEach((t, i) => {
+        const x = 0.5 + i * 3.0;
+        s3.addShape('rect', { x, y: 1.35, w: 2.8, h: 0.9, fill: { color: 'F8FAFC' }, line: { color: t.color, width: 1 } });
+        s3.addText(`${t.value}`, { x, y: 1.4, w: 2.8, h: 0.5, fontSize: 24, bold: true, color: t.color, align: 'center' });
+        s3.addText(t.label, { x, y: 1.9, w: 2.8, h: 0.3, fontSize: 9, bold: true, color: '64748B', align: 'center' });
+      });
+      const licTable = [[
+        { text: 'Product', options: { bold: true, color: 'FFFFFF', fill: { color: NAVY } } },
+        { text: 'Qty', options: { bold: true, color: 'FFFFFF', fill: { color: NAVY } } },
+        { text: 'Expiry', options: { bold: true, color: 'FFFFFF', fill: { color: NAVY } } },
+        { text: 'Status', options: { bold: true, color: 'FFFFFF', fill: { color: NAVY } } },
+      ]];
+      licenseRows.forEach((l) => {
+        const bColor = l.bucket === 'expired' ? '991B1B' : l.bucket === 'expiring' ? '92400E' : '64748B';
+        licTable.push([
+          { text: l.product, options: { fontSize: 10, color: '1F2937' } },
+          { text: `${l.quantity}`, options: { fontSize: 10, color: '1F2937', align: 'right' } },
+          { text: l.expiry, options: { fontSize: 10, color: '64748B' } },
+          { text: l.bucket.toUpperCase(), options: { fontSize: 9, bold: true, color: bColor } },
+        ]);
+      });
+      s3.addTable(licTable, { x: 0.5, y: 2.5, w: 9, colW: [4, 1.5, 2, 1.5], fontSize: 10, autoPage: false });
+      if (supportLevel || recommendedSupportLevel) {
+        const upgrade = recommendedSupportLevel && recommendedSupportLevel !== supportLevel;
+        s3.addText(
+          upgrade
+            ? `Support: ${supportLevel || '—'} → recommended ${recommendedSupportLevel}`
+            : `Support level: ${supportLevel || '—'} — aligned with deployment scope.`,
+          { x: 0.5, y: 6.9, w: 9, h: 0.35, fontSize: 10, italic: true, color: upgrade ? 'D97706' : '15803D' },
+        );
+      }
+    }
+
+    /* ── Section 4: Information Security Posture Dashboard ── */
+    if (dlpPosture) {
+      const s4 = prs.addSlide();
+      s4.background = { color: 'FFFFFF' };
+      addSectionHeader(s4, 'SECTION 4 · PART 2 · POSTURE TELEMETRY', 'Information Security Posture Dashboard');
+      const kpis = [
+        { label: 'DEPLOYMENT', value: dlpPosture.deploymentStatus || '—', color: '023E8A' },
+        { label: 'DLP VERSION', value: dlpPosture.dlpVersion || '—', color: '023E8A' },
+        { label: 'ENABLED POLICIES', value: `${dlpPosture.enabledDlpPolicies ?? 0}`, color: '023E8A' },
+        { label: `INCIDENTS (${dlpPosture.windowDays ?? 30}D)`, value: `${dlpPosture.totalIncidents ?? 0}`, color: dlpPosture.totalIncidents > 0 ? 'DC2626' : '15803D' },
+      ];
+      kpis.forEach((k, i) => {
+        const x = 0.5 + i * 2.25;
+        s4.addShape('rect', { x, y: 1.4, w: 2.05, h: 1.0, fill: { color: 'F8FAFC' }, line: { color: k.color, width: 1 } });
+        s4.addText(k.value, { x, y: 1.5, w: 2.05, h: 0.55, fontSize: 16, bold: true, color: k.color, align: 'center' });
+        s4.addText(k.label, { x, y: 2.05, w: 2.05, h: 0.3, fontSize: 8, bold: true, color: '64748B', align: 'center' });
+      });
+      if (dlpPosture.topPolicies?.length > 0) {
+        s4.addText('Top Policies by Incident Volume', { x: 0.5, y: 2.7, w: 9, h: 0.3, fontSize: 12, bold: true, color: NAVY });
+        let yPos = 3.05;
+        dlpPosture.topPolicies.forEach((pol) => {
+          s4.addText(pol.label || '—', { x: 0.5, y: yPos, w: 6.5, h: 0.3, fontSize: 10, color: '1F2937' });
+          s4.addText(`${pol.count}`, { x: 7.0, y: yPos, w: 2.5, h: 0.3, fontSize: 10, bold: true, color: '023E8A', align: 'right' });
+          yPos += 0.35;
+        });
+      }
+      if ((dlpPosture.neverUsedDlpPoliciesCount ?? 0) > 0) {
+        s4.addShape('rect', { x: 0.5, y: 5.3, w: 9, h: 0.6, fill: { color: 'FFFBEB' }, line: { color: 'FDE68A', width: 1 } });
+        s4.addText(`Policy Audit: ${dlpPosture.neverUsedDlpPoliciesCount} enabled DLP polic${dlpPosture.neverUsedDlpPoliciesCount === 1 ? 'y' : 'ies'} generated zero incidents in the last ${dlpPosture.windowDays ?? 30} days — review for misconfiguration.`,
+          { x: 0.65, y: 5.4, w: 8.7, h: 0.4, fontSize: 10, color: '92400E', valign: 'middle' });
+      }
+    }
+
+    /* ── Section 5: Recommended License Extension ── */
+    if (licenseExtension.length > 0) {
+      const s5 = prs.addSlide();
+      s5.background = { color: 'FFFFFF' };
+      addSectionHeader(s5, 'SECTION 5 · PART 3 · LICENSING ROADMAP', 'Recommended License Extension');
+      let yPos = 1.5;
+      licenseExtension.slice(0, 6).forEach((g) => {
+        const pColor = sevColor(g.priority);
+        s5.addShape('rect', { x: 0.5, y: yPos, w: 0.06, h: 0.75, fill: { color: pColor }, line: { type: 'none' } });
+        s5.addText(`${g.product}  ·  +${g.recommendedAdditional}`, { x: 0.75, y: yPos, w: 8.75, h: 0.35, fontSize: 13, bold: true, color: NAVY });
+        if (g.rationale) {
+          s5.addText(g.rationale, { x: 0.75, y: yPos + 0.35, w: 8.75, h: 0.35, fontSize: 10, color: '64748B' });
+        }
+        yPos += 0.95;
+      });
+    }
+
+    /* ── Section 6: Recommended Enhancements ── */
+    if (enhancements.length > 0) {
+      const s6 = prs.addSlide();
+      s6.background = { color: 'FFFFFF' };
+      addSectionHeader(s6, 'SECTION 6 · PART 3 · STRATEGIC INITIATIVES', 'Recommended Enhancements');
+      let yPos = 1.5;
+      enhancements.slice(0, 6).forEach((e) => {
+        s6.addText(e.name, { x: 0.5, y: yPos, w: 9, h: 0.35, fontSize: 13, bold: true, color: '023E8A' });
+        s6.addText(e.tagline || '', { x: 0.5, y: yPos + 0.35, w: 9, h: 0.35, fontSize: 10, color: '475569' });
+        yPos += 0.85;
+      });
+    }
+
+    /* ── Closing: Next Steps ── */
+    const closing = prs.addSlide();
+    closing.background = { color: NAVY };
+    closing.addText('Next Steps', {
+      x: 0.5, y: 1.5, w: 9, h: 0.6, fontSize: 32, bold: true, color: 'FFFFFF', align: 'center',
+    });
+    closing.addText([
       '1. Review critical findings with your team',
       '2. Prioritize recommended actions by impact',
       '3. Schedule remediation timeline',
       '4. Monitor compliance and progress',
-    ];
-
-    slide4.addText(actionItems.join('\n'), {
-      x: 1, y: 2.4, w: 8, h: 2.5,
-      fontSize: 14, color: 'E5E7EB', valign: 'middle', align: 'left',
+    ].join('\n'), {
+      x: 1, y: 2.4, w: 8, h: 2.5, fontSize: 14, color: 'E5E7EB', valign: 'middle',
     });
-
-    slide4.addText('For detailed findings, refer to the full Health Check Report', {
-      x: 0.5, y: 6.8, w: 9, h: 0.4,
-      fontSize: 12, color: 'D1D5DB', align: 'center', italic: true,
+    closing.addText('For detailed findings, refer to the full Health Check & Maturity Assessment', {
+      x: 0.5, y: 6.8, w: 9, h: 0.4, fontSize: 12, color: 'D1D5DB', align: 'center', italic: true,
     });
 
     /* pptxgenjs 3.x: write() is async (returns a Promise), not synchronous.
