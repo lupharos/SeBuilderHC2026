@@ -1,6 +1,6 @@
 {
     "productName": "HC Studio",
-    "version": "2026.08.28.2",
-    "releasedAt": "2026-08-28T01:00:00Z",
-    "notes": "v2026.08.28.2: Fixed PowerPoint export 500 error — pptxgenjs 3.x's write() is async (returns a Promise) but the server route wasn't awaiting it, so Buffer.from() threw on every request. Route is now async and awaits write() correctly."
+    "version": "2026.08.28.3",
+    "releasedAt": "2026-08-28T02:00:00Z",
+    "notes": "v2026.08.28.3: PowerPoint export now mirrors all 6 sections of the Executive Risk Briefing (Risk Posture, Compliance Exposure, Current Licensing Posture, Information Security Posture Dashboard, Recommended License Extension, Recommended Enhancements) instead of a generic summary deck. Sections are skipped when empty, same as the HTML report."
 }
