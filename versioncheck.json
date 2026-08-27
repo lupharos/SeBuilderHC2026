@@ -1,6 +1,6 @@
 {
     "productName": "HC Studio",
-    "version": "2026.08.25.1",
-    "releasedAt": "2026-08-25T00:00:00Z",
-    "notes": "v2026.08.25.1: Baseline seed regenerated from template/backup.json. Every fresh install now boots with the latest curated templates and catalogs. Existing installs get catalog-only refresh; HC sessions are never touched."
+    "version": "2026.08.25.2",
+    "releasedAt": "2026-08-25T01:00:00Z",
+    "notes": "v2026.08.25.2: Help Guide overhauled to match the v2 connector architecture (single interactive .exe, token-only, no JSON config files). Added Get Updates, parametrized reports, and Never-Used Policies documentation. Troubleshooting table reflects real fixed issues."
 }
