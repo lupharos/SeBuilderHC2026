@@ -2463,7 +2463,7 @@ app.get('/api/admin/upgrade/log', (req, res) => {
 /* PowerPoint executive summary report generation.
    Accepts report data (health score, risks, recommendations) and
    generates a downloadable .pptx file with formatted slides. */
-app.post('/api/report/export-ppt', (req, res) => {
+app.post('/api/report/export-ppt', async (req, res) => {
   try {
     const {
       customerName = 'Assessment',
@@ -2600,7 +2600,11 @@ app.post('/api/report/export-ppt', (req, res) => {
       fontSize: 12, color: 'D1D5DB', align: 'center', italic: true,
     });
 
-    const buffer = prs.write({ outputType: 'arraybuffer' });
+    /* pptxgenjs 3.x: write() is async (returns a Promise), not synchronous.
+       Missing the await here made `buffer` a Promise object, and
+       Buffer.from(aPromise) throws — the try/catch turned that into a
+       silent 500 with no useful client-side detail. */
+    const buffer = await prs.write({ outputType: 'arraybuffer' });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
     res.setHeader('Content-Disposition', `attachment; filename="HC-Executive-Summary-${Date.now()}.pptx"`);
     res.send(Buffer.from(buffer));
