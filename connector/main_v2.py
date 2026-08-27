@@ -48,7 +48,7 @@ import logging
 
 # Version is hardcoded here and must be updated with each build
 # Update this whenever versioncheck.json version changes
-VERSION = "2026.08.25.2"
+VERSION = "2026.08.28.1"
 
 # ─────────────────────────────────────────────────────────────────
 #   File Logging Setup (PHASE 2 FIX #1)

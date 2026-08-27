@@ -1,6 +1,6 @@
 {
     "productName": "HC Studio",
-    "version": "2026.08.25.2",
-    "releasedAt": "2026-08-25T01:00:00Z",
-    "notes": "v2026.08.25.2: Help Guide overhauled to match the v2 connector architecture (single interactive .exe, token-only, no JSON config files). Added Get Updates, parametrized reports, and Never-Used Policies documentation. Troubleshooting table reflects real fixed issues."
+    "version": "2026.08.28.1",
+    "releasedAt": "2026-08-28T00:00:00Z",
+    "notes": "v2026.08.28.1: Fixed PowerPoint Executive Summary export — was calling hostname:3001 directly instead of the relative /api path, which fails in production (HTTPS mixed-content block, port not exposed past localhost). Now routes through the nginx /api proxy like every other endpoint."
 }
