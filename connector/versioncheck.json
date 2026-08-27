@@ -1,6 +1,6 @@
 {
     "productName": "HC Studio",
-    "version": "2026.08.28.1",
-    "releasedAt": "2026-08-28T00:00:00Z",
-    "notes": "v2026.08.28.1: Fixed PowerPoint Executive Summary export — was calling hostname:3001 directly instead of the relative /api path, which fails in production (HTTPS mixed-content block, port not exposed past localhost). Now routes through the nginx /api proxy like every other endpoint."
+    "version": "2026.08.28.2",
+    "releasedAt": "2026-08-28T01:00:00Z",
+    "notes": "v2026.08.28.2: Fixed PowerPoint export 500 error — pptxgenjs 3.x's write() is async (returns a Promise) but the server route wasn't awaiting it, so Buffer.from() threw on every request. Route is now async and awaits write() correctly."
 }
